@@ -15,6 +15,8 @@ Evaluate every change across these five dimensions:
 - Does the code do what the spec/task says it should?
 - Are edge cases handled (null, empty, boundary values, error paths)?
 - Do the tests actually verify the behavior? Are they testing the right things?
+- Are test doubles substituted only at ports? Flag module mocking, patched internals, or spied private methods — the fake belongs at the architectural boundary
+- For story work: does every acceptance criterion have an executable specification in domain language, free of UI/endpoint detail (see the `acceptance-testing` skill)?
 - Are there race conditions, off-by-one errors, or state inconsistencies?
 
 ### 2. Readability
@@ -29,6 +31,8 @@ Evaluate every change across these five dimensions:
 - Are module boundaries maintained? Any circular dependencies?
 - Is the abstraction level appropriate (not over-engineered, not too coupled)?
 - Are dependencies flowing in the right direction?
+- Is every unowned or separately-deployed dependency reached only through a port? Core/business code calling a vendor SDK, ORM, framework type, or OS facility (`Date.now()`, `fs`, `process.env`, randomness) directly is a boundary violation — treat it as Important at minimum (see the `ports-and-adapters` skill)
+- Do adapters stay translation-only? Business conditionals, retry/fallback decisions, caching policy, or validation inside an adapter belong in the core behind the port
 
 ### 4. Security
 - Is user input validated and sanitized at system boundaries?
@@ -79,6 +83,7 @@ Categorize every finding:
 - Tests reviewed: [yes/no, observations]
 - Build verified: [yes/no]
 - Security checked: [yes/no, observations]
+- Boundary discipline checked: [yes/no — new dependencies behind ports, adapters thin, doubles swapped at ports only]
 ```
 
 ## Rules
