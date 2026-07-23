@@ -69,7 +69,7 @@ Source dependencies point inward only:
   └─────────────────────────────────────────────────────────────┘
 ```
 
-- Ports are declared **in the core**, named for the domain (`OrderStore`, not `PostgresClient`; `Clock`, not `DateNowWrapper`), and shaped by what the core *needs*, never by what the vendor offers.
+- Ports are declared **in the core**, named for the domain (`OrderStore`, not `PostgresClient`; `Clock`, not `DateNowWrapper`), and shaped by what the core *needs*, never by what the vendor offers. Port and core names come from the glossary — see `ubiquitous-language`.
 - Port signatures use only core types. If a vendor type (a Stripe object, an ORM entity, an HTTP request) appears in a port, the boundary has leaked.
 - Enforce mechanically where possible: lint/arch rules forbidding core packages from importing adapter, framework, and vendor modules.
 

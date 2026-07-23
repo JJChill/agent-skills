@@ -45,7 +45,7 @@ Skills also activate automatically based on what you're doing — designing an A
 **Fastest path — any agent, one command.** The open [skills CLI](https://github.com/vercel-labs/skills) installs into 70+ agents (Claude Code, Cursor, Codex, Copilot, Cline, and more):
 
 ```bash
-npx skills add addyosmani/agent-skills            # install all 26 skills
+npx skills add addyosmani/agent-skills            # install all 27 skills
 npx skills add addyosmani/agent-skills --list     # browse before installing
 ```
 
@@ -193,9 +193,9 @@ Already installed? How you roll the pack out depends on your codebase. The **[Ad
 
 ---
 
-## All 26 Skills
+## All 27 Skills
 
-The commands above are entry points. The pack includes 26 skills total — 25 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
+The commands above are entry points. The pack includes 27 skills total — 26 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
 
 ### Meta - Discover which skill applies
 
@@ -210,6 +210,7 @@ The commands above are entry points. The pack includes 26 skills total — 25 li
 | [interview-me](skills/interview-me/SKILL.md) | One-question-at-a-time interview that extracts what the user actually wants instead of what they think they should want, until ~95% confidence | The ask is underspecified, or the user invokes "interview me" / "grill me" |
 | [idea-refine](skills/idea-refine/SKILL.md) | Structured divergent/convergent thinking to turn vague ideas into concrete proposals | You have a rough concept that needs exploration |
 | [spec-driven-development](skills/spec-driven-development/SKILL.md) | Write a PRD covering objectives, commands, structure, code style, testing, and boundaries before any code | Starting a new project, feature, or significant change |
+| [ubiquitous-language](skills/ubiquitous-language/SKILL.md) | One shared domain vocabulary backed by a maintained repository glossary — one term per concept, glossary terms verbatim in code/specs/ports, synonyms corrected everywhere | Naming any domain concept, creating or updating the glossary, or resolving synonym/ambiguity drift |
 
 ### Plan - Break it down
 
@@ -326,10 +327,11 @@ Every skill follows a consistent anatomy:
 
 ```
 agent-skills/
-├── skills/                            # 26 skills (25 lifecycle + 1 meta)
+├── skills/                            # 27 skills (26 lifecycle + 1 meta)
 │   ├── interview-me/                  #   Define
 │   ├── idea-refine/                   #   Define
 │   ├── spec-driven-development/       #   Define
+│   ├── ubiquitous-language/           #   Define
 │   ├── planning-and-task-breakdown/   #   Plan
 │   ├── incremental-implementation/    #   Build
 │   ├── context-engineering/           #   Build

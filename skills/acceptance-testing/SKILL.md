@@ -56,7 +56,7 @@ The bad version breaks when the UI changes to fingerprint auth; the good version
 
 **Rules of thumb:**
 - Start specifications with "should" or express them as outcomes
-- Use the ubiquitous language of the domain, one term per concept, consistently
+- Use the ubiquitous language of the domain — glossary terms verbatim, one term per concept (see `ubiquitous-language`; a spec needing a word the glossary lacks means the glossary conversation happens first)
 - Each specification asserts a **single outcome**; be skeptical of long, multi-assertion scenarios
 - A specification should have only two reasons to fail: a genuine bug, or a translation error in the test plumbing. It changes only when the *user need* changes
 

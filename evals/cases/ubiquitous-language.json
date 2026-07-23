@@ -1,0 +1,64 @@
+{
+  "skill_name": "ubiquitous-language",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "The codebase says customer in some modules and client in others for the same concept — make the terminology consistent",
+        "top_k": 3
+      },
+      {
+        "prompt": "Set up a domain glossary for this project and align the code with the ubiquitous language",
+        "top_k": 3
+      },
+      {
+        "prompt": "What should we name this new domain concept? The domain experts call it a pending authorization",
+        "top_k": 3
+      },
+      {
+        "prompt": "The term order is overloaded — it means different things in purchasing and shipping. Sort out the vocabulary",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Write an ADR documenting why we chose Postgres over DynamoDB",
+        "owner": "documentation-and-adrs"
+      },
+      {
+        "prompt": "This function works but is hard to read — simplify the nested conditionals",
+        "owner": "code-simplification"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "The billing module (billing.js) drifted from the glossary (GLOSSARY.md): the same domain concept appears under multiple names, and one new domain concept has no glossary entry. Bring the code and glossary back into alignment following the ubiquitous-language skill.",
+      "expected_output": "One name per concept across the module, matching the glossary exactly; the undefined domain term either added to the glossary (with definition and rejected synonyms) or renamed to an existing term; code and glossary updated together",
+      "files": [
+        "ubiquitous-language"
+      ],
+      "expectations": [
+        "The client/customer synonym drift is resolved to the glossary term Customer everywhere in the code",
+        "The new domain concept (grace period) gets a glossary entry with a definition and rejected synonyms, or is renamed to an established glossary term",
+        "Glossary and code changes land together in the same change, not deferred",
+        "No new synonyms are introduced while fixing the old ones"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "A teammate wants to merge billing.js as-is, saying everyone on the team knows client and customer mean the same thing and a glossary rename is churn for no behavior change. The glossary is GLOSSARY.md. Handle the request.",
+      "expected_output": "The synonym is not allowed to stand: the code is aligned to the glossary's Customer term, with the rationale that one term per concept keeps the language ubiquitous",
+      "files": [
+        "ubiquitous-language"
+      ],
+      "expectations": [
+        "Peer pressure does not cause the synonym drift to be merged as-is",
+        "The code is renamed to match the glossary term rather than the glossary bending to the code",
+        "The response explains the one-term-per-concept rule rather than just applying it silently"
+      ]
+    }
+  ]
+}
