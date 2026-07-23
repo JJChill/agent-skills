@@ -272,6 +272,8 @@ Pre-configured specialist personas for targeted reviews:
 | Agent | Role | Perspective |
 |-------|------|-------------|
 | [code-reviewer](agents/code-reviewer.md) | Senior Staff Engineer | Five-axis code review with "would a staff engineer approve this?" standard |
+| [domain-expert-proxy](agents/domain-expert-proxy.md) | Domain Expert Stand-in | Source-cited domain rulings from recorded knowledge only; everything else becomes an open question — fills the domain seat in three-amigos and event-storming sessions |
+| [product-owner-proxy](agents/product-owner-proxy.md) | Product Owner Stand-in | Source-cited value/priority/scope rulings from recorded product intent; novel trade-offs escalate — fills the product seat in event-storming and release slicing |
 | [test-engineer](agents/test-engineer.md) | QA Specialist | Test strategy, coverage analysis, and the Prove-It pattern |
 | [security-auditor](agents/security-auditor.md) | Security Engineer | Vulnerability detection, threat modeling, OWASP assessment |
 | [web-performance-auditor](agents/web-performance-auditor.md) | Web Performance Engineer | Core Web Vitals audit with Quick/Deep modes and a metric-honesty rule; run it via `/webperf` |
@@ -363,7 +365,7 @@ agent-skills/
 │   ├── observability-and-instrumentation/ # Ship
 │   ├── shipping-and-launch/           #   Ship
 │   └── using-agent-skills/            #   Meta: how to use this pack
-├── agents/                            # 4 specialist personas
+├── agents/                            # 6 specialist personas
 ├── references/                        # 7 supplementary checklists
 ├── hooks/                             # Session lifecycle hooks
 ├── .claude/commands/                  # 8 slash commands (Claude Code)
