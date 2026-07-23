@@ -122,6 +122,8 @@ Mock these:                    Don't mock these:
 └── Time/Date (when needed)    └── Pure functions
 ```
 
+The "boundaries" are the system's ports (see the `ports-and-adapters` skill): every entry in the left column should already sit behind a port interface, and the test double is a fake implementation of that port. Prefer one reusable in-memory fake per port over per-test `jest.mock` module patching — module mocks couple the test to file layout and internals rather than to the architectural boundary.
+
 ## React/Component Testing
 
 ```tsx

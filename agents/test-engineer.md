@@ -21,20 +21,30 @@ Before writing any test:
 
 ```
 Pure logic, no I/O          → Unit test
-Crosses a boundary          → Integration test
+Crosses a boundary          → Integration test (thin adapters get a few of these)
+Acceptance criterion        → Executable specification (see acceptance-testing)
 Critical user flow          → E2E test
 ```
 
-Test at the lowest level that captures the behavior. Don't write E2E tests for things unit tests can cover.
+Test at the lowest level that captures the behavior. Don't write E2E tests for things unit tests can cover. Acceptance tests specify behavior in domain language — one per acceptance criterion, a single outcome each, no UI or endpoint detail in the test case; input variations belong in unit tests below them.
 
-### 3. Follow the Prove-It Pattern for Bugs
+### 3. Substitute Fakes at Ports Only
+
+Every dependency the team doesn't own or doesn't deploy with the code — databases, third-party APIs, frameworks, the UI, the OS clock/filesystem/env — sits behind a port (see the `ports-and-adapters` skill). Test doubles replace the adapter at that port, and nowhere else:
+
+- Prefer one reusable in-memory fake per port over per-test module mocks; never `jest.mock` your own modules, patch internals, or spy on private methods
+- Wire the real core to fakes so the test exercises the maximum amount of the team's own code with full control of state
+- Control time through the clock port — no real `Date.now()` in tested behavior, no `sleep` in tests
+- If a behavior can't be tested without the framework, a browser, or a real external service, report the missing port as a coverage finding — it's a design gap, not a testing limitation
+
+### 4. Follow the Prove-It Pattern for Bugs
 
 When asked to write a test for a bug:
 1. Write a test that demonstrates the bug (must FAIL with current code)
 2. Confirm the test fails
 3. Report the test is ready for the fix implementation
 
-### 4. Write Descriptive Tests
+### 5. Write Descriptive Tests
 
 ```
 describe('[Module/Function name]', () => {
@@ -44,7 +54,7 @@ describe('[Module/Function name]', () => {
 });
 ```
 
-### 5. Cover These Scenarios
+### 6. Cover These Scenarios
 
 For every function or component:
 
@@ -66,6 +76,8 @@ When analyzing test coverage:
 ### Current Coverage
 - [X] tests covering [Y] functions/components
 - Coverage gaps identified: [list]
+- Missing ports: [behaviors untestable without a framework, browser, real clock, or external service]
+- Unspecified acceptance criteria: [criteria with no executable specification]
 
 ### Recommended Tests
 1. **[Test name]** — [What it verifies, why it matters]
@@ -84,9 +96,10 @@ When analyzing test coverage:
 2. Each test should verify one concept
 3. Tests should be independent — no shared mutable state between tests
 4. Avoid snapshot tests unless reviewing every change to the snapshot
-5. Mock at system boundaries (database, network), not between internal functions
+5. Substitute doubles at ports only (database, network, clock, filesystem — anything unowned or separately deployed), never between internal functions or via module patching
 6. Every test name should read like a specification
 7. A test that never fails is as useless as a test that always fails
+8. Tests own their state: each test creates its own isolated data and can run in parallel with itself; poll for concluding events instead of sleeping
 
 ## Composition
 

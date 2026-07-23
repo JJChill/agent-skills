@@ -19,7 +19,7 @@ Write a failing test before writing the code that makes it pass. For bug fixes, 
 
 **When NOT to use:** Pure configuration changes, documentation updates, or static content changes that have no behavioral impact.
 
-**Related:** For browser-based changes, combine TDD with runtime verification using Chrome DevTools MCP — see the Browser Testing section below.
+**Related:** For browser-based changes, combine TDD with runtime verification using Chrome DevTools MCP — see the Browser Testing section below. TDD is the fast inner loop; the outer loop that defines when a story is *done* is `acceptance-testing` (executable specifications written before the code).
 
 ## Discover the Stack First
 
@@ -245,6 +245,8 @@ Preference order (most to least preferred):
 
 **Use mocks only when:** the real implementation is too slow, non-deterministic, or has side effects you can't control (external APIs, email sending). Over-mocking creates tests that pass while production breaks.
 
+**Substitute test doubles only at ports.** In this codebase every dependency we don't own or don't deploy with our code (databases, third-party APIs, frameworks, the UI, the OS clock/filesystem/env) sits behind a port — see `ports-and-adapters`. Fakes and stubs replace the adapter at that port; never mock internal classes, patch your own modules, or spy on private methods. This keeps the maximum amount of our own code inside the test and gives the test full control of state (including time, via the clock port).
+
 ### Use the Arrange-Act-Assert Pattern
 
 ```typescript
@@ -359,6 +361,8 @@ This separation ensures the test is written without knowledge of the fix, making
 ## See Also
 
 For JavaScript/TypeScript testing patterns illustrating these principles — Jest, React Testing Library, Supertest, Playwright — see `references/testing-patterns.md`. The principles transfer to any ecosystem; the syntax and tools there are JS/TS-specific.
+
+For the outer loop — executable specifications that act as a story's definition of done — see `acceptance-testing`. For where fakes may be substituted (ports, and only ports), see `ports-and-adapters`.
 
 ## Common Rationalizations
 

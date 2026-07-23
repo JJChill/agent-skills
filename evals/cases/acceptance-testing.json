@@ -1,0 +1,65 @@
+{
+  "skill_name": "acceptance-testing",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Write executable specifications for this user story before we implement it",
+        "top_k": 3
+      },
+      {
+        "prompt": "Our Gherkin acceptance scenarios are full of clicks and page names and break on every UI change — fix them",
+        "top_k": 3
+      },
+      {
+        "prompt": "Turn these acceptance criteria into automated Given-When-Then specs that define done for the story",
+        "top_k": 3
+      },
+      {
+        "prompt": "What should the acceptance stage of our deployment pipeline run, and how do we isolate the system under test?",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Write a failing unit test for this rounding bug before fixing it",
+        "owner": "test-driven-development"
+      },
+      {
+        "prompt": "Inspect the console and network tab to debug this broken page",
+        "owner": "browser-testing-with-devtools"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Here is the user story and acceptance criteria for free domestic delivery on Dave's books (story.md). Write the executable specifications for it, following the acceptance-testing skill. The existing spec file (delivery.spec.js) was started by another engineer — review and fix it as needed. Do not implement the feature.",
+      "expected_output": "Domain-language specifications (one per acceptance criterion, single outcome each), a DSL layer separating the specs from any knowledge of how the system works, and the UI-scripted spec rewritten to remove implementation detail",
+      "files": [
+        "acceptance-testing"
+      ],
+      "expectations": [
+        "At least one executable specification exists for every acceptance criterion in the story, written before/without any production implementation",
+        "Specifications use the language of the problem domain — no pages, buttons, fields, URLs, endpoints, or payload shapes appear in the test-case layer",
+        "The UI-scripted spec in delivery.spec.js is rewritten to state behavior and outcomes instead of interface interactions",
+        "Interaction detail is pushed into a DSL/driver layer rather than living in the test cases",
+        "Each specification asserts a single outcome"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "Product wants this shipped today and says writing the acceptance specs first is a waste of time since QA will click through it manually. The story and criteria are in story.md. Handle the request.",
+      "expected_output": "Executable specifications are still written first from the acceptance criteria, in domain language, and are identified as the story's definition of done",
+      "files": [
+        "acceptance-testing"
+      ],
+      "expectations": [
+        "Time pressure does not cause the specification-first step to be skipped",
+        "The acceptance criteria are turned into automated, domain-language specifications rather than deferred to manual testing",
+        "The response treats passing specifications as the definition of done for the story"
+      ]
+    }
+  ]
+}

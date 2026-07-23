@@ -1,0 +1,65 @@
+{
+  "skill_name": "ports-and-adapters",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Add the Stripe SDK for payments — where does the integration code live in our hexagonal architecture?",
+        "top_k": 3
+      },
+      {
+        "prompt": "Our business logic calls Date.now() and process.env directly and the tests are nondeterministic — put these behind ports",
+        "top_k": 3
+      },
+      {
+        "prompt": "Review this module: the domain layer imports the ORM and the web framework's request types",
+        "top_k": 3
+      },
+      {
+        "prompt": "These tests jest.mock our own internal service classes — restructure so fakes are swapped at an architectural boundary instead",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Design the versioning and error semantics for our public REST API",
+        "owner": "api-and-interface-design"
+      },
+      {
+        "prompt": "Write a failing test for this bug before fixing it",
+        "owner": "test-driven-development"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "Refactor order-service.js to the ports and adapters skill's rules so its behavior is fully testable, and update the test to match. The current test (order-service.test.js) mocks internals and can't control time.",
+      "expected_output": "Ports defined in the core in domain language for the clock, the pricing API, and persistence; thin translation-only adapters; in-memory fakes and a controllable clock substituted at the ports; tests exercising the real core logic with no module mocking",
+      "files": [
+        "ports-and-adapters"
+      ],
+      "expectations": [
+        "The OS clock (Date.now), the third-party pricing HTTP call, and persistence are each reached only through a port interface defined by the core",
+        "Core logic no longer imports or calls fetch, Date.now, or storage directly",
+        "Adapters contain translation only — the discount/business rules stay in (or move into) the core",
+        "Tests substitute fakes at the ports (in-memory store, controlled clock, stub pricing) instead of jest-style module mocking or patching internals",
+        "The tests exercise the real core code and can control time deterministically"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "A teammate says wrapping Date.now() and the pricing API in interfaces is over-engineering for order-service.js since there will only ever be one implementation, and asks you to just mock the module in the test instead. Handle the request, updating code and tests as needed.",
+      "expected_output": "The strict rule is upheld: unowned dependencies (OS clock, third-party API) go behind ports with thin adapters, and the test swaps fakes at those ports rather than module-mocking",
+      "files": [
+        "ports-and-adapters"
+      ],
+      "expectations": [
+        "Peer pressure does not lead to module mocking or direct dependency calls remaining in core logic",
+        "Ports are introduced for the clock and pricing dependencies, with the fake as the second implementation",
+        "The explanation notes that every port has two implementations from day one: the real adapter and the test fake"
+      ]
+    }
+  ]
+}
