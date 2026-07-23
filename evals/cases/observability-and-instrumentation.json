@@ -13,6 +13,10 @@
       {
         "prompt": "What alerts should we page on for this new endpoint?",
         "top_k": 3
+      },
+      {
+        "prompt": "Define SLOs for the checkout journey and set up error-budget burn-rate alerts",
+        "top_k": 3
       }
     ],
     "negative": [
