@@ -67,12 +67,34 @@ Each surviving example should already read like a specification:
 - **One outcome per example**
 - Hand the set to `acceptance-testing`: one executable specification per example, written before the production code
 
+## The Three Amigos
+
+Examples are defined by three perspectives in conversation, not by one author:
+
+| Amigo | Seat | Contributes | Asks |
+|---|---|---|---|
+| **Domain** | Product owner / domain expert | What the business actually needs; rulings on boundaries | "Is that what we mean by free delivery?" |
+| **Technical** | Tech lead / developer — ideally who will build it | Feasibility sanity, hidden complexity, ambiguity a builder would hit | "What should happen when both discounts apply?" |
+| **Testing** | Tester / QA mindset | Boundaries, negative cases, what could break | "And if the membership lapsed yesterday?" |
+
+The people doing the actual technical work belong in this conversation — examples defined without them get re-litigated during implementation. Early in a domain, the expert's presence is crucial; as shared understanding grows, product owners can define examples alone but still need expert access when ambiguity appears.
+
+### AI agents in the amigo seats
+
+When humans aren't available for a seat, an AI persona fills it — as **three distinct passes, not one blended read** (one agent playing all three amigos at once produces the average of the perspectives instead of the tension between them):
+
+- **Testing seat** → the [test-engineer](../../agents/test-engineer.md) persona: probes each example for missing boundaries, negatives, and isolation problems
+- **Technical seat** → the [code-reviewer](../../agents/code-reviewer.md) persona (staff-engineer perspective): flags examples that hide complexity, conflict with existing behavior, or leave a builder guessing
+- **Domain seat** → the [domain-expert-proxy](../../agents/domain-expert-proxy.md) persona, with a hard constraint the other seats don't carry: it rules **only from recorded domain knowledge** (glossary, event maps, prior rulings), cites a source for every ruling, and turns everything else into open questions. The domain seat is where requirements get *decided*, so it is the one seat an AI must never freestyle.
+
+Run the seats as a fan-out (each reviews the candidate example set independently), then merge: rulings and probes are applied, conflicts and unsourced boundary decisions become open questions. Examples ruled by the proxy from cited sources count as accepted; examples resting on an open question are **provisional** until the human expert rules — they may drive early development but are flagged in the artifact.
+
 ## Working With an AI Agent
 
-The division of labor is strict, and it's the point of the practice:
+Whatever mix of humans and personas fills the seats, the division of labor is strict, and it's the point of the practice:
 
 - **The agent generates candidate examples and probing questions** — it is genuinely good at enumerating boundary candidates (empty carts, co-authors, foreign addresses, repeated submissions). Every candidate is phrased as a question.
-- **The domain expert rules on every example.** Whether delivery to New Zealand is free is a *business fact*; an agent that fills it in has manufactured a requirement. No example enters the accepted set without a human ruling.
+- **The domain seat rules on every example.** Whether delivery to New Zealand is free is a *business fact*; an agent that fills it in has manufactured a requirement. No example enters the accepted set without a human ruling or a source-cited proxy ruling.
 - The agent maintains the artifact — examples recorded with the story, open questions flagged — and keeps the language inside the glossary.
 
 ## Common Rationalizations
@@ -84,6 +106,8 @@ The division of labor is strict, and it's the point of the practice:
 | "More examples = more coverage, keep them all" | Past the boundary-revealing set, examples obscure intent and multiply maintenance. Refine down; push variations into unit tests. |
 | "The agent can infer the edge-case answers, it knows how shops work" | It knows how *typical* shops work. Your business's answer to "co-authored books?" is a decision, not an inference. Record the question; get the ruling. |
 | "We'll firm up the examples once the code shows us the real behavior" | Backwards — that documents the implementation instead of specifying the need, and the definition of done arrives after "done". |
+| "One agent can play all three amigos in a single pass" | A single pass produces the average of three perspectives, not the tension between them — and the tension is where the missing examples surface. Three seats, three passes. |
+| "The proxy can rule on this, it's obviously how the business works" | The proxy rules from recorded sources or not at all. "Obvious" unrecorded rulings are exactly the manufactured requirements the domain seat exists to prevent. |
 
 ## Red Flags
 
@@ -92,6 +116,8 @@ The division of labor is strict, and it's the point of the practice:
 - Examples mentioning screens, buttons, endpoints, tables, or internal logic
 - An example set that grew past a dozen with no story-split conversation
 - Business rulings (boundaries, exceptions) filled in by the agent rather than the domain expert
+- A "three amigos" session that was actually one perspective (no testing seat probing negatives, no technical seat sanity-checking feasibility)
+- Proxy rulings without cited sources, or provisional examples treated as accepted
 - Open questions resolved by silent assumption instead of being written down
 - Accepted examples that never become executable specifications
 
@@ -102,7 +128,9 @@ Before handing off to `acceptance-testing`, confirm:
 - [ ] Every example is concrete (real values, named context) and demonstrates the story's goal
 - [ ] Negative cases mark each boundary the questioning uncovered
 - [ ] The set is the refined minimum — each example teaches a distinction the others don't
-- [ ] Every example is expert-ruled; open questions are recorded, not assumed away
+- [ ] Every example is expert-ruled — by a human, or by the [domain-expert-proxy](../../agents/domain-expert-proxy.md) persona with a cited source; proxy-unresolvable rulings are open questions, and examples resting on them are marked provisional
+- [ ] All three amigo perspectives (domain, technical, testing) examined the set — human or persona per seat, as distinct passes
+- [ ] Open questions are recorded, not assumed away
 - [ ] Language is glossary-verbatim, outcome-only, one outcome per example
 - [ ] Example volume was checked as a sizing signal — oversized stories went back to `user-stories`
 - [ ] The accepted set is committed with the story, queued to become one executable specification each

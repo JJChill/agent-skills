@@ -47,7 +47,7 @@ Keep it in the repository as a living artifact (e.g., `docs/story-map-<product>.
 - **Trade scope visibly:** cutting a card shows exactly which part of which step thins out — a discussion, not a mystery. Nothing "breaks" the way an epic does; the map has no completion anxiety.
 - **Converse at the right altitude:** activities for sponsors, backbone for adjacent teams, cards for the delivery team. Same map, three audiences.
 
-An agent working with a human on a map proposes backbone steps and candidate cards *as questions*, walks scenarios to test for gaps, and drafts release slices for the human to adjust — the human owns priorities and scope decisions, always.
+An agent working with a human on a map proposes backbone steps and candidate cards *as questions*, walks scenarios to test for gaps, and drafts release slices for the human to adjust — the human owns priorities and scope decisions, always. If no human owner is available, the [product-owner-proxy](../../agents/product-owner-proxy.md) persona may propose a cut from recorded product goals (source-cited, thin-end-to-end tiebreak), marked provisional until the human owner confirms.
 
 ## Common Rationalizations
 

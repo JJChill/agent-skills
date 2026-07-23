@@ -5,6 +5,8 @@ Specialist personas that play a single role with a single perspective. Each pers
 | Persona | Role | Best for |
 |---------|------|----------|
 | [code-reviewer](../agents/code-reviewer.md) | Senior Staff Engineer | Five-axis review before merge |
+| [domain-expert-proxy](../agents/domain-expert-proxy.md) | Domain Expert Stand-in | Source-cited domain rulings when no human expert is available; domain seat in three-amigos sessions |
+| [product-owner-proxy](../agents/product-owner-proxy.md) | Product Owner Stand-in | Source-cited value/priority/scope rulings when no human owner is available; product seat in event storming and release slicing |
 | [security-auditor](../agents/security-auditor.md) | Security Engineer | Vulnerability detection, OWASP-style audit |
 | [test-engineer](../agents/test-engineer.md) | QA Engineer | Test strategy, coverage analysis, Prove-It pattern |
 | [web-performance-auditor](../agents/web-performance-auditor.md) | Web Performance Engineer | Core Web Vitals audit, loading/rendering/network analysis |
@@ -42,6 +44,8 @@ Pick this when there's a repeatable workflow you'd otherwise re-explain every ti
 Pick this only when **independent** investigations can run in parallel and produce reports that a single agent then merges.
 
 - `/ship` → fans out to `code-reviewer` + `security-auditor` + `test-engineer` in parallel, then synthesizes their reports into a go/no-go decision
+- A three-amigos example session (see the `specification-by-example` skill) → fans out to `domain-expert-proxy` + `code-reviewer` + `test-engineer`, each reviewing the candidate examples independently, then merges rulings, probes, and open questions
+- An event-storming working group (see the `event-storming` skill) → fans out to `domain-expert-proxy` + `product-owner-proxy` + `code-reviewer` over the emerging map; persona output stays candidate until humans confirm
 
 This is the only orchestration pattern this repo endorses. See [references/orchestration-patterns.md](../references/orchestration-patterns.md) for the full pattern catalog and anti-patterns.
 

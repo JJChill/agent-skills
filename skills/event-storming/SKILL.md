@@ -28,6 +28,16 @@ When an agent runs this skill with a human, the roles are fixed:
 - **The agent facilitates and scribes.** It asks one thing at a time (the `interview-me` discipline), keeps the session moving, reflects the emerging model back, and maintains the artifact — a markdown event map in the repository (e.g., `docs/event-storm-<context>.md`) that survives the session.
 - **The agent enforces the rules below** — especially "no technical detail" — even when the human drifts into solution design.
 
+### AI personas in the working group
+
+The minimum working group is domain experts, a product owner, and a technical lead — and collaborating too little is a more common failure than too much. When humans can't fill every seat, personas stand in, **each as a distinct pass with its own charter** (one blended read averages the perspectives instead of colliding them):
+
+- **Domain seat** → the [domain-expert-proxy](../../agents/domain-expert-proxy.md) persona: proposes events and policies *only* from recorded sources (briefs, prior maps, glossary, domain docs), cites them, and turns everything unrecorded into hot spots for the human expert
+- **Product seat** → the [product-owner-proxy](../../agents/product-owner-proxy.md) persona: marks which parts of the map carry the value and where exploration should go deeper, from recorded goals only — novel value judgments become open questions
+- **Technical seat** → the [code-reviewer](../../agents/code-reviewer.md) persona, confined to the feasibility sanity-check: "can we imagine one way to build this part?" — never solution design, never technical vocabulary in the map
+
+Run the seats over the emerging map, merge their contributions, and keep the labels honest: everything a persona added that a human hasn't confirmed stays **candidate**, and the map says so. A fully persona-staffed session produces a good *draft* map and a sharp question list — it never replaces the session with the humans; it prepares it.
+
 ## The Process
 
 ### 1. Set the goal and cast
@@ -83,6 +93,7 @@ Tell the story of the domain as events along a timeline:
 - Events in present/imperative tense or system vocabulary ("insert row", "call endpoint")
 - The map contains services, databases, screens, or protocols
 - The agent asserting domain facts the human never stated
+- A persona-staffed session's output treated as confirmed instead of candidate + question list
 - No open-questions/hot-spot list at the end (a session that found no ambiguity didn't look)
 - Settled terms that never reach the glossary
 - The session's output is only in the conversation — no committed artifact
