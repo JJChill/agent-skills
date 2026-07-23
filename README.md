@@ -45,7 +45,7 @@ Skills also activate automatically based on what you're doing — designing an A
 **Fastest path — any agent, one command.** The open [skills CLI](https://github.com/vercel-labs/skills) installs into 70+ agents (Claude Code, Cursor, Codex, Copilot, Cline, and more):
 
 ```bash
-npx skills add addyosmani/agent-skills            # install all 27 skills
+npx skills add addyosmani/agent-skills            # install all 31 skills
 npx skills add addyosmani/agent-skills --list     # browse before installing
 ```
 
@@ -193,9 +193,9 @@ Already installed? How you roll the pack out depends on your codebase. The **[Ad
 
 ---
 
-## All 27 Skills
+## All 31 Skills
 
-The commands above are entry points. The pack includes 27 skills total — 26 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
+The commands above are entry points. The pack includes 31 skills total — 30 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
 
 ### Meta - Discover which skill applies
 
@@ -209,6 +209,10 @@ The commands above are entry points. The pack includes 27 skills total — 26 li
 |-------|-------------|----------|
 | [interview-me](skills/interview-me/SKILL.md) | One-question-at-a-time interview that extracts what the user actually wants instead of what they think they should want, until ~95% confidence | The ask is underspecified, or the user invokes "interview me" / "grill me" |
 | [idea-refine](skills/idea-refine/SKILL.md) | Structured divergent/convergent thinking to turn vague ideas into concrete proposals | You have a rough concept that needs exploration |
+| [event-storming](skills/event-storming/SKILL.md) | Map the domain as past-tense events on a timeline, then commands, actors, aggregates, bounded contexts — agent facilitates, human is the domain expert | Starting a new project or unfamiliar domain, or seeding the glossary |
+| [user-stories](skills/user-stories/SKILL.md) | Translate wishes into small INVEST stories — user-visible outcomes in the user's words, zero solution content | Capturing requirements, or fixing technical/oversized/vague stories |
+| [story-mapping](skills/story-mapping/SKILL.md) | Narrative backbone + activities + story cards instead of epics — spot gaps, slice releases thin across the whole journey | Organizing many stories, planning releases, or trading scope |
+| [specification-by-example](skills/specification-by-example/SKILL.md) | Derive acceptance criteria as concrete positive/negative examples, expert-ruled and refined to the representative minimum | A story needs acceptance criteria before `acceptance-testing` automates them |
 | [spec-driven-development](skills/spec-driven-development/SKILL.md) | Write a PRD covering objectives, commands, structure, code style, testing, and boundaries before any code | Starting a new project, feature, or significant change |
 | [ubiquitous-language](skills/ubiquitous-language/SKILL.md) | One shared domain vocabulary backed by a maintained repository glossary — one term per concept, glossary terms verbatim in code/specs/ports, synonyms corrected everywhere | Naming any domain concept, creating or updating the glossary, or resolving synonym/ambiguity drift |
 
@@ -327,9 +331,13 @@ Every skill follows a consistent anatomy:
 
 ```
 agent-skills/
-├── skills/                            # 27 skills (26 lifecycle + 1 meta)
+├── skills/                            # 31 skills (30 lifecycle + 1 meta)
 │   ├── interview-me/                  #   Define
 │   ├── idea-refine/                   #   Define
+│   ├── event-storming/                #   Define
+│   ├── user-stories/                  #   Define
+│   ├── story-mapping/                 #   Define
+│   ├── specification-by-example/      #   Define
 │   ├── spec-driven-development/       #   Define
 │   ├── ubiquitous-language/           #   Define
 │   ├── planning-and-task-breakdown/   #   Plan
