@@ -18,7 +18,7 @@ docs/         → Setup guides for different tools
 
 ## Skills by Phase
 
-**Define:** interview-me, idea-refine, spec-driven-development
+**Define:** interview-me, idea-refine, spec-driven-development, ubiquitous-language
 **Plan:** planning-and-task-breakdown
 **Build:** incremental-implementation, test-driven-development, context-engineering, source-driven-development, doubt-driven-development, frontend-ui-engineering, api-and-interface-design, ports-and-adapters
 **Verify:** acceptance-testing, browser-testing-with-devtools, debugging-and-error-recovery

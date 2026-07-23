@@ -22,6 +22,7 @@ Evaluate every change across these five dimensions:
 ### 2. Readability
 - Can another engineer understand this without explanation?
 - Are names descriptive and consistent with project conventions?
+- Do domain concepts use the project glossary's terms exactly (see the `ubiquitous-language` skill)? A new synonym for an established term, or new domain vocabulary with no glossary entry in the same change, is Important at minimum
 - Is the control flow straightforward (no deeply nested logic)?
 - Is the code well-organized (related code grouped, clear boundaries)?
 

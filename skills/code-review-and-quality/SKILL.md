@@ -38,6 +38,7 @@ Does the code do what it claims to do?
 Can another engineer (or agent) understand this code without the author explaining it?
 
 - Are names descriptive and consistent with project conventions? (No `temp`, `data`, `result` without context)
+- Do domain concepts use the glossary's terms exactly (see `ubiquitous-language`)? A new synonym for an established term, or a new domain term with no glossary entry in the same change, is a Required finding
 - Is the control flow straightforward (avoid nested ternaries, deep callbacks)?
 - Is the code organized logically (related code grouped, clear module boundaries)?
 - Are there any "clever" tricks that should be simplified?
@@ -394,6 +395,7 @@ For triaging `npm audit` findings and supply-chain risk (typosquatting, compromi
 - A change that grows an already-large file instead of decomposing it
 - New conditionals scattered into unrelated code paths (a missing abstraction)
 - A bespoke helper that duplicates an existing canonical one, or feature logic placed in a shared module
+- A diff introducing a second name for an existing domain concept, or new domain vocabulary with no glossary update
 - Core/business code newly importing a framework, vendor SDK, ORM, or OS facility directly instead of a port
 - An adapter diff adding conditionals on domain concepts, retries with fallback decisions, or validation
 - Tests added or changed to mock internal modules/classes rather than substitute a fake at a port
