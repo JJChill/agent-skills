@@ -18,11 +18,18 @@ Task arrives
     │
     ├── Don't know what you want yet? ──────→ interview-me
     ├── Have a rough concept, need variants? → idea-refine
+    ├── New/unfamiliar problem domain? ─→ event-storming
+    ├── Requirement → user-visible outcomes? → user-stories
+    ├── Many stories to organize/slice? ─→ story-mapping
+    ├── Story needs acceptance criteria? → specification-by-example
+    ├── Criteria → automated specs? ───→ acceptance-testing
+    ├── Naming domain concepts / glossary? → ubiquitous-language
     ├── New project/feature/change? ──→ spec-driven-development
     ├── Have a spec, need tasks? ──────→ planning-and-task-breakdown
     ├── Implementing code? ────────────→ incremental-implementation
     │   ├── UI work? ─────────────────→ frontend-ui-engineering
     │   ├── API work? ────────────────→ api-and-interface-design
+    │   ├── External dependency? ─────→ ports-and-adapters
     │   ├── Need better context? ─────→ context-engineering
     │   ├── Need doc-verified code? ───→ source-driven-development
     │   └── Stakes high / unfamiliar code? ──→ doubt-driven-development
@@ -144,21 +151,29 @@ For a complete feature, the typical skill sequence is:
 ```
 1.  interview-me                → Extract what the user actually wants
 2.  idea-refine                 → Refine vague ideas
-3.  spec-driven-development     → Define what we're building
-4.  planning-and-task-breakdown → Break into verifiable chunks
-5.  context-engineering         → Load the right context
-6.  source-driven-development   → Verify against official docs
-7.  incremental-implementation  → Build slice by slice
-8.  observability-and-instrumentation → Instrument as you build (runs parallel with 7-9, not after)
-9.  doubt-driven-development    → Cross-examine non-trivial decisions in-flight
-10. test-driven-development     → Prove each slice works
-11. code-review-and-quality     → Review before merge
-12. code-simplification         → Reduce unnecessary complexity while preserving behavior
-13. git-workflow-and-versioning → Clean commit history
-14. documentation-and-adrs      → Document decisions
-15. deprecation-and-migration   → Retire old systems and move users safely when needed
-16. shipping-and-launch         → Deploy safely
+3.  event-storming              → Map the problem domain (new/unfamiliar areas; seeds the glossary)
+4.  user-stories                → Capture needs as small, user-visible outcomes
+5.  story-mapping               → Organize the stories; slice the release
+6.  specification-by-example    → Derive each story's acceptance criteria as concrete examples
+7.  acceptance-testing          → Automate the examples as executable specifications (definition of done)
+8.  spec-driven-development     → Define what we're building
+9.  planning-and-task-breakdown → Break into verifiable chunks
+10. context-engineering         → Load the right context
+11. source-driven-development   → Verify against official docs
+12. ports-and-adapters          → Put every unowned/separately-deployed dependency behind a port
+13. incremental-implementation  → Build slice by slice
+14. observability-and-instrumentation → Instrument as you build (runs parallel with 13-15, not after)
+15. doubt-driven-development    → Cross-examine non-trivial decisions in-flight
+16. test-driven-development     → Prove each slice works (inner loop inside 7's outer loop)
+17. code-review-and-quality     → Review before merge
+18. code-simplification         → Reduce unnecessary complexity while preserving behavior
+19. git-workflow-and-versioning → Clean commit history
+20. documentation-and-adrs      → Document decisions
+21. deprecation-and-migration   → Retire old systems and move users safely when needed
+22. shipping-and-launch         → Deploy safely
 ```
+
+`ubiquitous-language` runs throughout: the glossary is seeded in step 3, used verbatim in every story, example, spec, port, and telemetry event after it.
 
 Not every task needs every skill. A bug fix might only need: `debugging-and-error-recovery` → `test-driven-development` → `code-review-and-quality`.
 
@@ -168,6 +183,11 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 |-------|-------|-----------------|
 | Define | interview-me | Surface what the user actually wants before any plan, spec, or code exists |
 | Define | idea-refine | Refine ideas through structured divergent and convergent thinking |
+| Define | event-storming | Map the domain as events, commands, actors, and bounded contexts |
+| Define | ubiquitous-language | One glossary-backed domain vocabulary, used verbatim everywhere |
+| Define | user-stories | Small INVEST stories — user-visible outcomes, no solutions |
+| Define | story-mapping | Backbone + activities + cards; slice releases, spot gaps |
+| Define | specification-by-example | Concrete positive/negative examples as acceptance criteria |
 | Define | spec-driven-development | Requirements and acceptance criteria before code |
 | Plan | planning-and-task-breakdown | Decompose into small, verifiable tasks |
 | Build | incremental-implementation | Thin vertical slices, test each before expanding |
@@ -176,6 +196,8 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Build | context-engineering | Right context at the right time |
 | Build | frontend-ui-engineering | Production-quality UI with accessibility |
 | Build | api-and-interface-design | Stable interfaces with clear contracts |
+| Build | ports-and-adapters | Unowned/separately-deployed dependencies behind ports; thin adapters; fakes at ports only |
+| Verify | acceptance-testing | Executable specifications in domain language as the definition of done |
 | Verify | test-driven-development | Failing test first, then make it pass |
 | Verify | browser-testing-with-devtools | Chrome DevTools MCP for runtime verification |
 | Verify | debugging-and-error-recovery | Reproduce → localize → fix → guard |

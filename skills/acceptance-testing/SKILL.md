@@ -30,8 +30,8 @@ User story ──▶ Concrete examples ──▶ Executable specifications ─�
  (the wish)   (acceptance criteria)   (automated, failing)          (make them pass)
 ```
 
-1. **Capture the story in the user's language.** "As a [user], I want [goal], so that [benefit]." No technical stories: behind "add an index" is a user need ("find my orders quickly") — capture that.
-2. **Derive one or more concrete examples per story.** Each example demonstrates the need is met. Include negative examples ("delivery is NOT free when..."). Too many examples for one story means the story is too big — split it.
+1. **Capture the story in the user's language.** "As a [user], I want [goal], so that [benefit]." No technical stories: behind "add an index" is a user need ("find my orders quickly") — capture that. The upstream pipeline: `event-storming` maps the domain, `user-stories` captures the needs, `story-mapping` organizes them.
+2. **Derive one or more concrete examples per story.** Each example demonstrates the need is met. Include negative examples ("delivery is NOT free when..."). Too many examples for one story means the story is too big — split it. The full collaborative process is `specification-by-example`.
 3. **Automate at least one test per acceptance criterion, before production code.** These failing specifications are the target the implementation aims at.
 4. **Definition of done:** every acceptance criterion has at least one passing automated acceptance test.
 

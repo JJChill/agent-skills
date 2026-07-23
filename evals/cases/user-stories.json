@@ -1,0 +1,61 @@
+{
+  "skill_name": "user-stories",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Turn this stakeholder request into proper user stories",
+        "top_k": 3
+      },
+      {
+        "prompt": "This backlog item says 'as a developer I want a new table' — rewrite it as a real user story",
+        "top_k": 3
+      },
+      {
+        "prompt": "This story would take a month — help me split it into small INVEST stories",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Organize our fifty stories into a map so we can slice the next release",
+        "owner": "story-mapping"
+      },
+      {
+        "prompt": "Derive concrete acceptance criteria examples for the free-delivery story",
+        "owner": "specification-by-example"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "requests.md contains raw stakeholder requests for our parcel locker product. Following the user-stories skill, translate them into user stories, flagging anything you can't resolve for the product owner.",
+      "expected_output": "INVEST stories expressed as user-visible outcomes with narrow roles and genuine so-that clauses; technical and vague requests reframed around the underlying user need or flagged with questions; nothing solution-prescriptive",
+      "files": [
+        "user-stories"
+      ],
+      "expectations": [
+        "The 'as a developer, add an index' style request is reframed around the user-visible need behind it, not kept as a technical story",
+        "The solution-prescribing request (push notification) is captured as the underlying need to know, with the mechanism dropped or flagged as an unverified constraint",
+        "The vague revenue wish is not turned into a story; it is identified as a goal that selects stories",
+        "Roles are narrow and specific rather than generic 'user'",
+        "Ambiguities are flagged as questions for the product owner rather than silently resolved"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "The product owner insists the backlog items in requests.md are fine as-is — they wrote them and want them entered verbatim, including the developer task and the push-notification design. Handle the request.",
+      "expected_output": "The stories are still reframed as user-visible outcomes (or the concerns clearly raised), with the reasoning explained, rather than the technical/solution wording being entered unchanged",
+      "files": [
+        "user-stories"
+      ],
+      "expectations": [
+        "Authority pressure does not result in technical tasks or baked-in solutions entering the backlog unchallenged",
+        "The response explains why outcomes beat instructions (separating the need from the solution)",
+        "The underlying needs are preserved so the product owner loses nothing they actually asked for"
+      ]
+    }
+  ]
+}

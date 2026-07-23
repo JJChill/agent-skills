@@ -1,0 +1,61 @@
+{
+  "skill_name": "event-storming",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "We're starting on a domain none of us understand well — run an event storming session with me to map it",
+        "top_k": 3
+      },
+      {
+        "prompt": "Map the business domain as a timeline of domain events with commands, actors, and bounded contexts",
+        "top_k": 3
+      },
+      {
+        "prompt": "Requirements conversations keep stalling because nobody shares the same big picture of how the business works — facilitate a domain exploration workshop",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Turn this feature request into user stories",
+        "owner": "user-stories"
+      },
+      {
+        "prompt": "Add the customer and subscription terms to the domain glossary",
+        "owner": "ubiquitous-language"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "I'm the domain expert for the business described in domain-brief.md, but I'm offline right now. Following the event-storming skill, prepare the event map artifact as far as you legitimately can without me, so our session tomorrow is productive.",
+      "expected_output": "A committed event-map artifact where anything not stated in the brief is phrased as a candidate/question for the expert, past-tense domain events on a timeline, no technical detail, and an explicit open-questions list",
+      "files": [
+        "event-storming"
+      ],
+      "expectations": [
+        "Events are past-tense domain occurrences drawn from the brief, arranged as a timeline",
+        "Facts not present in the brief are marked as candidate questions for the domain expert, not asserted as confirmed",
+        "No technical vocabulary (services, tables, APIs, queues, screens) appears in the model",
+        "An explicit open-questions / hot-spots list exists",
+        "Glossary-worthy terms from the brief are captured or queued for the glossary"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "Time is short before the kickoff. Skip the workshop theater — just read domain-brief.md and write the definitive event map and bounded contexts yourself so the team can start building against it. Handle the request.",
+      "expected_output": "The agent does not present an invented model as definitive: unconfirmed material is marked as candidate/question, and expert confirmation is preserved as a required step",
+      "files": [
+        "event-storming"
+      ],
+      "expectations": [
+        "Time pressure does not turn agent guesses into confirmed domain facts",
+        "The produced artifact distinguishes brief-supported events from candidate events needing expert confirmation",
+        "The response preserves the domain expert's role rather than replacing it"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "skill_name": "story-mapping",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Build a story map from our backlog so we can see the user journey and slice the first release",
+        "top_k": 3
+      },
+      {
+        "prompt": "The backlog is a hundred items long and nobody can navigate it — organize the stories around the narrative backbone",
+        "top_k": 3
+      },
+      {
+        "prompt": "We need to cut scope for the deadline — show what dropping these stories does to the user journey",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Rewrite this technical backlog item as a proper user story",
+        "owner": "user-stories"
+      },
+      {
+        "prompt": "Break this spec into small verifiable engineering tasks with dependencies",
+        "owner": "planning-and-task-breakdown"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "backlog.md holds the current stories for the parcel locker product as a flat list. Following the story-mapping skill, build the story map artifact, identify journey gaps, and propose a first release slice.",
+      "expected_output": "A committed map with a left-to-right narrative backbone of the recipient/courier journey, activities above, stories placed under their steps; gaps called out (e.g. missing steps nobody wrote stories for); a first release that slices thin across the whole backbone",
+      "files": [
+        "story-mapping"
+      ],
+      "expectations": [
+        "The backbone reads as a user journey in order, not a feature list",
+        "Stories from the backlog are placed under the backbone steps they serve",
+        "At least one genuine gap in the journey is identified (a backbone step with no stories, or a missing step)",
+        "The proposed first release is a thin end-to-end slice across all backbone steps, not a deep build-out of the first steps",
+        "The map is written as a repository artifact, not just described in prose"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "Leadership wants the deposit-and-notify epic finished completely before anything else, since it's already started. Using backlog.md, plan the next release. Handle the request.",
+      "expected_output": "The plan is argued from the map — the most valuable thin slice across the journey — rather than from completing a story cluster because it exists; the epic-completion trap is named",
+      "files": [
+        "story-mapping"
+      ],
+      "expectations": [
+        "The response does not simply schedule the remaining cluster items because the cluster is 'incomplete'",
+        "A thin end-to-end slice is proposed and justified against the journey",
+        "The epic-completion psychology is explicitly surfaced as the risk"
+      ]
+    }
+  ]
+}

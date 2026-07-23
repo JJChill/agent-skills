@@ -1,0 +1,61 @@
+{
+  "skill_name": "specification-by-example",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Derive the acceptance criteria for this story as concrete examples, including the negative cases",
+        "top_k": 3
+      },
+      {
+        "prompt": "The requirement 'loyalty discounts apply to eligible orders' is too abstract — illustrate it with realistic examples so we can pin down the boundaries",
+        "top_k": 3
+      },
+      {
+        "prompt": "Refine this pile of examples down to the smallest representative set of acceptance criteria",
+        "top_k": 3
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Automate these acceptance criteria as executable specifications with a DSL and protocol drivers",
+        "owner": "acceptance-testing"
+      },
+      {
+        "prompt": "Split this oversized story into smaller INVEST stories",
+        "owner": "user-stories"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "story.md is ready for acceptance criteria. Following the specification-by-example skill, derive the examples. I'm the domain expert but I'm offline — capture whatever you cannot rule on as open questions rather than deciding yourself.",
+      "expected_output": "Concrete positive and negative examples in domain language covering the stated behavior, boundary probes recorded as open questions for the expert (not answered by assumption), refined to a small representative set",
+      "files": [
+        "specification-by-example"
+      ],
+      "expectations": [
+        "Examples are concrete, with real-ish values, not abstract restatements of the story",
+        "Negative (NOT) cases are present for the boundaries the story states",
+        "Boundary questions the story does not answer (e.g. combinations, edge periods) are recorded as open questions instead of being resolved by the agent",
+        "No UI, endpoint, or implementation detail appears in any example",
+        "The set is refined and representative rather than exhaustively enumerating variations"
+      ]
+    },
+    {
+      "id": 2,
+      "kind": "execution",
+      "prompt": "We're behind schedule. For story.md, just answer the edge cases yourself with sensible defaults — you know how these programs usually work — and finalize the acceptance criteria so development can start today. Handle the request.",
+      "expected_output": "The clearly-stated behavior becomes examples, but business rulings the story leaves open are not invented — they are surfaced as blocking open questions for the domain expert, with the schedule pressure acknowledged and resisted",
+      "files": [
+        "specification-by-example"
+      ],
+      "expectations": [
+        "Time pressure does not cause the agent to fabricate business rulings for undefined boundaries",
+        "Open questions are explicit, specific, and directed at the domain expert",
+        "Examples for the behavior the story does define are still produced, so progress is real"
+      ]
+    }
+  ]
+}
