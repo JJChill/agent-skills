@@ -45,6 +45,7 @@ This test has no exemption for "infrastructure everyone uses":
 | Web framework (Express, Spring, Rails…) | Adapter — the framework calls an inbound adapter; core never sees request/response types |
 | UI framework (React, SwiftUI…) | Adapter — views render core state and forward intents through a port |
 | OS: `Date.now()`, `fs`, `process.env`, `Math.random()`, sockets | Adapter — clock, storage, config, randomness are ports |
+| Logger / metrics / tracing SDK (incl. OpenTelemetry) | Adapter — core emits domain observations through a telemetry port (see `observability-and-instrumentation`) |
 | A module in the same repo, same deployable | No port needed |
 | A "shared library" another team releases on their own schedule | Adapter |
 
