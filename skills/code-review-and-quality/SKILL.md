@@ -60,6 +60,8 @@ Does the change fit the system's design?
 - **Does this refactor reduce complexity or just relocate it?** Count the concepts a reader must hold to follow the change. If a "cleaner" version leaves that count unchanged, it isn't cleaner — prefer the restructuring that makes whole branches, modes, or layers disappear over one that re-centralizes the same logic. Prefer deleting an abstraction to polishing it.
 - **Is feature-specific logic leaking into a shared or general-purpose module?** Keep logic in its owning layer, reuse the existing canonical helper instead of a near-duplicate, and don't normalize architectural drift.
 - **Are type boundaries explicit?** Question gratuitous `any`/`unknown`/optional/casts and silent fallbacks that paper over an unclear invariant — making the boundary explicit often makes the surrounding control flow simpler.
+- **Is every unowned or separately-deployed dependency behind a port?** (See `ports-and-adapters` for the full rule.) A new call to a third-party API, SDK, database, framework type, or OS facility (`Date.now()`, `fs`, `process.env`, randomness) from core/business code is a boundary violation, not a style preference — flag it as Required.
+- **Are adapters still thin?** An adapter that grew a business conditional, retry/fallback decision, caching policy, or validation rule is hiding logic where fakes silently skip it. Propose moving the decision into the core behind the port.
 
 ### 4. Security
 
@@ -159,6 +161,12 @@ Tests reveal intent and coverage:
 - Are edge cases covered?
 - Do tests have descriptive names?
 - Would the tests catch a regression if the code changed?
+- Are test doubles substituted only at ports? Module mocking, patching
+  internals, or spying on private methods is a Required finding — the
+  fake belongs at the architectural boundary (see ports-and-adapters).
+- For a user story: does every acceptance criterion have an executable
+  specification, written in domain language with no implementation
+  detail (see acceptance-testing)?
 ```
 
 ### Step 3: Review the Implementation
@@ -324,6 +332,9 @@ For triaging `npm audit` findings and supply-chain risk (typosquatting, compromi
 - [ ] Appropriate abstraction level
 - [ ] Refactors reduce complexity rather than relocate it
 - [ ] No feature logic in shared modules; file stays within a healthy size
+- [ ] Unowned/separately-deployed dependencies (incl. UI, frameworks, OS clock/fs/env) reached only through ports; adapters are translation-only
+- [ ] Test doubles substituted at ports only — no internal mocking or module patching
+- [ ] Acceptance-level tests state behavior in domain language, free of UI/endpoint detail
 
 ### Security
 - [ ] No secrets in code
@@ -350,6 +361,8 @@ For triaging `npm audit` findings and supply-chain risk (typosquatting, compromi
 
 - For detailed security review guidance, see `references/security-checklist.md`
 - For performance review checks, see `references/performance-checklist.md`
+- For the dependency-boundary rules enforced in the Architecture axis, see `ports-and-adapters`
+- For what makes an acceptance test reviewable as a specification, see `acceptance-testing`
 
 ## Common Rationalizations
 
@@ -364,6 +377,8 @@ For triaging `npm audit` findings and supply-chain risk (typosquatting, compromi
 | "It's only a small addition to this file" | Small diffs still push files past a healthy size and bolt branches onto unrelated flows. Judge the resulting structure, not the diff size. |
 | "It's just a version bump" | A bump is a behavior change you didn't write. Read the changelog; semver doesn't guarantee no breakage. |
 | "I'll upgrade everything in one PR to save time" | A bulk bump that breaks the build hides which package did it. One dependency per change keeps the cause and the revert clean. |
+| "It's one direct call to the SDK/clock, a port is overkill" | One direct call is how the boundary erodes — the next reviewer cites this one as precedent. The port already has a second implementation waiting: the test fake. |
+| "The test mocks our internal class, but it's green" | Green while welded to today's structure. Doubles swapped anywhere but a port shrink the real code under test and break on refactor. |
 
 ## Red Flags
 
@@ -379,6 +394,10 @@ For triaging `npm audit` findings and supply-chain risk (typosquatting, compromi
 - A change that grows an already-large file instead of decomposing it
 - New conditionals scattered into unrelated code paths (a missing abstraction)
 - A bespoke helper that duplicates an existing canonical one, or feature logic placed in a shared module
+- Core/business code newly importing a framework, vendor SDK, ORM, or OS facility directly instead of a port
+- An adapter diff adding conditionals on domain concepts, retries with fallback decisions, or validation
+- Tests added or changed to mock internal modules/classes rather than substitute a fake at a port
+- Acceptance/E2E tests in the diff scripted against pages, buttons, selectors, or endpoints instead of stating behavior
 - A bulk "bump dependencies" PR with no changelog review and no per-package isolation
 - A lockfile change that's hand-edited, uncommitted, or merged without reviewing its diff
 
