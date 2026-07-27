@@ -31,6 +31,21 @@ The config above is tuned for a JS/TS project. Probity's engine and the AI-valid
 
   Two Kotlin-specific notes. First, Probity's built-in single-new-test fast-path doesn't cover Kotlin, so the preset ships `withKotlinFastPath(enforceTdd())`: a `.kt`/`.kts` write adding exactly one `@Test` function passes deterministically (via ast-grep and the `tree-sitter-kotlin` grammar) instead of costing an AI call — the most common write in a TDD loop. It needs two optional packages (`npm install -D @ast-grep/napi @ast-grep/lang-kotlin`) and transparently falls through to plain `enforceTdd` when they're missing; like Probity's own fast-path, it trades away the refactor-readiness check on those writes. Second, the Kotlin deterministic rules are **delta-based** (they block only occurrences a write *introduces*), so a brownfield codebase with hundreds of existing direct clock calls migrates incrementally instead of having those files frozen.
 
+## Spec↔test traceability (KMP preset)
+
+The KMP preset also enforces the `acceptance-testing` skill's definition of done mechanically: every scenario in a Markdown spec is claimed by an acceptance test, and every claim resolves to a real scenario. The link is declared, not inferred — a test carries a tag (comment or annotation argument):
+
+```kotlin
+// Covers: messaging.feature.md :: Scenario: Message is delivered to a contact
+```
+
+Two deterministic rules in [`probity/rules/spec-test-parity.ts`](probity/rules/spec-test-parity.ts) hold the invariant from both ends:
+
+- **`enforceSpecTestParity()`** gates `git commit`: it scans `docs/specs/*.feature.md` for `## Scenario:` headings and the acceptance dirs for `Covers:` tags, and blocks with a two-sided report — scenarios no test claims, and tags pointing at scenarios that no longer exist. Parity requires the *link*, not a passing run (the claiming test may still be red or quarantined); scenarios still being driven outside-in are exempted with `## Scenario (wip):`.
+- **`surfaceScenarioLinkBreakage()`** fires on `*.feature.md` writes: removing or renaming a scenario heading that tests still claim blocks immediately, listing the affected tests — so a rename updates its `Covers:` tags in the same change instead of rotting until commit time.
+
+Because scenario titles are link keys, renames must touch the claiming tests — that's the point, and the breakage rule turns it into a guided step. Hooks only run in agent sessions, so [`probity/scripts/spec-parity.mjs`](probity/scripts/spec-parity.mjs) ships the same check as a zero-dependency CLI for CI and human commits: `node spec-parity.mjs --specs docs/specs` (exit 1 on breakage).
+
 ## Setup
 
 Probity lives in the **consuming project** (the codebase you're building), not in this repo.

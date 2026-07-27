@@ -16,9 +16,16 @@
  * (plus optionally @ast-grep/napi @ast-grep/lang-kotlin for the TDD
  * fast-path) next to gradlew.
  */
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig, enforceTdd, forbidContentPattern, requireCommand } from '@nizos/probity'
 
 import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  enforceSpecTestParity,
+  surfaceScenarioLinkBreakage,
+} from './rules/spec-test-parity.js'
 import {
   forbidNewAmbientEffects,
   GRADLE_TEST_COMMAND,
@@ -28,6 +35,10 @@ import {
   withKotlinFastPath,
 } from './rules/kotlin.js'
 import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
+
+// This config sits at the project root, so its directory is the repo
+// root — spec/test scanning for the traceability rules anchors here.
+const ROOT = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   rules: [
@@ -111,7 +122,27 @@ export default defineConfig({
       rules: [enforceAcceptanceLanguage()],
     },
 
-    // ── Ship gate ────────────────────────────────────────────────────
+    // Spec↔test traceability. Editing a spec must not silently break
+    // the tests that claim its scenarios: removing or renaming a
+    // `## Scenario:` heading still covered by a test blocks with the
+    // list of affected tests, so the rename updates its Covers: tags
+    // in the same change.
+    {
+      files: ['docs/specs/**/*.feature.md'],
+      rules: [surfaceScenarioLinkBreakage({ testRoots: [ROOT] })],
+    },
+
+    // ── Ship gates ───────────────────────────────────────────────────
+    // Definition of done, made mechanical: every non-wip scenario in
+    // docs/specs is claimed by an acceptance test (Covers: tag), and
+    // every tag resolves to a real scenario. Mark in-progress specs
+    // `## Scenario (wip):`. CI mirror for human commits:
+    // scripts/spec-parity.mjs.
+    enforceSpecTestParity({
+      specsDir: join(ROOT, 'docs/specs'),
+      testRoots: [ROOT],
+    }),
+
     // Matches testAndroidHostTest, :feature:x:testAndroidHostTest,
     // :desktop:jvmTest, allTests, :app:testDevDebugUnitTest.
     requireCommand({
