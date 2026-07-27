@@ -21,6 +21,14 @@ The two layers are complementary by design: when Probity blocks an action, its r
 | `enforceAcceptanceLanguage()` (custom) | acceptance-testing (+ ubiquitous-language) | AI-validated: the Language Test on spec-layer files — no UI/protocol/persistence mechanics, single outcome per spec, glossary terms verbatim when `glossaryPath` is set |
 | `requireCommand(...)` (Probity built-in) | test-driven-development / `/build` / `/ship` | Deterministic: `git commit` is blocked unless the test suite ran after the last write |
 
+## Language presets
+
+The config above is tuned for a JS/TS project. Probity's engine and the AI-validated rules are language-agnostic (they judge writes, not test runners), but the deterministic screens are ecosystem-specific, so per-language presets swap that layer:
+
+- **Kotlin / JVM / Android** — [`probity/probity.config.kotlin.ts`](probity/probity.config.kotlin.ts) + [`probity/rules/kotlin.ts`](probity/rules/kotlin.ts). Replaces the ESM import screen with a Kotlin `import` screen (AWS, Amplify, Apollo, Firebase, OkHttp, Retrofit, Room, JDBC, Ktor, Spring, …); replaces the jest/vi mock blocker with `forbidStaticMocks()` (Mockito `mockStatic`, MockK's `mockkStatic`/`mockkObject`/`mockkConstructor`, PowerMock — the JVM's monkey-patching equivalents, which are always seam violations; plain `mock<T>()` is left to the AI rule since only it can tell a port from an internal class); adds `forbidNewAmbientEffects()` blocking net-new `Instant.now()` / `System.currentTimeMillis()` / `Date()` / `UUID.randomUUID()` / `Random()` / `System.getenv` in core code, with a `seamHint` pointing the agent at your canonical port; extends `enforcePortsBoundary` with a Kotlin/Android addendum (DI modules are composition roots, Robolectric-in-core-tests is a smell); and gates commits on Gradle test tasks, flavored ones included.
+
+  Two Kotlin-specific notes: `enforceTdd`'s single-new-test fast-path has no Kotlin support, so every matching write costs an AI call — scope the TDD globs deliberately; and the Kotlin deterministic rules are **delta-based** (they block only occurrences a write *introduces*), so a brownfield codebase with hundreds of existing direct clock calls migrates incrementally instead of having those files frozen.
+
 ## Setup
 
 Probity lives in the **consuming project** (the codebase you're building), not in this repo.
