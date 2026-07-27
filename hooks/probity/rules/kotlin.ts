@@ -20,7 +20,16 @@ import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
  * what this list misses.
  */
 export const KOTLIN_INFRASTRUCTURE_IMPORTS =
-  /import\s+(?:com\.amazonaws|com\.amplifyframework|com\.apollographql|com\.google\.firebase|okhttp3|retrofit2|androidx\.room|androidx\.work|java\.sql|javax\.sql|io\.ktor|org\.springframework|org\.jetbrains\.exposed|app\.cash\.sqldelight|com\.squareup\.sqldelight)[.\b]/
+  /import\s+(?:com\.amazonaws|aws\.sdk\.kotlin|software\.amazon\.awssdk|com\.amplifyframework|com\.apollographql|com\.google\.firebase|com\.sudoplatform|com\.twilio|okhttp3|retrofit2|androidx\.room|androidx\.work|androidx\.datastore|java\.sql|javax\.sql|io\.ktor|org\.koin|org\.springframework|org\.jetbrains\.exposed|app\.cash\.sqldelight|com\.squareup\.sqldelight|net\.zetetic)\./
+
+/**
+ * Mocking-library imports, for projects whose convention is
+ * hand-written fakes at ports with no mocking library at all (pair
+ * with `forbidContentPattern`). Distinct from `forbidStaticMocks`,
+ * which permits the library but blocks its monkey-patching APIs.
+ */
+export const MOCKING_LIBRARY_IMPORTS =
+  /import\s+(?:io\.mockk|org\.mockito|org\.powermock)\./
 
 /**
  * Matches Gradle test invocations (`./gradlew test`,
@@ -306,4 +315,15 @@ export const KOTLIN_BOUNDARY_ADDENDUM = `
     belongs at a port.
   - Robolectric in a test signals Android-framework coupling; that is
     an adapter concern, fine in adapter/UI tests, a smell in tests of
-    core logic.`
+    core logic.
+  - A port need not be an interface. A function-typed constructor
+    parameter injected at the composition root (e.g.
+    \`nowEpochMillis: () -> Long\`, \`randomIv: () -> ByteArray\`) is a
+    valid seam — but a default value that calls the real OS
+    (\`= { System.currentTimeMillis() }\`) inside core/common code
+    defeats it; real defaults belong in platform adapters or DI
+    wiring.
+  - Kotlin Multiplatform: \`commonMain\` core code is the inside of
+    the hexagon; \`expect\`/\`actual\` pairs and per-platform source
+    sets (\`androidMain\`, \`iosMain\`, \`desktopMain\`) implementing a
+    common declaration are adapters and may touch platform APIs.`
