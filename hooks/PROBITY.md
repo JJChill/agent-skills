@@ -95,6 +95,17 @@ Deterministic rules are the cheap outer wall (pattern matches, no latency); AI-v
 
 Customize the AI rules without forking them via `instructions: (defaults) => defaults + '...'` — e.g. name your project's core and adapter directories so `enforcePortsBoundary` infers file roles precisely.
 
+## Evaluating the workflow
+
+[`probity/evals/workflow-eval.ts`](probity/evals/workflow-eval.ts) evaluates the full enforcement stack as a **scripted episode**: a made-up feature (parcel tracking) is driven through the entire outside-in loop — spec write, UI-leaking spec (blocked), acceptance test with Covers tag (fast-path verified), premature production code (blocked), red run, minimal implementation, vendor import in domain code (blocked), direct clock read (blocked), mocking-library import (blocked), commit before tests (blocked), commit on green (allowed), covered-scenario rename (blocked), wip promotion without a test (parity-blocked at commit) — 16 steps, each asserting the expected decision and firing rule. Correctly blocked actions are not materialized, exactly as a real hook prevents them, so the episode's file state stays honest.
+
+Two modes:
+
+- `npx tsx workflow-eval.ts` — scripted AI verdicts. CI-safe and deterministic: exercises the wiring, rule ordering, and every deterministic rule exactly; the AI rules' *invocation* is verified while their verdicts are assumed.
+- `npx tsx workflow-eval.ts --live` — real verdicts via the `claude` CLI. Additionally evaluates the AI rules' prompt quality: does `enforceTdd` actually block the premature write and pass the post-red minimal one, does the Language Test catch the click-the-button scenario. Live mode asserts outcomes only (a write violating several rules may block on whichever rule runs first, as in a real session) and costs ~a dozen model calls.
+
+What the harness does not cover: Probity's own engine — hook payload parsing and the glob scoping of `files` blocks. Scoping is mirrored with predicates that must be kept in sync with the config templates; a mis-scoped glob in your real config is still only caught by the first week of use (or by tightening the globs deliberately).
+
 ## Costs and caveats
 
 - **AI rules cost a model call per matching write.** Scope tightly. `enforceTdd({ fastPath: true })` skips the AI when a write adds exactly one test (at the price of skipping refactor enforcement).

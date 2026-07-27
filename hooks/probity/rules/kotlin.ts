@@ -259,7 +259,7 @@ export function withKotlinFastPath(
   options: { patterns?: unknown[] } = {},
 ): Rule {
   const patterns = options.patterns ?? KOTLIN_TEST_PATTERNS
-  return async function kotlinFastPath(
+  const wrapped = async function kotlinFastPath(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
@@ -284,6 +284,12 @@ export function withKotlinFastPath(
     if (delta === 1) return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
     return rule(action, ctx)
   }
+  // Surface the wrapped rule in engine traces and block reports:
+  // a block coming through the wrapper is the inner rule's verdict.
+  Object.defineProperty(wrapped, 'name', {
+    value: `kotlinFastPath(${rule.name || 'rule'})`,
+  })
+  return wrapped
 }
 
 /**
