@@ -13,9 +13,13 @@
  * project needs `npm install -D @nizos/probity` (a one-dependency
  * package.json next to gradlew is fine).
  */
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { defineConfig, enforceTdd, forbidContentPattern, requireCommand } from '@nizos/probity'
 
 import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
   forbidNewAmbientEffects,
   forbidStaticMocks,
@@ -25,6 +29,11 @@ import {
   withKotlinFastPath,
 } from './rules/kotlin.js'
 import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
+
+// Ubiquitous-language glossary (copy GLOSSARY.template.md here). The
+// glossary-aware rules degrade gracefully while it doesn't exist yet.
+const ROOT = dirname(fileURLToPath(import.meta.url))
+const GLOSSARY = join(ROOT, 'docs/GLOSSARY.md')
 
 export default defineConfig({
   rules: [
@@ -75,6 +84,7 @@ export default defineConfig({
         }),
         enforcePortsBoundary({
           instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
+          glossaryPath: GLOSSARY,
         }),
       ],
     },
@@ -94,7 +104,15 @@ export default defineConfig({
     // test infrastructure must NOT match.
     {
       files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt', '**/*.feature'],
-      rules: [enforceAcceptanceLanguage()],
+      rules: [enforceAcceptanceLanguage({ glossaryPath: GLOSSARY })],
+    },
+
+    // Ubiquitous-language drift: renaming or removing a glossary term
+    // that specs, tests, or code still use blocks the glossary edit
+    // with the list of users.
+    {
+      files: ['docs/GLOSSARY.md'],
+      rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
     },
 
     // ── Ship gate ────────────────────────────────────────────────────

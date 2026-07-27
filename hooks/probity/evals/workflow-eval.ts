@@ -48,17 +48,38 @@ import {
   enforceSpecTestParity,
   surfaceScenarioLinkBreakage,
 } from '../rules/spec-test-parity.js'
+import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 
 type SessionEvent = Awaited<ReturnType<NonNullable<RuleContext['history']>>>[number]
 type RawSessionEvent = Awaited<ReturnType<NonNullable<RuleContext['rawHistory']>>>[number]
 
 // ── Made-up feature: parcel tracking ────────────────────────────────
 
+const GLOSSARY = 'docs/GLOSSARY.md'
 const SPEC = 'docs/specs/parcel-tracking.feature.md'
 const ACCEPTANCE_TEST =
   'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/ParcelTrackingAcceptanceTest.kt'
 const USECASE = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/usecase/TrackParcel.kt'
 const DOMAIN = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/domain/Parcel.kt'
+
+const GLOSSARY_V1 = `# Glossary
+
+## Parcel
+
+A shipment registered for delivery to a recipient.
+
+## Depot
+
+A facility where parcels are scanned while in transit.
+
+## Recipient
+
+The person a parcel is addressed to.
+
+## Waybill
+
+The paper manifest that accompanied parcels before digital tracking.
+`
 
 const SPEC_V1 = `# Parcel Tracking
 
@@ -142,10 +163,30 @@ function command(cmd: string): Action {
 
 const EPISODE: Step[] = [
   {
-    title: 'Write the spec (domain language, one wip scenario)',
+    title: 'Write the glossary (parcel / depot / recipient)',
+    action: write(GLOSSARY, GLOSSARY_V1),
+    expect: 'allow',
+  },
+  {
+    title: 'Write the spec (glossary terms, one wip scenario)',
     action: write(SPEC, SPEC_V1),
     expect: 'allow',
     ai: { language: 'pass' },
+  },
+  {
+    title: 'Spec scenario calling a parcel a "package" (glossary conflict)',
+    action: write(
+      SPEC,
+      `${SPEC_V1}
+## Scenario: Package location is queried
+Given a package is registered for delivery
+When the package arrives at a depot
+Then the package reports that depot as its current location
+`,
+    ),
+    expect: 'block',
+    expectRule: 'enforceAcceptanceLanguage',
+    ai: { language: 'violation' },
   },
   {
     title: 'Spec scenario leaking UI mechanics (click / button / page / table)',
@@ -258,6 +299,20 @@ const EPISODE: Step[] = [
     expect: 'block',
     expectRule: 'enforceSpecTestParity',
   },
+  {
+    title: 'Rename glossary term "Depot" while spec and test still use it',
+    action: write(GLOSSARY, GLOSSARY_V1.replace('## Depot', '## Hub')),
+    expect: 'block',
+    expectRule: 'surfaceGlossaryTermBreakage',
+  },
+  {
+    title: 'Retire the unused glossary term "Waybill" (nothing references it)',
+    action: write(
+      GLOSSARY,
+      GLOSSARY_V1.replace(/\n## Waybill\n\nThe paper manifest[^\n]*\n/, ''),
+    ),
+    expect: 'allow',
+  },
 ]
 
 // ── Harness ─────────────────────────────────────────────────────────
@@ -333,7 +388,10 @@ const BLOCKS: Block[] = [
         reason: 'Core code imports an infrastructure/vendor package.',
       }),
       forbidNewAmbientEffects({}),
-      enforcePortsBoundary({ instructions: (d) => d + KOTLIN_BOUNDARY_ADDENDUM }),
+      enforcePortsBoundary({
+        instructions: (d) => d + KOTLIN_BOUNDARY_ADDENDUM,
+        glossaryPath: join(ROOT, GLOSSARY),
+      }),
     ],
   },
   {
@@ -348,11 +406,15 @@ const BLOCKS: Block[] = [
   {
     applies: (a) =>
       isWriteTo(a, (p) => (/docs\/specs\/.*\.feature\.md$/.test(p) || /\/acceptance\//.test(p)) && !p.endsWith('Robot.kt')),
-    rules: [enforceAcceptanceLanguage()],
+    rules: [enforceAcceptanceLanguage({ glossaryPath: join(ROOT, GLOSSARY) })],
   },
   {
     applies: (a) => isWriteTo(a, (p) => /docs\/specs\/.*\.feature\.md$/.test(p)),
     rules: [surfaceScenarioLinkBreakage({ testRoots: [ROOT] })],
+  },
+  {
+    applies: (a) => isWriteTo(a, (p) => p.endsWith('docs/GLOSSARY.md')),
+    rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
   },
   {
     applies: (a) => a.kind === 'command',

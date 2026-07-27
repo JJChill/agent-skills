@@ -4,6 +4,17 @@ type FileContent = Awaited<ReturnType<NonNullable<RuleContext['readFile']>>>
 
 const DEFAULT_MAX_GLOSSARY_CHARS = 8000
 
+const STRICT_VOCABULARY = `### Vocabulary — strict mode (overrides the leniency above)
+
+This project enforces "the glossary conversation happens first": when
+a glossary is provided, spec content that introduces a domain concept
+with NO glossary entry IS a violation. Name the missing term(s) in
+the reason so the entry can be added before the spec lands. Judge
+concepts, not words — articles, generic verbs, and quantities need no
+entry; nouns that carry domain meaning do.
+
+`
+
 const RESPONSE_SPEC = `## Response format
 
 Respond with a single JSON object of exactly this shape:
@@ -90,7 +101,7 @@ that conflicts with the glossary (a synonym or a redefinition). A
 concept the glossary simply doesn't cover yet is NOT a violation on
 its own; mention it in the reason only alongside a real violation.
 
-### Judgment bar
+%STRICT_VOCABULARY%### Judgment bar
 
 Block on clear mechanics leaking into a specification. Domain terms
 that happen to sound technical (the domain of a deployment tool
@@ -150,6 +161,12 @@ function buildPrompt(
  *   `fileURLToPath(new URL('./docs/GLOSSARY.md', import.meta.url))`.
  *   When set and readable, the glossary is included in the
  *   validator's prompt and vocabulary conflicts become violations.
+ * @param options.requireGlossaryEntry — strict vocabulary mode: when
+ *   true (and a glossary is supplied and readable), a domain concept
+ *   in spec content with no glossary entry becomes a violation —
+ *   "the glossary conversation happens first" (ubiquitous-language
+ *   skill). Default false: only conflicts with existing entries
+ *   violate, so an empty or young glossary doesn't block everything.
  * @param options.instructions — overrides or extends the default
  *   language rules text. Pass a string to replace it, or a function
  *   `(defaults) => ...` to extend it.
@@ -162,14 +179,19 @@ function buildPrompt(
 export function enforceAcceptanceLanguage(
   options: {
     glossaryPath?: string
+    requireGlossaryEntry?: boolean
     instructions?: string | ((defaults: string) => string)
     maxGlossaryChars?: number
   } = {},
 ): Rule {
+  const baseRules = DEFAULT_LANGUAGE_RULES.replace(
+    '%STRICT_VOCABULARY%',
+    options.requireGlossaryEntry ? STRICT_VOCABULARY : '',
+  )
   const rules =
     typeof options.instructions === 'function'
-      ? options.instructions(DEFAULT_LANGUAGE_RULES)
-      : (options.instructions ?? DEFAULT_LANGUAGE_RULES)
+      ? options.instructions(baseRules)
+      : (options.instructions ?? baseRules)
   const maxGlossaryChars =
     options.maxGlossaryChars ?? DEFAULT_MAX_GLOSSARY_CHARS
   return async function enforceAcceptanceLanguage(

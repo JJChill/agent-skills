@@ -46,6 +46,16 @@ Two deterministic rules in [`probity/rules/spec-test-parity.ts`](probity/rules/s
 
 Because scenario titles are link keys, renames must touch the claiming tests — that's the point, and the breakage rule turns it into a guided step. Hooks only run in agent sessions, so [`probity/scripts/spec-parity.mjs`](probity/scripts/spec-parity.mjs) ships the same check as a zero-dependency CLI for CI and human commits: `node spec-parity.mjs --specs docs/specs` (exit 1 on breakage).
 
+## Ubiquitous language
+
+The glossary (`docs/GLOSSARY.md`, format in [`probity/GLOSSARY.template.md`](probity/GLOSSARY.template.md): one term per `##` heading, one term per concept) is wired into both Kotlin config templates and enforced from three directions:
+
+- **Usage in specs** — `enforceAcceptanceLanguage({ glossaryPath })`: spec content naming a recorded concept with a synonym or conflicting term is blocked. Optional strict mode `requireGlossaryEntry: true` enforces "the glossary conversation happens first": a domain concept with *no* entry blocks until the glossary gets one — turn it on once the glossary has real coverage, not day one.
+- **Usage in code** — `enforcePortsBoundary({ glossaryPath })`: the boundary validator gets the glossary, so ports and domain types naming a recorded concept with a conflicting term are violations (`ShipmentStore` when the glossary says Parcel).
+- **Drift** — `surfaceGlossaryTermBreakage()` on glossary writes: removing or renaming a term that specs, tests, or code still use blocks the edit with the list of users. Multi-word terms are matched as identifiers too (`Delivery Window` → `DeliveryWindow`/`deliveryWindow`/`delivery_window`). Retiring a term nothing uses passes silently.
+
+All three degrade gracefully while `docs/GLOSSARY.md` doesn't exist, so the wiring costs nothing before the glossary conversation starts.
+
 ## Setup
 
 Probity lives in the **consuming project** (the codebase you're building), not in this repo.
@@ -97,7 +107,7 @@ Customize the AI rules without forking them via `instructions: (defaults) => def
 
 ## Evaluating the workflow
 
-[`probity/evals/workflow-eval.ts`](probity/evals/workflow-eval.ts) evaluates the full enforcement stack as a **scripted episode**: a made-up feature (parcel tracking) is driven through the entire outside-in loop — spec write, UI-leaking spec (blocked), acceptance test with Covers tag (fast-path verified), premature production code (blocked), red run, minimal implementation, vendor import in domain code (blocked), direct clock read (blocked), mocking-library import (blocked), commit before tests (blocked), commit on green (allowed), covered-scenario rename (blocked), wip promotion without a test (parity-blocked at commit) — 16 steps, each asserting the expected decision and firing rule. Correctly blocked actions are not materialized, exactly as a real hook prevents them, so the episode's file state stays honest.
+[`probity/evals/workflow-eval.ts`](probity/evals/workflow-eval.ts) evaluates the full enforcement stack as a **scripted episode**: a made-up feature (parcel tracking) is driven through the entire outside-in loop — glossary write, spec write, glossary-conflicting spec (blocked), UI-leaking spec (blocked), acceptance test with Covers tag (fast-path verified), premature production code (blocked), red run, minimal implementation, vendor import in domain code (blocked), direct clock read (blocked), mocking-library import (blocked), commit before tests (blocked), commit on green (allowed), covered-scenario rename (blocked), wip promotion without a test (parity-blocked at commit), used-term glossary rename (blocked), unused-term retirement (allowed) — 20 steps, each asserting the expected decision and firing rule. Correctly blocked actions are not materialized, exactly as a real hook prevents them, so the episode's file state stays honest.
 
 Two modes:
 

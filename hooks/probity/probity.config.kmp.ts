@@ -26,6 +26,7 @@ import {
   enforceSpecTestParity,
   surfaceScenarioLinkBreakage,
 } from './rules/spec-test-parity.js'
+import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
   forbidNewAmbientEffects,
   GRADLE_TEST_COMMAND,
@@ -39,6 +40,11 @@ import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 // This config sits at the project root, so its directory is the repo
 // root — spec/test scanning for the traceability rules anchors here.
 const ROOT = dirname(fileURLToPath(import.meta.url))
+
+// Ubiquitous-language glossary (copy GLOSSARY.template.md here). The
+// glossary-aware rules degrade gracefully while the file doesn't
+// exist yet — wiring it up front costs nothing.
+const GLOSSARY = join(ROOT, 'docs/GLOSSARY.md')
 
 export default defineConfig({
   rules: [
@@ -88,6 +94,7 @@ export default defineConfig({
         }),
         enforcePortsBoundary({
           instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
+          glossaryPath: GLOSSARY,
         }),
       ],
     },
@@ -119,7 +126,18 @@ export default defineConfig({
         '**/acceptance/**',
         '!**/*Robot.kt',
       ],
-      rules: [enforceAcceptanceLanguage()],
+      // requireGlossaryEntry: true is the strict "glossary
+      // conversation happens first" mode — turn it on once the
+      // glossary has real coverage, not on day one.
+      rules: [enforceAcceptanceLanguage({ glossaryPath: GLOSSARY })],
+    },
+
+    // Ubiquitous-language drift: renaming or removing a glossary term
+    // that specs, tests, or code still use blocks the glossary edit
+    // with the list of users.
+    {
+      files: ['docs/GLOSSARY.md'],
+      rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
     },
 
     // Spec↔test traceability. Editing a spec must not silently break

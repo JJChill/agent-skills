@@ -102,6 +102,14 @@ intended pattern and always passes.
   - Deleting code. Renames and moves that don't change dependencies.
   - Pure computation libraries with no external effects used directly.`
 
+const GLOSSARY_RULES = `### Ubiquitous language
+
+A glossary is provided below. Ports, domain types, use cases, and
+their members name domain concepts with the glossary's terms
+verbatim — one term per concept. Naming a recorded concept with a
+synonym or conflicting term is a violation; a concept the glossary
+does not cover is not a violation by itself.`
+
 function formatBefore(before: FileContent): string {
   switch (before.kind) {
     case 'present':
@@ -115,16 +123,20 @@ function formatBefore(before: FileContent): string {
 
 function buildPrompt(
   rules: string,
+  glossary: string | undefined,
   before: FileContent,
   action: { path: string; content: string },
 ): string {
-  return [
-    PROCESS_INSTRUCTIONS,
-    rules,
+  const sections = [PROCESS_INSTRUCTIONS, rules]
+  if (glossary) {
+    sections.push(GLOSSARY_RULES, `## Glossary\n\n${glossary}`)
+  }
+  sections.push(
     `## Current file content\n\n${formatBefore(before)}`,
     `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
     RESPONSE_SPEC,
-  ].join('\n\n')
+  )
+  return sections.join('\n\n')
 }
 
 /**
@@ -142,6 +154,12 @@ function buildPrompt(
  *   boundary rules text. Pass a string to replace it, or a function
  *   `(defaults) => ...` to extend it (e.g. name your project's core
  *   and adapter directories so the validator infers roles precisely).
+ * @param options.glossaryPath — absolute path to the project's
+ *   ubiquitous-language glossary. When set and readable, the
+ *   glossary is included in the validator's prompt and port/domain
+ *   names that conflict with recorded terms become violations.
+ * @param options.maxGlossaryChars — truncate the glossary beyond
+ *   this length when building the prompt (default 8000).
  *
  * @example
  * { files: ['src/core/**', 'src/domain/**'], rules: [enforcePortsBoundary()] }
@@ -155,12 +173,15 @@ function buildPrompt(
 export function enforcePortsBoundary(
   options: {
     instructions?: string | ((defaults: string) => string)
+    glossaryPath?: string
+    maxGlossaryChars?: number
   } = {},
 ): Rule {
   const rules =
     typeof options.instructions === 'function'
       ? options.instructions(DEFAULT_BOUNDARY_RULES)
       : (options.instructions ?? DEFAULT_BOUNDARY_RULES)
+  const maxGlossaryChars = options.maxGlossaryChars ?? 8000
   return async function enforcePortsBoundary(
     action: Action,
     ctx?: RuleContext,
@@ -173,10 +194,22 @@ export function enforcePortsBoundary(
           'enforcePortsBoundary: no AI agent available; configure Config.ai or use a vendor that ships one.',
       }
     }
+    let glossary: string | undefined
+    if (options.glossaryPath && ctx.readFile) {
+      const file = await ctx.readFile(options.glossaryPath)
+      if (file.kind === 'present') {
+        glossary =
+          file.content.length > maxGlossaryChars
+            ? `${file.content.slice(0, maxGlossaryChars)}\n(...glossary truncated...)`
+            : file.content
+      }
+    }
     const before: FileContent = (await ctx.readFile?.(action.path)) ?? {
       kind: 'unknown',
     }
-    const verdict = await ctx.agent.reason(buildPrompt(rules, before, action))
+    const verdict = await ctx.agent.reason(
+      buildPrompt(rules, glossary, before, action),
+    )
     if (verdict.kind === 'violation') {
       return { kind: 'violation', reason: verdict.reason }
     }
