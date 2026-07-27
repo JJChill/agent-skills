@@ -22,6 +22,7 @@ import {
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
+  withKotlinFastPath,
 } from './rules/kotlin.js'
 import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 
@@ -29,8 +30,11 @@ export default defineConfig({
   rules: [
     // ── Inner loop: test-driven-development ─────────────────────────
     // Android source sets commonly keep .kt under src/main/java, so
-    // match both. No deterministic fast-path exists for Kotlin —
-    // every matching write costs an AI call; scope accordingly.
+    // match both. Probity has no built-in Kotlin fast-path;
+    // withKotlinFastPath supplies one — a write adding exactly one
+    // @Test function passes without an AI call. It needs the optional
+    // packages (`npm install -D @ast-grep/napi @ast-grep/lang-kotlin`)
+    // and falls through to plain enforceTdd when they're absent.
     {
       files: [
         '**/src/main/java/**',
@@ -38,7 +42,7 @@ export default defineConfig({
         '**/src/test/**',
         '**/src/sharedTest/**',
       ],
-      rules: [enforceTdd()],
+      rules: [withKotlinFastPath(enforceTdd())],
     },
 
     // ── Boundaries: ports-and-adapters ──────────────────────────────

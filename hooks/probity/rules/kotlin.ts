@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
 /**
@@ -165,6 +167,113 @@ export function forbidNewAmbientEffects(
         'sites in the file are untouched by this rule — only new ones ' +
         'are blocked.',
     }
+  }
+}
+
+type AstGrepNode = { findAll(rule: unknown): unknown[] }
+type AstGrepModule = {
+  registerDynamicLanguage: (langs: Record<string, unknown>) => void
+  parse: (lang: string, code: string) => { root(): AstGrepNode }
+}
+
+/**
+ * ast-grep rules matching a JUnit-style test function. Kotest
+ * string-invocation specs (`"does a thing" { }`) would need an
+ * additional pattern; add one via `withKotlinFastPath`'s `patterns`
+ * option if your suite uses them.
+ */
+const KOTLIN_TEST_PATTERNS: unknown[] = [
+  {
+    rule: {
+      kind: 'function_declaration',
+      regex: '@(Test|ParameterizedTest|RepeatedTest|TestFactory)\\b',
+    },
+  },
+]
+
+let astGrep: AstGrepModule | null | undefined
+
+function loadKotlinAstGrep(): AstGrepModule | null {
+  if (astGrep !== undefined) return astGrep
+  try {
+    const require = createRequire(import.meta.url)
+    const napi = require('@ast-grep/napi') as AstGrepModule
+    const lang = require('@ast-grep/lang-kotlin') as { default?: unknown }
+    napi.registerDynamicLanguage({ kotlin: lang.default ?? lang })
+    astGrep = napi
+  } catch {
+    // Optional peer deps not installed — the wrapper falls through.
+    astGrep = null
+  }
+  return astGrep
+}
+
+function countKotlinTests(
+  napi: AstGrepModule,
+  code: string,
+  patterns: unknown[],
+): number {
+  const root = napi.parse('kotlin', code).root()
+  let count = 0
+  for (const pattern of patterns) count += root.findAll(pattern).length
+  return count
+}
+
+/**
+ * Kotlin equivalent of `enforceTdd({ fastPath: true })`, which Probity
+ * only implements for TS/JS/Python/C#/Ruby/PHP: wraps a rule so that a
+ * `.kt`/`.kts` write adding exactly one new test function passes
+ * deterministically — no AI call for the most common write in a TDD
+ * loop, adding the next red test. Everything else (production writes,
+ * multi-test writes, non-Kotlin files) delegates to the wrapped rule
+ * unchanged.
+ *
+ * Requires the optional packages `@ast-grep/napi` and
+ * `@ast-grep/lang-kotlin` (`npm install -D` both). When they're
+ * missing, or the current file content is unavailable, or parsing
+ * fails, the wrapper transparently falls through to the wrapped rule
+ * — it can only ever skip work, never block.
+ *
+ * Same trade-off as Probity's own fast-path: a deterministic pass on
+ * every single-test addition skips the green→red refactor-readiness
+ * check the AI would otherwise perform.
+ *
+ * @param rule — the rule to wrap, normally `enforceTdd()`.
+ * @param options.patterns — replaces the default ast-grep test-node
+ *   patterns (e.g. to add a Kotest spec pattern).
+ *
+ * @example
+ * { files: ['**\/src\/main\/**', '**\/src\/test\/**'], rules: [withKotlinFastPath(enforceTdd())] }
+ */
+export function withKotlinFastPath(
+  rule: Rule,
+  options: { patterns?: unknown[] } = {},
+): Rule {
+  const patterns = options.patterns ?? KOTLIN_TEST_PATTERNS
+  return async function kotlinFastPath(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || !/\.kts?$/.test(action.path)) {
+      return rule(action, ctx)
+    }
+    const napi = loadKotlinAstGrep()
+    if (!napi) return rule(action, ctx)
+    const before = await ctx?.readFile?.(action.path)
+    // An unknowable before-count makes any delta unverifiable; fall
+    // through to the wrapped rule rather than risk a false pass.
+    if (!before || before.kind === 'unknown') return rule(action, ctx)
+    const beforeText = before.kind === 'present' ? before.content : ''
+    let delta: number
+    try {
+      delta =
+        countKotlinTests(napi, action.content, patterns) -
+        countKotlinTests(napi, beforeText, patterns)
+    } catch {
+      return rule(action, ctx)
+    }
+    if (delta === 1) return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
+    return rule(action, ctx)
   }
 }
 
