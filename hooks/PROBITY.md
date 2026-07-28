@@ -71,11 +71,20 @@ Probity lives in the **consuming project** (the codebase you're building), not i
    ```bash
    cp <agent-skills>/hooks/probity/probity.config.ts .
    cp -r <agent-skills>/hooks/probity/rules ./rules
+   cp -r <agent-skills>/hooks/probity/scripts ./scripts
    ```
 
-3. **Edit the globs.** The template assumes a `src/core` + `src/adapters` layout; point the core-purity block at your actual core/domain code, the spec block at your actual spec layer, and the commit gate at your real test command. Wrong scoping is the main failure mode: `enforcePortsBoundary` on adapter files or `enforceAcceptanceLanguage` on protocol drivers will block work those files are supposed to do (both rules instruct the validator to pass on clearly mis-scoped files, but don't rely on that).
+3. **Edit the globs.** The template assumes a `src/core` + `src/adapters` layout; point the core-purity block at your actual core/domain code, the spec block at your actual spec layer, and the commit gate at your real test command. Wrong scoping is the main failure mode, in both directions: `enforcePortsBoundary` on adapter files or `enforceAcceptanceLanguage` on protocol drivers will block work those files are supposed to do (both rules instruct the validator to pass on clearly mis-scoped files, but don't rely on that), while a glob slightly too narrow for your layout fails silently — the rule simply never fires.
 
-4. Wire the hook. Easiest is the plugin:
+4. **Check the scoping** before the first agent session finds out the hard way:
+
+   ```bash
+   npx tsx scripts/scope-report.ts --config probity.config.ts
+   ```
+
+   The report resolves every `{ files, rules }` block against your real tree with Probity's own glob semantics and prints what each block claims, flagging dead scopes (globs matching zero files — the silent failure), core-purity rules claiming adapter/DI/UI-looking paths, and the acceptance-language rule claiming Robot/driver files. Re-run it (or wire `--strict` into CI) whenever the layout or the globs change.
+
+5. Wire the hook. Easiest is the plugin:
 
    ```
    /plugin marketplace add nizos/probity
@@ -107,14 +116,16 @@ Customize the AI rules without forking them via `instructions: (defaults) => def
 
 ## Evaluating the workflow
 
-[`probity/evals/workflow-eval.ts`](probity/evals/workflow-eval.ts) evaluates the full enforcement stack as a **scripted episode**: a made-up feature (parcel tracking) is driven through the entire outside-in loop — glossary write, spec write, glossary-conflicting spec (blocked), UI-leaking spec (blocked), acceptance test with Covers tag (fast-path verified), premature production code (blocked), red run, minimal implementation, vendor import in domain code (blocked), direct clock read (blocked), mocking-library import (blocked), commit before tests (blocked), commit on green (allowed), covered-scenario rename (blocked), wip promotion without a test (parity-blocked at commit), used-term glossary rename (blocked), unused-term retirement (allowed) — 20 steps, each asserting the expected decision and firing rule. Correctly blocked actions are not materialized, exactly as a real hook prevents them, so the episode's file state stays honest.
+[`probity/evals/workflow-eval.ts`](probity/evals/workflow-eval.ts) evaluates the full enforcement stack as a **scripted episode**: a made-up feature (parcel tracking) is driven through the entire outside-in loop — glossary write, spec write, glossary-conflicting spec (blocked), UI-leaking spec (blocked), acceptance test with Covers tag (fast-path verified), premature production code (blocked), red run, minimal implementation, vendor import in domain code (blocked), direct clock read (blocked), mocking-library import (blocked), commit before tests (blocked), commit on green (allowed), covered-scenario rename (blocked), wip promotion without a test (parity-blocked at commit), used-term glossary rename (blocked), unused-term retirement (allowed) — 23 steps, each asserting the expected decision and firing rule. Correctly blocked actions are not materialized, exactly as a real hook prevents them, so the episode's file state stays honest.
+
+Scoping is part of what the episode exercises: the eval runs the rule entries exported by `probity.config.kmp.ts` itself (via its `kmpRuleEntries` factory), resolving each block's `files` globs with [`probity/rules/scoping.ts`](probity/rules/scoping.ts) — a pinned replica of Probity's picomatch matcher and glob anchoring. Three of the 23 steps are deliberately **out-of-scope** writes carrying content the core rules would block — a Room adapter with a vendor import and a real clock read, a Koin DI module, a mechanics-laden `TrackingRobot.kt` — and assert not just `allow` but that no AI validator was even consulted (`expectAiSilent`), so an eroded exclusion or over-broadened core glob in the template fails the eval instead of shipping.
 
 Two modes:
 
 - `npx tsx workflow-eval.ts` — scripted AI verdicts. CI-safe and deterministic: exercises the wiring, rule ordering, and every deterministic rule exactly; the AI rules' *invocation* is verified while their verdicts are assumed.
 - `npx tsx workflow-eval.ts --live` — real verdicts via the `claude` CLI. Additionally evaluates the AI rules' prompt quality: does `enforceTdd` actually block the premature write and pass the post-red minimal one, does the Language Test catch the click-the-button scenario. Live mode asserts outcomes only (a write violating several rules may block on whichever rule runs first, as in a real session) and costs ~a dozen model calls.
 
-What the harness does not cover: Probity's own engine — hook payload parsing and the glob scoping of `files` blocks. Scoping is mirrored with predicates that must be kept in sync with the config templates; a mis-scoped glob in your real config is still only caught by the first week of use (or by tightening the globs deliberately).
+What the harness does not cover: Probity's own engine — hook payload parsing and transcript adapters — and any drift between `rules/scoping.ts` and the engine's matcher across Probity upgrades (the replica exists because Probity doesn't export its matcher; it is pinned to a version and documents what to diff on upgrade). A mis-scoped glob in **your** edited config is the scope report's job (Setup step 4), not the eval's: run `scripts/scope-report.ts` against your real tree at setup and whenever the layout changes.
 
 ## Costs and caveats
 

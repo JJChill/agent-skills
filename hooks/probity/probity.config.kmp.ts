@@ -19,7 +19,13 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { defineConfig, enforceTdd, forbidContentPattern, requireCommand } from '@nizos/probity'
+import {
+  defineConfig,
+  enforceTdd,
+  forbidContentPattern,
+  requireCommand,
+  type RuleEntry,
+} from '@nizos/probity'
 
 import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
 import {
@@ -41,13 +47,26 @@ import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 // root — spec/test scanning for the traceability rules anchors here.
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-// Ubiquitous-language glossary (copy GLOSSARY.template.md here). The
-// glossary-aware rules degrade gracefully while the file doesn't
-// exist yet — wiring it up front costs nothing.
-const GLOSSARY = join(ROOT, 'docs/GLOSSARY.md')
+/**
+ * The rule entries, as a factory over the project root. Probity only
+ * reads the default export below; the factory exists so tooling can
+ * instantiate the exact same blocks against a different root — the
+ * workflow eval runs them in a temp directory, and
+ * `scripts/scope-report.ts` resolves their `files` scopes against the
+ * real tree. Keeping the entries in one place is what lets the eval's
+ * scoping stay derived from this config instead of hand-mirrored.
+ *
+ * Relative globs (`docs/...`) are NOT anchored here: Probity's
+ * `loadConfig` anchors them against this file's directory at load
+ * time, and the tooling replicates that via `rules/scoping.ts`.
+ */
+export function kmpRuleEntries(root: string): RuleEntry[] {
+  // Ubiquitous-language glossary (copy GLOSSARY.template.md here).
+  // The glossary-aware rules degrade gracefully while the file
+  // doesn't exist yet — wiring it up front costs nothing.
+  const glossary = join(root, 'docs/GLOSSARY.md')
 
-export default defineConfig({
-  rules: [
+  return [
     // ── Inner loop: test-driven-development ─────────────────────────
     // `src/*Main` / `src/*Test` cover every KMP source set
     // (commonMain, androidMain, commonTest, androidHostTest, …);
@@ -94,7 +113,7 @@ export default defineConfig({
         }),
         enforcePortsBoundary({
           instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
-          glossaryPath: GLOSSARY,
+          glossaryPath: glossary,
         }),
       ],
     },
@@ -129,7 +148,7 @@ export default defineConfig({
       // requireGlossaryEntry: true is the strict "glossary
       // conversation happens first" mode — turn it on once the
       // glossary has real coverage, not on day one.
-      rules: [enforceAcceptanceLanguage({ glossaryPath: GLOSSARY })],
+      rules: [enforceAcceptanceLanguage({ glossaryPath: glossary })],
     },
 
     // Ubiquitous-language drift: renaming or removing a glossary term
@@ -137,7 +156,7 @@ export default defineConfig({
     // with the list of users.
     {
       files: ['docs/GLOSSARY.md'],
-      rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
+      rules: [surfaceGlossaryTermBreakage({ searchRoots: [root] })],
     },
 
     // Spec↔test traceability. Editing a spec must not silently break
@@ -147,7 +166,7 @@ export default defineConfig({
     // in the same change.
     {
       files: ['docs/specs/**/*.feature.md'],
-      rules: [surfaceScenarioLinkBreakage({ testRoots: [ROOT] })],
+      rules: [surfaceScenarioLinkBreakage({ testRoots: [root] })],
     },
 
     // ── Ship gates ───────────────────────────────────────────────────
@@ -157,8 +176,8 @@ export default defineConfig({
     // `## Scenario (wip):`. CI mirror for human commits:
     // scripts/spec-parity.mjs.
     enforceSpecTestParity({
-      specsDir: join(ROOT, 'docs/specs'),
-      testRoots: [ROOT],
+      specsDir: join(root, 'docs/specs'),
+      testRoots: [root],
     }),
 
     // Matches testAndroidHostTest, :feature:x:testAndroidHostTest,
@@ -171,5 +190,7 @@ export default defineConfig({
         'Run the Gradle test suite after the last change before ' +
         'committing (see test-driven-development: commit only on green).',
     }),
-  ],
-})
+  ]
+}
+
+export default defineConfig({ rules: kmpRuleEntries(ROOT) })

@@ -19,10 +19,18 @@
  *                                     # evaluates the AI rules'
  *                                     # prompt quality
  *
+ * Scoping is derived from the config template itself: the episode
+ * runs the rule entries `probity.config.kmp.ts` exports, with block
+ * `files` globs resolved by rules/scoping.ts (a pinned replica of
+ * Probity's own picomatch matcher and glob anchoring). Out-of-scope
+ * steps — an adapter with a vendor import, a Koin DI module, a
+ * mechanics-laden *Robot.kt — assert that the exclusions hold and
+ * that no AI validator is even consulted.
+ *
  * What this does NOT cover: Probity's own engine (hook payload
- * parsing, glob scoping of `files` blocks, transcript adapters).
- * Scoping here is mirrored with predicates; keep them in sync with
- * probity.config.kmp.ts.
+ * parsing, transcript adapters) and whether picomatch's semantics
+ * drift from the engine's matcher across Probity upgrades — see the
+ * pin note in rules/scoping.ts.
  *
  * Exit code: 0 all steps match, 1 otherwise.
  */
@@ -31,24 +39,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
-import type { Action, Agent, RuleContext, RuleResult, Rule } from '@nizos/probity'
-import { enforceTdd, forbidContentPattern, requireCommand } from '@nizos/probity'
+import type { Action, Agent, RuleContext, RuleResult } from '@nizos/probity'
 
-import { enforceAcceptanceLanguage } from '../rules/acceptance-language.js'
+import { kmpRuleEntries } from '../probity.config.kmp.js'
 import {
-  forbidNewAmbientEffects,
-  GRADLE_TEST_COMMAND,
-  KOTLIN_BOUNDARY_ADDENDUM,
-  KOTLIN_INFRASTRUCTURE_IMPORTS,
-  MOCKING_LIBRARY_IMPORTS,
-  withKotlinFastPath,
-} from '../rules/kotlin.js'
-import { enforcePortsBoundary } from '../rules/ports-and-adapters.js'
-import {
-  enforceSpecTestParity,
-  surfaceScenarioLinkBreakage,
-} from '../rules/spec-test-parity.js'
-import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
+  actionMatchesFilesScope,
+  anchorEntries,
+  isRuleBlock,
+} from '../rules/scoping.js'
 
 type SessionEvent = Awaited<ReturnType<NonNullable<RuleContext['history']>>>[number]
 type RawSessionEvent = Awaited<ReturnType<NonNullable<RuleContext['rawHistory']>>>[number]
@@ -61,6 +59,16 @@ const ACCEPTANCE_TEST =
   'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/ParcelTrackingAcceptanceTest.kt'
 const USECASE = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/usecase/TrackParcel.kt'
 const DOMAIN = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/domain/Parcel.kt'
+// Out-of-scope by design: the layer-2 Robot DSL (excluded from the
+// Language Test via `!**/*Robot.kt`), a platform adapter source set,
+// and a DI package — each written with content the core rules would
+// block, to prove the exclusions hold.
+const ROBOT =
+  'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/TrackingRobot.kt'
+const ADAPTER =
+  'feature/tracking/src/androidMain/kotlin/com/example/tracking/adapter/RoomParcelStore.kt'
+const DI_MODULE =
+  'feature/tracking/src/commonMain/kotlin/com/example/tracking/di/TrackingModule.kt'
 
 const GLOSSARY_V1 = `# Glossary
 
@@ -118,6 +126,58 @@ class ParcelTrackingAcceptanceTest {
 }
 `
 
+// Layer 2 of the four-layer model: knows UiState fields and MVI
+// intents — exactly the mechanics the Language Test bans from layer 1.
+const ROBOT_V1 = `package com.example.tracking.acceptance
+
+import com.example.tracking.presentation.TrackingViewModel
+import com.example.tracking.presentation.TrackingIntent
+
+class TrackingRobot {
+    private val viewModel = TrackingViewModel()
+
+    fun registerParcel(parcelId: String) {
+        viewModel.onIntent(TrackingIntent.Register(parcelId))
+    }
+
+    fun parcelArrivesAtDepot(parcelId: String, depotId: String) {
+        viewModel.onIntent(TrackingIntent.DepotScan(parcelId, depotId))
+    }
+
+    fun confirmCurrentLocation(parcelId: String, depotId: String) {
+        check(viewModel.uiState.value.locationOf(parcelId) == depotId)
+    }
+}
+`
+
+// Vendor import + direct clock read: both blocked in core packages,
+// both this adapter's job.
+const ADAPTER_V1 = `package com.example.tracking.adapter
+
+import androidx.room.RoomDatabase
+import com.example.tracking.domain.Parcel
+import com.example.tracking.port.ParcelStore
+
+class RoomParcelStore(private val db: RoomDatabase) : ParcelStore {
+    override suspend fun byId(parcelId: String): Parcel? = null
+    override suspend fun save(parcel: Parcel) {
+        val syncedAt = System.currentTimeMillis()
+    }
+}
+`
+
+// Koin is in the core import screen; the di package is a composition
+// root and sits outside the core-purity globs.
+const DI_MODULE_V1 = `package com.example.tracking.di
+
+import com.example.tracking.usecase.TrackParcel
+import org.koin.dsl.module
+
+val trackingModule = module {
+    factory { TrackParcel(get()) }
+}
+`
+
 const USECASE_V1 = `package com.example.tracking.usecase
 
 import com.example.tracking.domain.Parcel
@@ -144,6 +204,8 @@ const GREEN_RUN = {
 
 // ── Episode ─────────────────────────────────────────────────────────
 
+type AiKind = 'tdd' | 'boundary' | 'language'
+
 type Step = {
   title: string
   action: Action
@@ -151,7 +213,14 @@ type Step = {
   expect: 'allow' | 'block'
   expectRule?: string
   expectNote?: string
-  ai?: Partial<Record<'tdd' | 'boundary' | 'language', 'pass' | 'violation'>>
+  /**
+   * AI validators that must NOT be consulted on this step — the
+   * scoping assertion for out-of-scope writes. A plain `allow` can't
+   * distinguish "excluded by the globs" from "the validator happened
+   * to pass"; this can.
+   */
+  expectAiSilent?: AiKind[]
+  ai?: Partial<Record<AiKind, 'pass' | 'violation'>>
 }
 
 function write(path: string, content: string): Action {
@@ -196,6 +265,13 @@ Then the package reports that depot as its current location
     ai: { language: 'violation' },
   },
   {
+    title: 'Robot DSL full of UiState/intent mechanics (*Robot.kt is exempt from the Language Test)',
+    action: write(ROBOT, ROBOT_V1),
+    expect: 'allow',
+    expectAiSilent: ['language'],
+    ai: { tdd: 'pass' },
+  },
+  {
     title: 'Acceptance test with Covers tag (single new @Test → fast-path)',
     action: write(ACCEPTANCE_TEST, ACCEPTANCE_TEST_V1),
     expect: 'allow',
@@ -220,6 +296,20 @@ Then the package reports that depot as its current location
     action: write(USECASE, USECASE_V1),
     expect: 'allow',
     ai: { tdd: 'pass', boundary: 'pass' },
+  },
+  {
+    title: 'Room adapter with vendor import and real clock (androidMain — core rules must not fire)',
+    action: write(ADAPTER, ADAPTER_V1),
+    expect: 'allow',
+    expectAiSilent: ['boundary'],
+    ai: { tdd: 'pass' },
+  },
+  {
+    title: 'Koin module wiring the use case (di package — outside the core-purity globs)',
+    action: write(DI_MODULE, DI_MODULE_V1),
+    expect: 'allow',
+    expectAiSilent: ['boundary'],
+    ai: { tdd: 'pass' },
   },
   {
     title: 'Domain code importing a vendor HTTP client',
@@ -329,21 +419,28 @@ function materialize(path: string, content: string): void {
   writeFileSync(full, content)
 }
 
-function ruleKind(prompt: string): 'tdd' | 'boundary' | 'language' {
+function ruleKind(prompt: string): AiKind {
   if (prompt.includes('TDD validator')) return 'tdd'
   if (prompt.includes('architecture-boundary validator')) return 'boundary'
   return 'language'
 }
 
+// Which AI validators the current step actually consulted — reset per
+// step, asserted against `expectAiSilent`.
+let invokedAi = new Set<AiKind>()
+
 const scriptedAgent: Agent = {
   reason: async (prompt) => {
-    const kind = currentStep.ai?.[ruleKind(prompt)] ?? 'pass'
+    const validator = ruleKind(prompt)
+    invokedAi.add(validator)
+    const kind = currentStep.ai?.[validator] ?? 'pass'
     return { kind, reason: kind === 'violation' ? 'scripted violation' : '' }
   },
 }
 
 const liveAgent: Agent = {
   reason: async (prompt) => {
+    invokedAi.add(ruleKind(prompt))
     const out = execFileSync('claude', ['-p'], {
       input: prompt,
       encoding: 'utf8',
@@ -370,76 +467,32 @@ const ctx: RuleContext = {
   },
 }
 
-// Scoping predicates mirroring probity.config.kmp.ts — keep in sync.
-type Block = { applies: (action: Action) => boolean; rules: Rule[] }
-const isWriteTo = (action: Action, test: (path: string) => boolean): boolean =>
-  action.kind === 'write' && test(action.path)
-
-const BLOCKS: Block[] = [
-  {
-    applies: (a) => isWriteTo(a, (p) => /\/src\/\w+(Main|Test)\/kotlin\/|\/src\/(main|test)\/kotlin\//.test(p)),
-    rules: [withKotlinFastPath(enforceTdd())],
-  },
-  {
-    applies: (a) => isWriteTo(a, (p) => /\/commonMain\/.*\/(domain|port|usecase|presentation)\//.test(p)),
-    rules: [
-      forbidContentPattern({
-        match: KOTLIN_INFRASTRUCTURE_IMPORTS,
-        reason: 'Core code imports an infrastructure/vendor package.',
-      }),
-      forbidNewAmbientEffects({}),
-      enforcePortsBoundary({
-        instructions: (d) => d + KOTLIN_BOUNDARY_ADDENDUM,
-        glossaryPath: join(ROOT, GLOSSARY),
-      }),
-    ],
-  },
-  {
-    applies: (a) => isWriteTo(a, (p) => /\/src\/\w*[Tt]est\/kotlin\//.test(p)),
-    rules: [
-      forbidContentPattern({
-        match: MOCKING_LIBRARY_IMPORTS,
-        reason: 'This codebase uses hand-written fakes at ports, no mocking library.',
-      }),
-    ],
-  },
-  {
-    applies: (a) =>
-      isWriteTo(a, (p) => (/docs\/specs\/.*\.feature\.md$/.test(p) || /\/acceptance\//.test(p)) && !p.endsWith('Robot.kt')),
-    rules: [enforceAcceptanceLanguage({ glossaryPath: join(ROOT, GLOSSARY) })],
-  },
-  {
-    applies: (a) => isWriteTo(a, (p) => /docs\/specs\/.*\.feature\.md$/.test(p)),
-    rules: [surfaceScenarioLinkBreakage({ testRoots: [ROOT] })],
-  },
-  {
-    applies: (a) => isWriteTo(a, (p) => p.endsWith('docs/GLOSSARY.md')),
-    rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
-  },
-  {
-    applies: (a) => a.kind === 'command',
-    rules: [
-      enforceSpecTestParity({ specsDir: join(ROOT, 'docs/specs'), testRoots: [ROOT] }),
-      requireCommand({
-        before: { kind: 'command', match: /git commit/ },
-        command: GRADLE_TEST_COMMAND,
-        after: { kind: 'write' },
-        reason: 'Run the test suite after the last change before committing.',
-      }),
-    ],
-  },
-]
+// Scoping derived from the config template: the exact rule entries
+// probity.config.kmp.ts exports, instantiated against the episode
+// ROOT, with relative globs anchored the way Probity's loadConfig
+// anchors them. Glob semantics come from rules/scoping.ts — a pinned
+// replica of the engine's matcher — so a template glob edit is
+// exercised here automatically.
+const ENTRIES = anchorEntries(kmpRuleEntries(ROOT), ROOT)
 
 type Decision =
   | { kind: 'allow'; notes: string }
   | { kind: 'block'; rule: string; reason: string; notes: string }
 
+// Mirrors the engine's resolveRules: flat entries always apply;
+// blocks apply when the action passes their `files` scope (commands
+// pass every block filter and rules self-filter by action kind).
 async function evaluate(action: Action): Promise<Decision> {
   let notes = ''
-  for (const block of BLOCKS) {
-    if (!block.applies(action)) continue
-    for (const rule of block.rules) {
-      const result: RuleResult = await rule(rebase(action), ctx)
+  const rebased = rebase(action)
+  for (const entry of ENTRIES) {
+    const rules = !isRuleBlock(entry)
+      ? [entry]
+      : !entry.files || actionMatchesFilesScope(entry.files, rebased)
+        ? entry.rules
+        : []
+    for (const rule of rules) {
+      const result: RuleResult = await rule(rebased, ctx)
       if (result.kind === 'violation') {
         return { kind: 'block', rule: rule.name, reason: result.reason, notes }
       }
@@ -470,6 +523,7 @@ let failures = 0
 console.log(`Workflow eval (${LIVE ? 'LIVE AI validator' : 'scripted validator'}) in ${ROOT}\n`)
 for (const [index, step] of EPISODE.entries()) {
   currentStep = step
+  invokedAi = new Set()
   const decision = await evaluate(step.action)
   const outcomeOk = decision.kind === (step.expect === 'allow' ? 'allow' : 'block')
   // Live mode asserts outcomes only: with a real validator, a write
@@ -482,11 +536,15 @@ for (const [index, step] of EPISODE.entries()) {
     !step.expectRule ||
     (decision.kind === 'block' && decision.rule.includes(step.expectRule))
   const noteOk = !step.expectNote || decision.notes.includes(step.expectNote)
-  const ok = outcomeOk && ruleOk && noteOk
+  const wronglyConsulted = (step.expectAiSilent ?? []).filter((k) => invokedAi.has(k))
+  const silentOk = wronglyConsulted.length === 0
+  const ok = outcomeOk && ruleOk && noteOk && silentOk
   if (!ok) failures++
   const fired = decision.kind === 'block' ? ` [${decision.rule}]` : ''
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${String(index + 1).padStart(2)}. ${step.title} → ${decision.kind}${fired}`)
   if (!ok && decision.kind === 'block') console.log(`      reason: ${decision.reason.split('\n')[0]}`)
+  if (!silentOk)
+    console.log(`      mis-scoped: ${wronglyConsulted.join(', ')} validator consulted on an out-of-scope file`)
   if (ok && decision.kind === 'allow') record(step)
   // A correctly blocked action is not recorded or materialized — the
   // hook prevented it, exactly as in a real session.
