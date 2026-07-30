@@ -45,8 +45,12 @@ import {
   requireGreenTestRun,
   withKotlinFastPath,
   withMutationProbe,
+  withTelemetryFastPath,
 } from './rules/kotlin.js'
-import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
+import {
+  enforceAdapterObservability,
+  enforcePortsBoundary,
+} from './rules/ports-and-adapters.js'
 
 // This config sits at the project root, so its directory is the repo
 // root — spec/test scanning for the traceability rules anchors here.
@@ -166,7 +170,15 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
         '**/src/main/kotlin/**',
         '**/src/test/kotlin/**',
       ],
-      rules: [withMutationProbe(withKotlinFastPath(enforceTdd()))],
+      // Telemetry-only additions (a complete logger.event/breadcrumb
+      // line) pass deterministically — instrumentation demanded by the
+      // adapter-observability rule must not be judged as unasserted
+      // behavior by the TDD gate.
+      rules: [
+        withMutationProbe(
+          withTelemetryFastPath(withKotlinFastPath(enforceTdd())),
+        ),
+      ],
     },
 
     // Boundaries: ports-and-adapters. The Dependency Rule judgments
@@ -179,6 +191,25 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
           instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
           glossaryPath: glossary,
         }),
+      ],
+    },
+
+    // Adapters must be thin, but not blind: a new adapter path doing
+    // external I/O carries boundary observability (structured event,
+    // port tap, or span). Delta-based — legacy uninstrumented paths
+    // migrate incrementally.
+    {
+      files: ['**/src/*Main/kotlin/**/adapter/**'],
+      rules: [
+        withTelemetryFastPath(
+          enforceAdapterObservability({
+            conventionHint:
+              'This codebase uses structured Logger.event(tag, event, ' +
+              'level, fields) from :foundation (one greppable line: ' +
+              'event=<name> k=v), and/or a recording port-tap decorator ' +
+              'wired at the Koin composition root.',
+          }),
+        ),
       ],
     },
 

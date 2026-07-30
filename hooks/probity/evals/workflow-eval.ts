@@ -178,18 +178,37 @@ class TrackingViewModelDriver : TrackingDriver {
 `
 
 // Vendor import + direct clock read: both blocked in core packages,
-// both this adapter's job.
+// both this adapter's job. Carries a structured event so the
+// adapter-observability rule passes it — thin, not blind.
 const ADAPTER_V1 = `package com.example.tracking.adapter
 
 import androidx.room.RoomDatabase
 import com.example.tracking.domain.Parcel
 import com.example.tracking.port.ParcelStore
+import com.example.tracking.foundation.Logger
 
-class RoomParcelStore(private val db: RoomDatabase) : ParcelStore {
+class RoomParcelStore(private val db: RoomDatabase, private val logger: Logger) : ParcelStore {
     override suspend fun byId(parcelId: String): Parcel? = null
     override suspend fun save(parcel: Parcel) {
         val syncedAt = System.currentTimeMillis()
+        logger.event("ParcelStore", "parcel_saved", fields = listOf("synced_at" to syncedAt.toString()))
     }
+}
+`
+
+// External I/O with no event, tap, or span anywhere — the
+// adapter-observability rule's violation case.
+const BLIND_ADAPTER =
+  'feature/tracking/src/androidMain/kotlin/com/example/tracking/adapter/HttpDepotDirectory.kt'
+const BLIND_ADAPTER_V1 = `package com.example.tracking.adapter
+
+import io.ktor.client.HttpClient
+import io.ktor.client.request.get
+import com.example.tracking.port.DepotDirectory
+
+class HttpDepotDirectory(private val http: HttpClient) : DepotDirectory {
+    override suspend fun depotName(depotId: String): String =
+        http.get("https://depots.example.com/" + depotId).toString()
 }
 `
 
@@ -249,7 +268,7 @@ const GREEN_RUN = {
 
 // ── Episode ─────────────────────────────────────────────────────────
 
-type AiKind = 'tdd' | 'boundary' | 'language'
+type AiKind = 'tdd' | 'boundary' | 'language' | 'adapterObs'
 
 type Step = {
   title: string
@@ -378,7 +397,28 @@ Then the parcel is registered
     action: write(ADAPTER, ADAPTER_V1),
     expect: 'allow',
     expectAiSilent: ['boundary'],
-    ai: { tdd: 'pass' },
+    ai: { tdd: 'pass', adapterObs: 'pass' },
+  },
+  {
+    title: 'Adapter doing network I/O with no boundary observability (thin, but blind)',
+    action: write(BLIND_ADAPTER, BLIND_ADAPTER_V1),
+    expect: 'block',
+    expectRule: 'enforceAdapterObservability',
+    ai: { tdd: 'pass', adapterObs: 'violation' },
+  },
+  {
+    title: 'Telemetry-only addition to the adapter (telemetry fast-path — both gates free)',
+    action: write(
+      ADAPTER,
+      ADAPTER_V1.replace(
+        '        val syncedAt = System.currentTimeMillis()',
+        '        val syncedAt = System.currentTimeMillis()\n' +
+          '        logger.event("ParcelStore", "parcel_save_requested")',
+      ),
+    ),
+    expect: 'allow',
+    expectNote: 'fast-path',
+    expectAiSilent: ['tdd', 'adapterObs'],
   },
   {
     title: 'Koin module wiring the use case (di package — outside the core-purity globs)',
@@ -551,6 +591,7 @@ function materialize(path: string, content: string): void {
 function ruleKind(prompt: string): AiKind {
   if (prompt.includes('TDD validator')) return 'tdd'
   if (prompt.includes('architecture-boundary validator')) return 'boundary'
+  if (prompt.includes('adapter-observability validator')) return 'adapterObs'
   return 'language'
 }
 

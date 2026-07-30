@@ -364,6 +364,65 @@ export function requireGreenTestRun(options: {
   }
 }
 
+/** Complete single-line telemetry calls — the only additions the
+ *  telemetry fast-path recognizes. Multi-line event calls fall
+ *  through to the wrapped rule (conservative by design). */
+const TELEMETRY_LINE_PATTERNS: RegExp[] = [
+  /^[\w.]*logger\.event\(.*\)[,;]?$/i,
+  /^breadcrumbs\.(?:action|outcome)\(.*\)[,;]?$/,
+]
+
+/**
+ * Deterministic fast-path for the write the observability rules
+ * encourage: adding telemetry to existing code. A `.kt`/`.kts` write
+ * whose entire delta is ADDED lines, every one a complete single-line
+ * telemetry call (`logger.event(...)`, `breadcrumbs.action/outcome`),
+ * passes without consulting the wrapped rule — no AI call, and no
+ * "over-implementation" friction from a TDD gate for instrumentation
+ * the adapter-observability rule demands anyway. Anything else — a
+ * removed/changed line, a multi-line event call, any non-telemetry
+ * addition — falls through unchanged.
+ *
+ * Wrap it around both sides of the tension: the TDD rule (so
+ * telemetry additions aren't judged as unasserted behavior) and
+ * `enforceAdapterObservability` (a telemetry-only addition trivially
+ * satisfies it).
+ */
+export function withTelemetryFastPath(
+  rule: Rule,
+  options: { patterns?: RegExp[] } = {},
+): Rule {
+  const patterns = options.patterns ?? TELEMETRY_LINE_PATTERNS
+  const wrapped = async function telemetryFastPath(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || !/\.kts?$/.test(action.path)) {
+      return rule(action, ctx)
+    }
+    const before = await ctx?.readFile?.(action.path)
+    if (!before || before.kind !== 'present') return rule(action, ctx)
+    const trim = (text: string) =>
+      text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+    const beforeLines = trim(before.content)
+    const afterLines = trim(action.content)
+    const beforeSet = new Set(beforeLines)
+    const afterSet = new Set(afterLines)
+    const removed = beforeLines.filter((line) => !afterSet.has(line))
+    const added = afterLines.filter((line) => !beforeSet.has(line))
+    if (removed.length > 0 || added.length === 0) return rule(action, ctx)
+    const allTelemetry = added.every((line) =>
+      patterns.some((pattern) => pattern.test(line)),
+    )
+    if (!allTelemetry) return rule(action, ctx)
+    return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
+  }
+  Object.defineProperty(wrapped, 'name', {
+    value: `telemetryFastPath(${rule.name || 'rule'})`,
+  })
+  return wrapped
+}
+
 /**
  * Marker that declares a write a mutation probe: a deliberate,
  * temporary break of production behavior made to prove a retrofitted

@@ -116,6 +116,8 @@ async charge(p: Payment): Promise<PaymentResult> {
 
 If an adapter grows retry policies, fallback decisions, caching rules, or validation, extract that into the core behind the port — logic in adapters is logic that fakes silently skip and tests never exercise.
 
+**Thin does not mean blind.** Boundary observability is translation-adjacent, not business logic: a structured event per external call/outcome, and a **port tap** — a recording decorator installed at the composition root that captures real request/response traffic for debugging, fake fixtures, and contract evidence — belong at every integration point. The pattern lives in `observability-and-instrumentation`.
+
 **Inbound adapters are equally thin.** A route handler parses/deserializes, calls one use-case port, and serializes the result. A UI component renders core-supplied state and forwards user intent. If you can't unit-test a behavior without the framework, the behavior is trapped in an adapter.
 
 ## Ports Are the Only Test Seam

@@ -33,8 +33,12 @@ import {
   requireGreenTestRun,
   withKotlinFastPath,
   withMutationProbe,
+  withTelemetryFastPath,
 } from './rules/kotlin.js'
-import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
+import {
+  enforceAdapterObservability,
+  enforcePortsBoundary,
+} from './rules/ports-and-adapters.js'
 
 // Ubiquitous-language glossary (copy GLOSSARY.template.md here). The
 // glossary-aware rules degrade gracefully while it doesn't exist yet.
@@ -115,7 +119,13 @@ export default defineConfig({
         '**/src/test/**',
         '**/src/sharedTest/**',
       ],
-      rules: [withMutationProbe(withKotlinFastPath(enforceTdd()))],
+      // Telemetry-only additions pass deterministically — see the
+      // KMP preset's note on the TDD/observability tension.
+      rules: [
+        withMutationProbe(
+          withTelemetryFastPath(withKotlinFastPath(enforceTdd())),
+        ),
+      ],
     },
 
     // Boundaries: ports-and-adapters. The Dependency Rule judgments
@@ -129,6 +139,19 @@ export default defineConfig({
           glossaryPath: GLOSSARY,
         }),
       ],
+    },
+
+    // Adapters must be thin, but not blind: a new adapter path doing
+    // external I/O carries boundary observability (structured event,
+    // port tap, or span). Point the globs at your adapter/data
+    // packages. Delta-based — legacy paths migrate incrementally.
+    {
+      files: [
+        '**/src/main/**/adapter/**',
+        '**/src/main/**/adapters/**',
+        '**/src/main/**/data/**',
+      ],
+      rules: [withTelemetryFastPath(enforceAdapterObservability())],
     },
 
     // Outer loop: acceptance-testing. The Language Test on the spec

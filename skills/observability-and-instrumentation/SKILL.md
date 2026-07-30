@@ -87,6 +87,14 @@ This buys two things:
 
 Purely technical telemetry (HTTP server spans, DB client metrics, runtime stats) lives in adapters and auto-instrumentation, where SDK calls are already legal — no port needed there.
 
+**Port taps — capture what integrations actually say.** Adapters are the integration points, and the slowest part of integration work is discovering what the data *actually* looks like at the seam — which fields are null in practice, what shape the error really has, what the SDK returns versus what its docs claim. Because every integration crosses a port, one generic **recording decorator** (a "port tap") wrapped around the adapter at the composition root captures every request/response pair: domain-typed on the port side, optionally the raw wire shape inside the adapter. Install it in dev/demo builds only, with per-field redaction rules for secrets and PII. The recordings buy three things:
+
+- **Debugging speed** — "what did the provider return?" is a captured record you read, not a debugger session you reconstruct.
+- **Fakes that track reality** — recordings become fixtures that program the hand-written port fakes, so when the integration's behavior shifts, you re-record and the test suite adjusts with it instead of drifting.
+- **Contract evidence** — captured pairs are exactly the material contract tests pin the external interface with (see `acceptance-testing`).
+
+Beyond the tap, every *new* adapter path that performs external I/O should emit at least one structured event (call made, outcome, retry) — an uninstrumented integration point is archaeology waiting to happen. Two discipline notes: **assert the events in the failing test first** (a recording telemetry fake), so instrumentation is tested behavior rather than an unasserted afterthought; and **presence is not safety** — enforcement and taps guarantee telemetry *exists*, not that its fields are safe. Whether an id, name, or payload field is loggable is a per-project policy question that stays with review, even when the tap "is redacted".
+
 ### 5. Structured logging — wide events over scattered lines
 
 Log events, not prose. Every log line is a JSON object with a stable event name and machine-readable fields:

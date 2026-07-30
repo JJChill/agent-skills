@@ -217,6 +217,128 @@ export function enforcePortsBoundary(
   }
 }
 
+const ADAPTER_OBS_INSTRUCTIONS = `## Role
+
+You are an adapter-observability validator. Adapters are the
+integration points of this codebase, and an uninstrumented
+integration point is undiagnosable in the field. Judge whether the
+pending write keeps new adapter code observable, per the rules below.
+
+## Inputs
+
+1. "Current file content" — what's on disk right now (may be a marker
+   like \`(file does not exist)\`).
+2. "Pending action" — the file path and what the agent is about to
+   write.
+
+## What you judge
+
+Judge only the change this write makes (before → after), never
+pre-existing code. A transient state (unresolved import, half-built
+class) is never itself a violation. A block recorded earlier in the
+session is a past verdict, not a rule; when the user says to let a
+change through, treat that as authoritative and pass.
+
+## Adapter observability rules
+
+A NEW adapter code path that performs external I/O — a network or SDK
+call, database access, filesystem, platform service — must carry
+boundary observability on that path: at least one structured telemetry
+event (call made / outcome / retry, with machine-readable fields), a
+recording tap/decorator around the port, or a span. The point: when
+the integration misbehaves, someone can see what was sent and what
+came back without attaching a debugger.
+
+Always pass:
+  - Pure type mappers and translators with no external effect.
+  - Composition roots and DI wiring (including wiring a tap decorator
+    — that IS the observability).
+  - Test code and test fixtures/fakes.
+  - Edits that only touch existing uninstrumented paths without adding
+    new external calls (delta-based: legacy migrates incrementally).
+  - Files that are clearly not adapters despite the path.
+
+Do not demand a specific API: any structured, greppable event or
+tap/trace convention counts. Never punish redaction (omitting payload
+fields for secrecy) — presence of an event is what matters. You judge
+presence, not field safety: whether a logged field is itself too
+sensitive (a uid, PII) is review's job, not yours. When genuinely
+ambiguous, pass.
+
+## When you block
+
+Phrase the remediation concretely: name the exact call to add and
+where. If a "Project convention" section is provided below, use its
+vocabulary verbatim in the remediation (its API or tap pattern, not a
+generic "add logging"). And remind the agent that under this
+codebase's TDD gate, instrumentation should be ASSERTED in the failing
+test first (a fake/recording telemetry collector) — that way the TDD
+validator accepts the event as tested behavior instead of flagging it
+as over-implementation.`
+
+/**
+ * AI-validated companion to `enforcePortsBoundary`, judging the
+ * opposite concern: adapters must be thin, but not blind. A new
+ * adapter code path performing external I/O with no boundary
+ * observability — no structured event, no tap/recording decorator, no
+ * span — is blocked; pure mappers, wiring, tests, and untouched
+ * legacy paths pass (delta-based).
+ *
+ * Applies to: write actions. Scope it to adapter paths only (e.g.
+ * `**\/adapter\/**`, `**\/infra\/**`) — every matching write costs an
+ * AI call.
+ *
+ * @param options.conventionHint — appended to the validator prompt to
+ *   name the project's telemetry/tap convention (e.g. "structured
+ *   Logger.event(tag, event, fields); port taps wired in the demo
+ *   flavor's Koin module"), so the verdict and its fix suggestion
+ *   speak the project's language.
+ * @param options.instructions — replaces or extends the default rules
+ *   text (string, or `(defaults) => ...`).
+ */
+export function enforceAdapterObservability(
+  options: {
+    conventionHint?: string
+    instructions?: string | ((defaults: string) => string)
+  } = {},
+): Rule {
+  const base =
+    typeof options.instructions === 'function'
+      ? options.instructions(ADAPTER_OBS_INSTRUCTIONS)
+      : (options.instructions ?? ADAPTER_OBS_INSTRUCTIONS)
+  const rules = options.conventionHint
+    ? `${base}\n\n### Project convention\n\n${options.conventionHint}`
+    : base
+  return async function enforceAdapterObservability(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    if (!ctx?.agent) {
+      return {
+        kind: 'violation',
+        reason:
+          'enforceAdapterObservability: no AI agent available; configure Config.ai or use a vendor that ships one.',
+      }
+    }
+    const before: FileContent = (await ctx.readFile?.(action.path)) ?? {
+      kind: 'unknown',
+    }
+    const verdict = await ctx.agent.reason(
+      [
+        rules,
+        `## Current file content\n\n${formatBefore(before)}`,
+        `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
+        RESPONSE_SPEC,
+      ].join('\n\n'),
+    )
+    if (verdict.kind === 'violation') {
+      return { kind: 'violation', reason: verdict.reason }
+    }
+    return { kind: 'pass', reason: verdict.reason }
+  }
+}
+
 const MODULE_MOCK_PATTERN =
   /\b(?:jest|vi)\.(?:mock|doMock)\(\s*(['"`])(\.\.?\/[^'"`]+)\1/g
 
