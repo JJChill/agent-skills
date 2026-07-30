@@ -94,6 +94,11 @@ it('acknowledges a submitted invoice to its submitter', async () => {
 
 **Layer 3 — Protocol drivers** translate DSL concepts into real interactions. Each driver step passes or fails atomically; assertions live here. One DSL, many drivers: the same `placeOrder` spec can run against the web UI, the mobile app, or the public API by swapping drivers. When the SUT's interface changes, the fix is in one driver — not in hundreds of specs.
 
+Two rules that make the second driver cheap instead of a refactor:
+
+- **Keep scenario bodies in a shared file** (e.g. `*Scenarios.kt` / `*Scenarios.ts`) that each driver-specific spec class calls into. The spec classes hold only the test-framework glue (and coverage tags); the bodies never know which driver runs them.
+- **Drivers translate *intent*, not gestures.** When an interface cannot offer an intent at all — the UI removes the Create button while creation is in flight, so "taps create again" is impossible — the driver asserts *why* (the affordance is absent, which is how that interface delivers the guarantee) rather than silently no-oping or teaching the DSL which driver it's talking to. Put such intents in the driver contract explicitly so each implementation's translation is visible and reviewable.
+
 **Layer 4 — SUT** is deployed the same way production is deployed, into a production-like environment. Stubs standing in for external systems are programmed *through the DSL* like any other driver ("when asked to validate this customer, reject them").
 
 ## Scope: What Is the System Under Test?
@@ -113,6 +118,7 @@ Trustworthy tests control all the variables.
 2. **Temporal isolation:** the DSL aliases names so the same test can run twice, or in parallel with itself, against one SUT instance. The spec says `"invoice1"`; the SUT sees `invoice1-8f3a`.
 3. **Controlling time:** systems that care about time read it from a clock port, never the OS clock. The test clock is a stub the DSL can set and advance — a week-long scenario runs in milliseconds, and daylight-saving boundaries become testable. Tag such tests (e.g. `@TimeTravel`) and run them on dedicated instances, not the shared parallel pool.
 4. **No sleeps, ever.** A fixed delay is a race condition postponed plus wasted time on every run. Protocol drivers poll for the **concluding event** with a generous timeout: fast when the system is fast, resilient when it's slow.
+5. **Fakes gate in-flight operations.** A driver that owns virtual time can pause the world anywhere; a driver that doesn't (a real UI toolkit with its own clock) cannot. Give port fakes a standard in-flight gate — a latch the test releases — so "the operation is still running" is a controllable fact in every driver, not a race. Build it into the fake once; don't reinvent it per feature.
 
 ## Where Acceptance Tests Run
 
@@ -150,7 +156,7 @@ Trustworthy tests control all the variables.
 After writing or changing acceptance tests, confirm:
 
 - [ ] Every acceptance criterion of the story has at least one automated executable specification
-- [ ] Specifications were written (and seen failing) before the production code — or, when a spec is retrofitted onto behavior that already exists (common on brownfield projects), it was **mutation-checked**: temporarily break the behavior it specifies, watch the spec go red, restore, and watch it go green. A retrofitted spec that has never failed proves nothing
+- [ ] Specifications were written (and seen failing) before the production code — or, when a spec is retrofitted onto behavior that already exists (common on brownfield projects), it was **mutation-checked**: temporarily break the behavior it specifies, watch the spec go red, restore, and watch it go green. A retrofitted spec that has never failed proves nothing. Choose the mutation against the *covered* scenario set — and if a probe stays green under every suite, that is a **coverage finding** (the behavior's scenario is unwritten, unclaimed, or sitting in an adoption baseline): record it as such rather than silently switching to a different probe
 - [ ] Each spec passes the least-technical-person test — domain language, zero implementation detail
 - [ ] Each spec asserts a single outcome
 - [ ] Test cases touch only the DSL; only protocol drivers know how to reach the SUT

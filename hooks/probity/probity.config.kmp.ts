@@ -187,7 +187,10 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
     // cases. Robot/DSL/driver classes are layers 2-3 (they know about
     // UiState and MVI intents) — excluded, whichever of the two
     // layouts a feature uses (merged *Robot.kt, or split *Dsl.kt +
-    // *Driver.kt per the four-layer model).
+    // *Driver.kt per the four-layer model). Shared scenario-body
+    // files (*Scenarios.kt — the bodies both drivers run) are layer 1
+    // and stay INCLUDED by design: they must read as pure domain
+    // language.
     {
       files: [
         'docs/specs/**/*.feature.md',
