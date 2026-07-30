@@ -59,6 +59,7 @@ The bad version breaks when the UI changes to fingerprint auth; the good version
 - Use the ubiquitous language of the domain — glossary terms verbatim, one term per concept (see `ubiquitous-language`; a spec needing a word the glossary lacks means the glossary conversation happens first)
 - Each specification asserts a **single outcome**; be skeptical of long, multi-assertion scenarios
 - A specification should have only two reasons to fail: a genuine bug, or a translation error in the test plumbing. It changes only when the *user need* changes
+- **"How many times did X happen" is still expressible as observable state.** Never assert driver/stub call counts from a spec; find state the domain genuinely exposes that carries the count — an audit trail, a diagnostic/breadcrumb log, a statement listing the transactions. "The system does not charge twice" becomes "the account statement shows one charge," not "the payment stub was called once." If no such state exists, that's a domain conversation (should the system record this?), not a license to count calls
 
 ## The Four-Layer Model
 
@@ -149,7 +150,7 @@ Trustworthy tests control all the variables.
 After writing or changing acceptance tests, confirm:
 
 - [ ] Every acceptance criterion of the story has at least one automated executable specification
-- [ ] Specifications were written (and seen failing) before the production code
+- [ ] Specifications were written (and seen failing) before the production code — or, when a spec is retrofitted onto behavior that already exists (common on brownfield projects), it was **mutation-checked**: temporarily break the behavior it specifies, watch the spec go red, restore, and watch it go green. A retrofitted spec that has never failed proves nothing
 - [ ] Each spec passes the least-technical-person test — domain language, zero implementation detail
 - [ ] Each spec asserts a single outcome
 - [ ] Test cases touch only the DSL; only protocol drivers know how to reach the SUT

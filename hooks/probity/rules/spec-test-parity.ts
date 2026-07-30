@@ -103,6 +103,37 @@ type ScanOptions = {
   specsDir: string
   testRoots: string[]
   testFilePattern?: RegExp
+  /**
+   * Incremental-adoption baseline (optional). Path to a text file of
+   * scenario keys — one `<spec>.feature.md :: <title>` per line, `#`
+   * comments allowed — that are exempt from the orphan check. Use it
+   * to adopt the parity gate on a brownfield spec suite: generate the
+   * baseline once (`spec-parity.mjs --baseline <path> --write-baseline`),
+   * commit it, and from then on only scenarios *not* in the baseline
+   * must carry a covering test — new specs are enforced from day one
+   * while the backlog burns down by deleting lines. A missing file
+   * means full enforcement (the greenfield default). Dangling Covers
+   * tags are never baselined: they are actively wrong, not legacy.
+   */
+  baselinePath?: string
+}
+
+/** Parses a baseline file into normalized scenario keys. Missing file → empty set. */
+export function readBaseline(path: string | undefined): Set<string> {
+  if (!path || !existsSync(path)) return new Set()
+  return new Set(
+    readFileSync(path, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith('#'))
+      .flatMap((line) => {
+        const idx = line.indexOf(' :: ')
+        if (idx === -1) return []
+        const spec = line.slice(0, idx).trim()
+        const title = line.slice(idx + 4)
+        return [scenarioKey(spec, title)]
+      }),
+  )
 }
 
 export function scanSpecs(specsDir: string): Scenario[] {
@@ -150,6 +181,9 @@ function formatList(lines: string[], max = 10): string {
  *   skipped).
  * @param options.testFilePattern — which files count as acceptance
  *   tests (default: any file under an `acceptance/` directory).
+ * @param options.baselinePath — optional incremental-adoption
+ *   baseline; scenarios listed there are exempt from the orphan
+ *   check (see {@link readBaseline}). Missing file → full enforcement.
  */
 export function enforceSpecTestParity(options: ScanOptions): Rule {
   const pattern = options.testFilePattern ?? DEFAULT_TEST_FILE_PATTERN
@@ -159,9 +193,12 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     if (!existsSync(options.specsDir)) return { kind: 'pass' }
     const scenarios = scanSpecs(options.specsDir)
     const refs = scanCoversRefs(options.testRoots, pattern)
+    const baseline = readBaseline(options.baselinePath)
     const claimed = new Set(refs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
-    const orphaned = scenarios.filter((s) => !s.wip && !claimed.has(s.key))
+    const orphaned = scenarios.filter(
+      (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key),
+    )
     const dangling = refs.filter((ref) => !known.has(ref.key))
     if (orphaned.length === 0 && dangling.length === 0) return { kind: 'pass' }
     const sections: string[] = ['Spec↔test parity check failed.']

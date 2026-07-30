@@ -1,4 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { join, relative } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
@@ -290,6 +292,206 @@ export function withKotlinFastPath(
     value: `kotlinFastPath(${rule.name || 'rule'})`,
   })
   return wrapped
+}
+
+/**
+ * Commit-on-GREEN gate — the stricter sibling of Probity's built-in
+ * `requireCommand`, which only checks that a matching test command was
+ * *recorded* after the last write and would happily pass a transcript
+ * whose latest run FAILED. This rule additionally judges the recorded
+ * run's output: the last matching test command after the last write
+ * must look green (`successPattern` present, `failurePattern` absent).
+ *
+ * Inherent limit (unchanged from requireCommand): the gate sees only
+ * the session transcript. A green run in another terminal, CI, or a
+ * wrapper script is invisible — rerun the suite in-session, and keep
+ * the CI mirror for human commits.
+ *
+ * Applies to: command actions matching `git commit`. Deterministic —
+ * no AI call.
+ *
+ * @param options.command — regex matching a test invocation (e.g.
+ *   {@link GRADLE_TEST_COMMAND}).
+ * @param options.successPattern — output must match to count as green
+ *   (default `/BUILD SUCCESSFUL/`).
+ * @param options.failurePattern — output matching this is red even if
+ *   the success pattern also appears (default `/FAILED|BUILD FAILED/`).
+ */
+export function requireGreenTestRun(options: {
+  command: RegExp
+  successPattern?: RegExp
+  failurePattern?: RegExp
+}): Rule {
+  const success = options.successPattern ?? /BUILD SUCCESSFUL/
+  const failure = options.failurePattern ?? /FAILED|BUILD FAILED/
+  return async function requireGreenTestRun(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'command') return { kind: 'pass' }
+    if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    const history = (await ctx?.history?.()) ?? []
+    const lastWrite = history.reduce(
+      (last, event, index) => (event.kind === 'write' ? index : last),
+      -1,
+    )
+    const runs = history.filter(
+      (event, index) =>
+        index > lastWrite &&
+        event.kind === 'command' &&
+        options.command.test(event.command),
+    )
+    if (runs.length === 0) {
+      return {
+        kind: 'violation',
+        reason:
+          'Run the test suite after the last change before committing ' +
+          '(see test-driven-development: commit only on green).',
+      }
+    }
+    const lastRun = runs[runs.length - 1]!
+    const output = 'output' in lastRun ? (lastRun.output ?? '') : ''
+    if (failure.test(output) || !success.test(output)) {
+      return {
+        kind: 'violation',
+        reason:
+          'The last recorded test run after your changes was not ' +
+          'green — a recorded invocation is not a passing suite. Fix ' +
+          'the failures (or the build) and rerun before committing.',
+      }
+    }
+    return { kind: 'pass' }
+  }
+}
+
+/**
+ * Marker that declares a write a mutation probe: a deliberate,
+ * temporary break of production behavior made to prove a retrofitted
+ * test can fail (see acceptance-testing's mutation-check step). Put
+ * it in a comment on or near the mutated line:
+ *
+ *   // probity: mutation-probe — proving RetrySpec bites; revert before commit
+ */
+export const MUTATION_PROBE_MARKER = /probity:\s*mutation-probe/
+
+const PROBE_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'build',
+  '.gradle',
+  'out',
+  'dist',
+  '.idea',
+])
+
+const DEFAULT_PROBE_FILE_PATTERN = /\.(?:kt|kts|java)$/
+
+function walkFiles(dir: string, out: string[] = []): string[] {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!PROBE_SKIP_DIRS.has(entry.name)) walkFiles(join(dir, entry.name), out)
+    } else {
+      out.push(join(dir, entry.name))
+    }
+  }
+  return out
+}
+
+/**
+ * Wraps a TDD rule so that a write carrying the
+ * {@link MUTATION_PROBE_MARKER} passes deterministically — no AI call,
+ * no red-before-green demand. Mutation checks (deliberately breaking
+ * production code to prove a retrofitted test fails) are *mandated* by
+ * the acceptance-testing skill, and an unwrapped `enforceTdd`
+ * correctly denies them: a deliberate regression has no failing test
+ * in front of it and never will. Without this wrapper the only way to
+ * run a mutation check is to override the gate — which trains agents
+ * and humans to ignore deny decisions.
+ *
+ * The bypass is not free: pair this with {@link enforceProbeReversion}
+ * so `git commit` is blocked while any probe marker is still on disk.
+ * The pair converts an override into an enforced round-trip: mark →
+ * watch the test fail → revert (the marker disappears with the
+ * mutation) → commit opens again. Removing just the marker while
+ * keeping the mutation is a fresh unmarked production write, judged by
+ * the wrapped TDD rule as usual.
+ *
+ * Only the TDD rule is bypassed. Deterministic screens (vendor
+ * imports, ambient effects) and the boundary validator still apply to
+ * probe writes — a probe has no business introducing those.
+ *
+ * @param rule — the rule to wrap, normally
+ *   `withKotlinFastPath(enforceTdd())`.
+ */
+export function withMutationProbe(rule: Rule): Rule {
+  const wrapped = async function mutationProbe(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind === 'write' && MUTATION_PROBE_MARKER.test(action.content)) {
+      return { kind: 'pass', notes: [{ kind: 'mutation-probe' }] }
+    }
+    return rule(action, ctx)
+  }
+  Object.defineProperty(wrapped, 'name', {
+    value: `mutationProbe(${rule.name || 'rule'})`,
+  })
+  return wrapped
+}
+
+/**
+ * The commit half of the mutation-probe round-trip (see
+ * {@link withMutationProbe}): blocks `git commit` while any source
+ * file under `roots` still contains the probe marker, listing the
+ * files. Reverting the mutation (e.g. `git checkout -- <file>`)
+ * removes the marker with it, so a clean tree needs no bookkeeping.
+ * Deterministic filesystem scan — no AI call.
+ *
+ * Applies to: command actions matching `git commit`.
+ *
+ * @param options.roots — absolute paths to scan (the repo root is
+ *   fine; node_modules/build dirs are skipped).
+ * @param options.filePattern — which files can carry probes
+ *   (default: `.kt`/`.kts`/`.java`).
+ */
+export function enforceProbeReversion(options: {
+  roots: string[]
+  filePattern?: RegExp
+}): Rule {
+  const filePattern = options.filePattern ?? DEFAULT_PROBE_FILE_PATTERN
+  return function enforceProbeReversion(action: Action): RuleResult {
+    if (action.kind !== 'command') return { kind: 'pass' }
+    if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    const outstanding = options.roots
+      .flatMap((root) =>
+        walkFiles(root)
+          .filter((file) => filePattern.test(file))
+          .filter((file) => {
+            try {
+              return MUTATION_PROBE_MARKER.test(readFileSync(file, 'utf8'))
+            } catch {
+              return false
+            }
+          })
+          .map((file) => relative(root, file)),
+      )
+    if (outstanding.length === 0) return { kind: 'pass' }
+    return {
+      kind: 'violation',
+      reason:
+        'Mutation probe(s) still on disk — a deliberate break made to ' +
+        'prove a test bites must be reverted before committing ' +
+        '(git checkout -- <file> restores the original and removes ' +
+        'the marker):\n' +
+        outstanding.map((file) => `    ${file}`).join('\n'),
+    }
+  }
 }
 
 /**

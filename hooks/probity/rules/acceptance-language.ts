@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
 type FileContent = Awaited<ReturnType<NonNullable<RuleContext['readFile']>>>
@@ -81,6 +84,22 @@ Block spec content that mentions implementation mechanics:
 The fix is always the same: state the outcome in domain terms and push
 the mechanics down into the DSL or a protocol driver.
 
+### One standard across artifacts
+
+A Markdown/Gherkin scenario and the test case that claims it are both
+layer 1 and are held to the SAME standard: wording that would violate
+in a test-case step ("the backend rejects creation") violates in a
+\`## Scenario:\` step too, and vice versa. Never pass mechanism
+language in a spec document on the grounds that it is prose — the
+spec is the source that tests transcribe, so a leak passed there
+resurfaces in every claiming test. Named internal actors — "the
+backend", "the server", "the gateway", "the database", "the API",
+"a queue", "the store" — are mechanism unless the glossary records
+them as domain concepts: state the condition as the user experiences
+it ("creation fails", "the parcel cannot be registered right now")
+and push what failed and why into the DSL, driver, or stub
+programming.
+
 ### Structure
 
   - Each specification asserts a single outcome. Block scenarios with
@@ -107,7 +126,12 @@ Block on clear mechanics leaking into a specification. Domain terms
 that happen to sound technical (the domain of a deployment tool
 includes "server"; a payments domain includes "card") are not
 violations — judge against the problem domain, not a banned-word list.
-When genuinely ambiguous, pass.`
+Grammatical tense and phrasing preferences are not mechanism: a
+future- or conditional-tense precondition ("creation will fail",
+"the parcel is going to be rejected") is equivalent to its
+present-tense form and never blocks on its own — and when a step does
+violate, name only the offending phrase, not neighboring wording that
+merely reads awkwardly. When genuinely ambiguous, pass.`
 
 function formatBefore(before: FileContent): string {
   switch (before.kind) {
@@ -141,6 +165,109 @@ function buildPrompt(
   )
   sections.push(RESPONSE_SPEC)
   return sections.join('\n\n')
+}
+
+// Deterministic screen used by the fast-path: mechanism words that
+// domain-language test steps should never contain. Deliberately
+// broad — a false hit just falls through to the AI validator.
+const MECHANISM_SCREEN =
+  /\b(?:backend|server|gateway|database|sql|endpoint|https?|url|api|queue|json|xml|payload|click|button|css|xpath|selector|cookie|header|mock)\b/i
+
+const KOTLIN_CALL_KEYWORDS = new Set([
+  'fun',
+  'if',
+  'when',
+  'while',
+  'for',
+  'catch',
+  'return',
+  'super',
+  'this',
+  'Test',
+])
+
+const DECLARATION = /(?:fun|class|object|interface)\s+`?([A-Za-z_]\w*)/g
+
+function declaredNames(content: string, out: Set<string>): void {
+  for (const match of content.matchAll(DECLARATION)) out.add(match[1]!)
+}
+
+/**
+ * Wraps `enforceAcceptanceLanguage` so the most common spec-layer
+ * write — a Kotlin test file gaining exactly one new `@Test` whose
+ * added lines only call vocabulary that already exists in the
+ * suite's DSL/Robot/driver files — passes deterministically, with no
+ * model call. Rationale: when two rule scopes overlap (the TDD rule's
+ * Kotlin fast-path plus this rule on `acceptance/**`), a single-test
+ * write otherwise still pays one AI call despite being advertised as
+ * free.
+ *
+ * The fast-path is conservative on three axes; failing any one falls
+ * through to the wrapped AI rule (it can only skip work, never
+ * block):
+ *   1. the write must add exactly one `@Test`;
+ *   2. no added line may contain mechanism vocabulary
+ *      (backend/server/database/url/click/... — the deterministic
+ *      screen errs broad);
+ *   3. every identifier the added lines call must already be declared
+ *      in this file or a sibling `.kt` file in the same directory —
+ *      a brand-new DSL step name is exactly what the validator should
+ *      judge.
+ *
+ * Markdown/Gherkin spec writes never fast-path — prose is where the
+ * Language Test earns its keep.
+ */
+export function withAcceptanceLanguageFastPath(rule: Rule): Rule {
+  const wrapped = async function acceptanceLanguageFastPath(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || !/\.kt$/.test(action.path)) {
+      return rule(action, ctx)
+    }
+    const before = await ctx?.readFile?.(action.path)
+    if (!before || before.kind === 'unknown') return rule(action, ctx)
+    const beforeText = before.kind === 'present' ? before.content : ''
+    const testDelta =
+      (action.content.match(/@Test\b/g)?.length ?? 0) -
+      (beforeText.match(/@Test\b/g)?.length ?? 0)
+    if (testDelta !== 1) return rule(action, ctx)
+    const beforeLines = new Set(
+      beforeText.split('\n').map((line) => line.trim()),
+    )
+    const added = action.content
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !beforeLines.has(line))
+    if (added.some((line) => MECHANISM_SCREEN.test(line))) {
+      return rule(action, ctx)
+    }
+    const known = new Set<string>()
+    declaredNames(action.content, known)
+    try {
+      for (const entry of readdirSync(dirname(action.path))) {
+        if (!entry.endsWith('.kt')) continue
+        declaredNames(
+          readFileSync(join(dirname(action.path), entry), 'utf8'),
+          known,
+        )
+      }
+    } catch {
+      return rule(action, ctx)
+    }
+    for (const line of added) {
+      for (const call of line.matchAll(/([A-Za-z_]\w*)\s*\(/g)) {
+        const name = call[1]!
+        if (KOTLIN_CALL_KEYWORDS.has(name)) continue
+        if (!known.has(name)) return rule(action, ctx)
+      }
+    }
+    return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
+  }
+  Object.defineProperty(wrapped, 'name', {
+    value: `acceptanceLanguageFastPath(${rule.name || 'rule'})`,
+  })
+  return wrapped
 }
 
 /**

@@ -16,17 +16,23 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { defineConfig, enforceTdd, forbidContentPattern, requireCommand } from '@nizos/probity'
+import { defineConfig, enforceTdd, forbidContentPattern } from '@nizos/probity'
 
-import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  enforceAcceptanceLanguage,
+  withAcceptanceLanguageFastPath,
+} from './rules/acceptance-language.js'
 import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
+  enforceProbeReversion,
   forbidNewAmbientEffects,
   forbidStaticMocks,
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
+  requireGreenTestRun,
   withKotlinFastPath,
+  withMutationProbe,
 } from './rules/kotlin.js'
 import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 
@@ -35,35 +41,28 @@ import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const GLOSSARY = join(ROOT, 'docs/GLOSSARY.md')
 
+// Core purity scope. Point these at your core modules (e.g. the
+// `*-core` modules of a core/ui split); DI wiring and adapter
+// packages import vendors by design — exclude them.
+const CORE_GLOBS = [
+  '**/*-core/src/main/**',
+  '!**/*-core/src/main/**/di/**',
+  '!**/*-core/src/main/**/data/**',
+]
+
+// Rule ordering principle: Probity stops at the first violation, so
+// every deterministic screen (pattern match, free, instant) is listed
+// before any AI-validated rule (a model call per matching write). A
+// write with a vendor import in core code must be rejected by the
+// free import screen, not after a TDD model call.
+
 export default defineConfig({
   rules: [
-    // ── Inner loop: test-driven-development ─────────────────────────
-    // Android source sets commonly keep .kt under src/main/java, so
-    // match both. Probity has no built-in Kotlin fast-path;
-    // withKotlinFastPath supplies one — a write adding exactly one
-    // @Test function passes without an AI call. It needs the optional
-    // packages (`npm install -D @ast-grep/napi @ast-grep/lang-kotlin`)
-    // and falls through to plain enforceTdd when they're absent.
-    {
-      files: [
-        '**/src/main/java/**',
-        '**/src/main/kotlin/**',
-        '**/src/test/**',
-        '**/src/sharedTest/**',
-      ],
-      rules: [withKotlinFastPath(enforceTdd())],
-    },
+    // ── Deterministic wall ───────────────────────────────────────────
 
-    // ── Boundaries: ports-and-adapters ──────────────────────────────
-    // Core purity. Point these at your core modules (e.g. the
-    // `*-core` modules of a core/ui split); DI wiring and adapter
-    // packages import vendors by design — exclude them.
+    // Core import/effect screens.
     {
-      files: [
-        '**/*-core/src/main/**',
-        '!**/*-core/src/main/**/di/**',
-        '!**/*-core/src/main/**/data/**',
-      ],
+      files: CORE_GLOBS,
       rules: [
         forbidContentPattern({
           match: KOTLIN_INFRASTRUCTURE_IMPORTS,
@@ -82,29 +81,14 @@ export default defineConfig({
           seamHint:
             'This codebase has a TimeProvider port (sudocommons-core) — inject it rather than reading the OS clock',
         }),
-        enforcePortsBoundary({
-          instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
-          glossaryPath: GLOSSARY,
-        }),
       ],
     },
 
     // Ports are the only test seam: no new static/object/constructor
-    // mocking anywhere in the suite. Deterministic — free to run
-    // broadly.
+    // mocking anywhere in the suite.
     {
       files: ['**/src/test/**', '**/src/androidTest/**', '**/src/sharedTest/**'],
       rules: [forbidStaticMocks()],
-    },
-
-    // ── Outer loop: acceptance-testing ──────────────────────────────
-    // The Language Test on the spec layer only. Point at wherever
-    // your executable specifications live (e.g. an acceptance package
-    // under androidTest, or Gherkin features); protocol drivers and
-    // test infrastructure must NOT match.
-    {
-      files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt', '**/*.feature'],
-      rules: [enforceAcceptanceLanguage({ glossaryPath: GLOSSARY })],
     },
 
     // Ubiquitous-language drift: renaming or removing a glossary term
@@ -115,19 +99,65 @@ export default defineConfig({
       rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
     },
 
-    // ── Ship gate ────────────────────────────────────────────────────
+    // ── AI-validated judgment layer ──────────────────────────────────
+
+    // Inner loop: test-driven-development. Android source sets
+    // commonly keep .kt under src/main/java, so match both. Probity
+    // has no built-in Kotlin fast-path; withKotlinFastPath supplies
+    // one — a write adding exactly one @Test function passes without
+    // an AI call. It needs the optional packages
+    // (`npm install -D @ast-grep/napi @ast-grep/lang-kotlin`) and
+    // falls through to plain enforceTdd when they're absent.
+    {
+      files: [
+        '**/src/main/java/**',
+        '**/src/main/kotlin/**',
+        '**/src/test/**',
+        '**/src/sharedTest/**',
+      ],
+      rules: [withMutationProbe(withKotlinFastPath(enforceTdd()))],
+    },
+
+    // Boundaries: ports-and-adapters. The Dependency Rule judgments
+    // the import screen can't make — thin adapters, vendor types in
+    // port signatures, glossary-conflicting names.
+    {
+      files: CORE_GLOBS,
+      rules: [
+        enforcePortsBoundary({
+          instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
+          glossaryPath: GLOSSARY,
+        }),
+      ],
+    },
+
+    // Outer loop: acceptance-testing. The Language Test on the spec
+    // layer only. Point at wherever your executable specifications
+    // live (e.g. an acceptance package under androidTest, or Gherkin
+    // features); protocol drivers and test infrastructure must NOT
+    // match.
+    {
+      files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt', '**/*.feature'],
+      rules: [
+        withAcceptanceLanguageFastPath(
+          enforceAcceptanceLanguage({ glossaryPath: GLOSSARY }),
+        ),
+      ],
+    },
+
+    // ── Ship gates ───────────────────────────────────────────────────
+
+    // The commit half of the mutation-probe round-trip: no commit
+    // while a `probity: mutation-probe` marker is still on disk —
+    // reverting the mutation removes the marker with it.
+    enforceProbeReversion({ roots: [ROOT] }),
+
     // No commit on an unverified tree. GRADLE_TEST_COMMAND matches
     // plain and flavored test tasks (`./gradlew test`,
     // `./gradlew :app:testDevDebugUnitTest`); tighten it to your
     // module's real task if you want the gate strict about which
-    // suite counts.
-    requireCommand({
-      before: { kind: 'command', match: /git commit/ },
-      command: GRADLE_TEST_COMMAND,
-      after: { kind: 'write' },
-      reason:
-        'Run the Gradle test suite after the last change before ' +
-        'committing (see test-driven-development: commit only on green).',
-    }),
+    // suite counts. Stricter than Probity's requireCommand: the
+    // recorded run's output must actually be green, not merely exist.
+    requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ],
 })

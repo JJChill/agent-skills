@@ -23,23 +23,28 @@ import {
   defineConfig,
   enforceTdd,
   forbidContentPattern,
-  requireCommand,
   type RuleEntry,
 } from '@nizos/probity'
 
-import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  enforceAcceptanceLanguage,
+  withAcceptanceLanguageFastPath,
+} from './rules/acceptance-language.js'
 import {
   enforceSpecTestParity,
   surfaceScenarioLinkBreakage,
 } from './rules/spec-test-parity.js'
 import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
+  enforceProbeReversion,
   forbidNewAmbientEffects,
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
   MOCKING_LIBRARY_IMPORTS,
+  requireGreenTestRun,
   withKotlinFastPath,
+  withMutationProbe,
 } from './rules/kotlin.js'
 import { enforcePortsBoundary } from './rules/ports-and-adapters.js'
 
@@ -66,34 +71,29 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
   // doesn't exist yet — wiring it up front costs nothing.
   const glossary = join(root, 'docs/GLOSSARY.md')
 
-  return [
-    // ── Inner loop: test-driven-development ─────────────────────────
-    // `src/*Main` / `src/*Test` cover every KMP source set
-    // (commonMain, androidMain, commonTest, androidHostTest, …);
-    // main/test cover classic Android app modules alongside them.
-    {
-      files: [
-        '**/src/*Main/kotlin/**',
-        '**/src/*Test/kotlin/**',
-        '**/src/main/kotlin/**',
-        '**/src/test/kotlin/**',
-      ],
-      rules: [withKotlinFastPath(enforceTdd())],
-    },
+  // Core purity scope — the inside of the hexagon: domain, ports,
+  // use cases, and MVI presentation in commonMain. Adapter, DI, and
+  // Compose ui packages import vendors by design — excluded.
+  const CORE_GLOBS = [
+    '**/src/commonMain/**/domain/**',
+    '**/src/commonMain/**/port/**',
+    '**/src/commonMain/**/usecase/**',
+    '**/src/commonMain/**/presentation/**',
+  ]
 
-    // ── Boundaries: ports-and-adapters ──────────────────────────────
-    // Core purity for the inside of the hexagon: domain, ports,
-    // use cases, and MVI presentation in commonMain. Adapter, DI,
-    // and Compose ui packages import vendors by design — excluded.
-    // The import screen also catches Koin here: DI stays at the
-    // composition root, never in domain code.
+  // Rule ordering principle: Probity stops at the first violation, so
+  // every deterministic screen (pattern match, free, instant) is
+  // listed before any AI-validated rule (a model call per matching
+  // write). A write with a vendor import in core code must be
+  // rejected by the free import screen, not after a TDD model call.
+
+  return [
+    // ── Deterministic wall ───────────────────────────────────────────
+
+    // Core import/effect screens. The import screen also catches Koin
+    // here: DI stays at the composition root, never in domain code.
     {
-      files: [
-        '**/src/commonMain/**/domain/**',
-        '**/src/commonMain/**/port/**',
-        '**/src/commonMain/**/usecase/**',
-        '**/src/commonMain/**/presentation/**',
-      ],
+      files: CORE_GLOBS,
       rules: [
         forbidContentPattern({
           match: KOTLIN_INFRASTRUCTURE_IMPORTS,
@@ -111,16 +111,11 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
             'nowEpochMillis: () -> Long) with real defaults supplied ' +
             'only in platform adapters or DI modules',
         }),
-        enforcePortsBoundary({
-          instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
-          glossaryPath: glossary,
-        }),
       ],
     },
 
     // No mocking library at all: this convention is hand-written
     // fakes substituted at ports (shared via testfixtures modules).
-    // Deterministic — free to run broadly.
     {
       files: ['**/src/*Test/kotlin/**', '**/src/test/kotlin/**'],
       rules: [
@@ -135,30 +130,6 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
       ],
     },
 
-    // ── Outer loop: acceptance-testing ──────────────────────────────
-    // The Language Test on the spec layer: Markdown Given/When/Then
-    // specs and the acceptance test cases. Robot DSL classes are
-    // layer 2 (they know about UiState and MVI intents) — excluded.
-    {
-      files: [
-        'docs/specs/**/*.feature.md',
-        '**/acceptance/**',
-        '!**/*Robot.kt',
-      ],
-      // requireGlossaryEntry: true is the strict "glossary
-      // conversation happens first" mode — turn it on once the
-      // glossary has real coverage, not on day one.
-      rules: [enforceAcceptanceLanguage({ glossaryPath: glossary })],
-    },
-
-    // Ubiquitous-language drift: renaming or removing a glossary term
-    // that specs, tests, or code still use blocks the glossary edit
-    // with the list of users.
-    {
-      files: ['docs/GLOSSARY.md'],
-      rules: [surfaceGlossaryTermBreakage({ searchRoots: [root] })],
-    },
-
     // Spec↔test traceability. Editing a spec must not silently break
     // the tests that claim its scenarios: removing or renaming a
     // `## Scenario:` heading still covered by a test blocks with the
@@ -169,27 +140,105 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
       rules: [surfaceScenarioLinkBreakage({ testRoots: [root] })],
     },
 
+    // Ubiquitous-language drift: renaming or removing a glossary term
+    // that specs, tests, or code still use blocks the glossary edit
+    // with the list of users.
+    {
+      files: ['docs/GLOSSARY.md'],
+      rules: [surfaceGlossaryTermBreakage({ searchRoots: [root] })],
+    },
+
+    // ── AI-validated judgment layer ──────────────────────────────────
+
+    // Inner loop: test-driven-development. `src/*Main` / `src/*Test`
+    // cover every KMP source set (commonMain, androidMain, commonTest,
+    // androidHostTest, …); main/test cover classic Android app modules
+    // alongside them. The Kotlin fast-path keeps the most common write
+    // (a single new @Test) deterministic. The mutation-probe wrapper
+    // lets a write marked `// probity: mutation-probe` (a deliberate
+    // break proving a retrofitted test bites) through without a
+    // red-before-green demand — enforceProbeReversion below blocks
+    // commits until the probe is reverted.
+    {
+      files: [
+        '**/src/*Main/kotlin/**',
+        '**/src/*Test/kotlin/**',
+        '**/src/main/kotlin/**',
+        '**/src/test/kotlin/**',
+      ],
+      rules: [withMutationProbe(withKotlinFastPath(enforceTdd()))],
+    },
+
+    // Boundaries: ports-and-adapters. The Dependency Rule judgments
+    // the import screen can't make — thin adapters, vendor types in
+    // port signatures, glossary-conflicting names.
+    {
+      files: CORE_GLOBS,
+      rules: [
+        enforcePortsBoundary({
+          instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
+          glossaryPath: glossary,
+        }),
+      ],
+    },
+
+    // Outer loop: acceptance-testing. The Language Test on the spec
+    // layer: Markdown Given/When/Then specs and the acceptance test
+    // cases. Robot/DSL/driver classes are layers 2-3 (they know about
+    // UiState and MVI intents) — excluded, whichever of the two
+    // layouts a feature uses (merged *Robot.kt, or split *Dsl.kt +
+    // *Driver.kt per the four-layer model).
+    {
+      files: [
+        'docs/specs/**/*.feature.md',
+        '**/acceptance/**',
+        '!**/*Robot.kt',
+        '!**/*Dsl.kt',
+        '!**/*Driver.kt',
+      ],
+      // requireGlossaryEntry: true is the strict "glossary
+      // conversation happens first" mode — turn it on once the
+      // glossary has real coverage, not on day one. The fast-path
+      // wrapper keeps a single-@Test write that only reuses existing
+      // DSL vocabulary free of AI calls (Markdown specs always go to
+      // the validator).
+      rules: [
+        withAcceptanceLanguageFastPath(
+          enforceAcceptanceLanguage({ glossaryPath: glossary }),
+        ),
+      ],
+    },
+
     // ── Ship gates ───────────────────────────────────────────────────
     // Definition of done, made mechanical: every non-wip scenario in
     // docs/specs is claimed by an acceptance test (Covers: tag), and
     // every tag resolves to a real scenario. Mark in-progress specs
     // `## Scenario (wip):`. CI mirror for human commits:
     // scripts/spec-parity.mjs.
+    //
+    // Brownfield adoption: a spec suite that predates the gate would
+    // block every commit. Generate a baseline once —
+    //   node scripts/spec-parity.mjs --specs docs/specs \
+    //     --baseline docs/specs/.parity-baseline --write-baseline
+    // — and commit it: baselined scenarios are exempt while new ones
+    // are enforced from day one; burn the file down by deleting lines
+    // as coverage lands. No baseline file → full enforcement.
     enforceSpecTestParity({
       specsDir: join(root, 'docs/specs'),
       testRoots: [root],
+      baselinePath: join(root, 'docs/specs/.parity-baseline'),
     }),
 
+    // The commit half of the mutation-probe round-trip: no commit
+    // while a `probity: mutation-probe` marker is still on disk —
+    // reverting the mutation removes the marker with it.
+    enforceProbeReversion({ roots: [root] }),
+
     // Matches testAndroidHostTest, :feature:x:testAndroidHostTest,
-    // :desktop:jvmTest, allTests, :app:testDevDebugUnitTest.
-    requireCommand({
-      before: { kind: 'command', match: /git commit/ },
-      command: GRADLE_TEST_COMMAND,
-      after: { kind: 'write' },
-      reason:
-        'Run the Gradle test suite after the last change before ' +
-        'committing (see test-driven-development: commit only on green).',
-    }),
+    // :desktop:jvmTest, allTests, :app:testDevDebugUnitTest. Stricter
+    // than Probity's requireCommand: the recorded run's output must
+    // actually be green, not merely exist.
+    requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ]
 }
 

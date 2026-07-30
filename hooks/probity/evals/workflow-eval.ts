@@ -24,8 +24,10 @@
  * `files` globs resolved by rules/scoping.ts (a pinned replica of
  * Probity's own picomatch matcher and glob anchoring). Out-of-scope
  * steps — an adapter with a vendor import, a Koin DI module, a
- * mechanics-laden *Robot.kt — assert that the exclusions hold and
- * that no AI validator is even consulted.
+ * mechanics-laden *Robot.kt and its split-layout *Driver.kt twin —
+ * assert that the exclusions hold and that no AI validator is even
+ * consulted. Steps blocked by the deterministic wall additionally
+ * assert AI silence: rule order must reject them at zero model cost.
  *
  * What this does NOT cover: Probity's own engine (hook payload
  * parsing, transcript adapters) and whether picomatch's semantics
@@ -60,11 +62,16 @@ const ACCEPTANCE_TEST =
 const USECASE = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/usecase/TrackParcel.kt'
 const DOMAIN = 'feature/tracking/src/commonMain/kotlin/com/example/tracking/domain/Parcel.kt'
 // Out-of-scope by design: the layer-2 Robot DSL (excluded from the
-// Language Test via `!**/*Robot.kt`), a platform adapter source set,
-// and a DI package — each written with content the core rules would
-// block, to prove the exclusions hold.
+// Language Test via `!**/*Robot.kt`), a split-layout protocol driver
+// (`!**/*Driver.kt`, the four-layer variant), a platform adapter
+// source set, and a DI package — each written with content the core
+// rules would block, to prove the exclusions hold.
 const ROBOT =
   'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/TrackingRobot.kt'
+const DRIVER =
+  'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/TrackingViewModelDriver.kt'
+// Incremental-adoption baseline for the spec↔test parity gate.
+const BASELINE = 'docs/specs/.parity-baseline'
 const ADAPTER =
   'feature/tracking/src/androidMain/kotlin/com/example/tracking/adapter/RoomParcelStore.kt'
 const DI_MODULE =
@@ -150,6 +157,26 @@ class TrackingRobot {
 }
 `
 
+// Layer 3 of the four-layer model, split layout: same mechanics as
+// the Robot, behind a driver interface — equally exempt.
+const DRIVER_V1 = `package com.example.tracking.acceptance
+
+import com.example.tracking.presentation.TrackingViewModel
+import com.example.tracking.presentation.TrackingIntent
+
+class TrackingViewModelDriver : TrackingDriver {
+    private val viewModel = TrackingViewModel()
+
+    override fun registerParcel(parcelId: String) {
+        viewModel.onIntent(TrackingIntent.Register(parcelId))
+    }
+
+    override fun verifyCurrentLocation(parcelId: String, depotId: String) {
+        check(viewModel.uiState.value.locationOf(parcelId) == depotId)
+    }
+}
+`
+
 // Vendor import + direct clock read: both blocked in core packages,
 // both this adapter's job.
 const ADAPTER_V1 = `package com.example.tracking.adapter
@@ -175,6 +202,24 @@ import org.koin.dsl.module
 
 val trackingModule = module {
     factory { TrackParcel(get()) }
+}
+`
+
+// A deliberate break of the use case, marked as a mutation probe
+// (proving a retrofitted test bites). The TDD gate must let it
+// through deterministically; the commit gate must hold it hostage
+// until reverted.
+const USECASE_PROBE = `package com.example.tracking.usecase
+
+import com.example.tracking.domain.Parcel
+import com.example.tracking.port.ParcelStore
+
+class TrackParcel(private val parcels: ParcelStore) {
+    suspend fun arriveAtDepot(parcelId: String, depotId: String) {
+        val parcel = parcels.byId(parcelId) ?: return
+        // probity: mutation-probe — proving the depot test bites; revert before commit
+        parcels.save(parcel)
+    }
 }
 `
 
@@ -265,6 +310,21 @@ Then the package reports that depot as its current location
     ai: { language: 'violation' },
   },
   {
+    title: 'Spec scenario naming the backend (one language standard for specs and tests)',
+    action: write(
+      SPEC,
+      `${SPEC_V1}
+## Scenario: Failed registration is retryable
+Given the backend rejects a parcel registration
+When the sender tries again once the backend recovers
+Then the parcel is registered
+`,
+    ),
+    expect: 'block',
+    expectRule: 'enforceAcceptanceLanguage',
+    ai: { language: 'violation' },
+  },
+  {
     title: 'Robot DSL full of UiState/intent mechanics (*Robot.kt is exempt from the Language Test)',
     action: write(ROBOT, ROBOT_V1),
     expect: 'allow',
@@ -272,11 +332,21 @@ Then the package reports that depot as its current location
     ai: { tdd: 'pass' },
   },
   {
-    title: 'Acceptance test with Covers tag (single new @Test → fast-path)',
+    title: 'Split-layout protocol driver, same mechanics (*Driver.kt is equally exempt)',
+    action: write(DRIVER, DRIVER_V1),
+    expect: 'allow',
+    expectAiSilent: ['language'],
+    ai: { tdd: 'pass' },
+  },
+  {
+    title: 'Acceptance test with Covers tag (single new @Test → both TDD and language fast-paths)',
     action: write(ACCEPTANCE_TEST, ACCEPTANCE_TEST_V1),
     expect: 'allow',
     expectNote: 'fast-path',
-    ai: { language: 'pass' },
+    // Overlapping scopes must not defeat the fast-path: the language
+    // rule skips its AI call when the one new test only reuses
+    // vocabulary already declared in the suite's DSL files.
+    expectAiSilent: ['tdd', 'language'],
   },
   {
     title: 'Production code before any failing test was observed',
@@ -290,6 +360,12 @@ Then the package reports that depot as its current location
     action: command(RED_RUN.command),
     commandOutput: RED_RUN.output,
     expect: 'allow',
+  },
+  {
+    title: 'Commit straight after the red run (a recorded invocation is not a passing suite)',
+    action: command('git commit -m "wip parcel tracking"'),
+    expect: 'block',
+    expectRule: 'requireGreenTestRun',
   },
   {
     title: 'Minimal implementation addressing the observed failure',
@@ -319,7 +395,9 @@ Then the package reports that depot as its current location
     ),
     expect: 'block',
     expectRule: 'forbidContentPattern',
-    ai: { tdd: 'pass' },
+    // The deterministic wall runs before the AI layer: rejecting this
+    // write must cost zero model calls.
+    expectAiSilent: ['tdd', 'boundary'],
   },
   {
     title: 'Domain code reading the OS clock directly',
@@ -329,7 +407,7 @@ Then the package reports that depot as its current location
     ),
     expect: 'block',
     expectRule: 'forbidNewAmbientEffects',
-    ai: { tdd: 'pass' },
+    expectAiSilent: ['tdd', 'boundary'],
   },
   {
     title: 'Test reaching for a mocking library',
@@ -339,13 +417,13 @@ Then the package reports that depot as its current location
     ),
     expect: 'block',
     expectRule: 'forbidContentPattern',
-    ai: { language: 'pass' },
+    expectAiSilent: ['tdd', 'language'],
   },
   {
     title: 'Commit with writes since the last test run',
     action: command('git commit -m "parcel tracking"'),
     expect: 'block',
-    expectRule: 'requireCommand',
+    expectRule: 'requireGreenTestRun',
   },
   {
     title: 'Run the suite — green',
@@ -388,6 +466,57 @@ Then the package reports that depot as its current location
     action: command('git commit -m "promote notification scenario"'),
     expect: 'block',
     expectRule: 'enforceSpecTestParity',
+  },
+  {
+    title: 'Adopt incrementally: baseline the uncovered scenario (brownfield burn-down)',
+    action: write(
+      BASELINE,
+      '# Brownfield adoption baseline — burn down by deleting lines.\n' +
+        'parcel-tracking.feature.md :: Recipient is notified on final delivery\n',
+    ),
+    expect: 'allow',
+  },
+  {
+    title: 'Run the suite — green after the baseline write',
+    action: command(GREEN_RUN.command),
+    commandOutput: GREEN_RUN.output,
+    expect: 'allow',
+  },
+  {
+    title: 'Commit with the baselined scenario exempt from parity',
+    action: command('git commit -m "promote notification scenario"'),
+    expect: 'allow',
+  },
+  {
+    title: 'Mutation probe: deliberate break marked for reversion (TDD gate bypassed deterministically)',
+    action: write(USECASE, USECASE_PROBE),
+    expect: 'allow',
+    expectNote: 'mutation-probe',
+    expectAiSilent: ['tdd'],
+    ai: { boundary: 'pass' },
+  },
+  {
+    title: 'Commit with the probe still on disk',
+    action: command('git commit -m "retry scenario"'),
+    expect: 'block',
+    expectRule: 'enforceProbeReversion',
+  },
+  {
+    title: 'Revert the probe (restore the original implementation)',
+    action: write(USECASE, USECASE_V1),
+    expect: 'allow',
+    ai: { tdd: 'pass', boundary: 'pass' },
+  },
+  {
+    title: 'Run the suite — green after the reversion',
+    action: command(GREEN_RUN.command),
+    commandOutput: GREEN_RUN.output,
+    expect: 'allow',
+  },
+  {
+    title: 'Commit with the probe reverted',
+    action: command('git commit -m "retry scenario"'),
+    expect: 'allow',
   },
   {
     title: 'Rename glossary term "Depot" while spec and test still use it',
