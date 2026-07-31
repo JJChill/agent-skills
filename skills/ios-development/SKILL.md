@@ -41,8 +41,9 @@ xcrun simctl list devices available
 ### 2. Make dependency state reproducible
 
 - Use the repository-pinned dependency command and versions (`bundle exec pod install`, Swift Package resolution, Tuist, or XcodeGen).
-- Do not upgrade dependencies while trying to prove the existing development build.
-- Prefer an isolated `-derivedDataPath` under a temporary or repository-approved build directory.
+- Do not upgrade dependencies while trying to prove the existing development build. For SwiftPM, pass `-onlyUsePackageVersionsFromResolvedFile` (and `-skipPackageUpdates`) so a build cannot silently drift the lock.
+- Prefer an isolated `-derivedDataPath` and `-packageCachePath` under a fresh per-run temporary directory. Use a new directory per attempt when a result bundle is involved: Xcode refuses to overwrite an existing `.xcresult`, so a reused path fails on the second run.
+- Add `-hideShellScriptEnvironment` to logged or automated `xcodebuild` invocations — build pre-actions and dependency tools may inherit credentials, and their environments must not end up in transcripts.
 - If dependency resolution requires unavailable credentials or network access, stop and report the exact boundary. Do not rewrite private dependencies to public substitutes.
 
 ### 3. Build for a concrete simulator
@@ -94,6 +95,7 @@ For acceptance tests, also follow `acceptance-testing`:
 - Keep test cases in domain language and put `XCUIApplication`, accessibility identifiers, coordinates, and navigation in protocol drivers.
 - Put reusable user goals in a DSL between specifications and drivers.
 - Launch a real development app product. Replace external systems only through supported launch arguments, environment variables, or production-defined ports.
+- Start UI tests at the screen under test with an **initial-route port**, not by tapping through the app: the application owns a port (e.g. `InitialApplicationRouteProviding`) whose debug-only adapter translates a launch environment variable into a starting route, while production and unset environments always take the normal launch sequence. The seam is application-defined and inert in release builds; the driver just sets the variable.
 - Use unique per-test data. Reset only state owned by that test.
 - Poll with XCTest expectations, predicate expectations, or element-existence timeouts. Never use fixed sleeps.
 - Add the target to a shared scheme or test plan and confirm its host application and bundle loader settings.
@@ -106,7 +108,9 @@ Separate each result:
 - build: command and `BUILD SUCCEEDED`
 - install: simulator UDID and installed application path
 - launch: bundle identifier and returned process identifier
-- tests: test count and `.xcresult` path
+- tests: test count and `.xcresult` path — read the definitive verdict from the result bundle (`xcrun xcresulttool get test-results summary --path <RESULT>.xcresult`), not from log grepping
+
+Judge success by exit status and the result-bundle summary, not by the absence of warnings. Real projects have **known non-blocking diagnostics** (a missing optional linter, a version-string mismatch, concurrency warnings) — check repository instructions for a documented list, and when you discover a new one, record it there so the next agent doesn't chase it or, worse, treat suppressing it as progress.
 
 If Xcode, a compatible simulator runtime, credentials, or configuration files are missing, describe the blocked claim and the next exact command. Never translate "not attempted" into "passed."
 
