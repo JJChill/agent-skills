@@ -358,6 +358,32 @@ Then the parcel is registered
     ai: { tdd: 'pass' },
   },
   {
+    title: 'Acceptance test with no Covers tag (spec-first: blocked before any AI call)',
+    action: write(
+      ACCEPTANCE_TEST,
+      ACCEPTANCE_TEST_V1.replace(
+        /^\s*\/\/ Covers:[^\n]*\n/m,
+        '',
+      ),
+    ),
+    expect: 'block',
+    expectRule: 'requireSpecBackedAcceptanceTest',
+    expectAiSilent: ['tdd', 'language'],
+  },
+  {
+    title: 'Acceptance test citing a scenario the spec does not have yet',
+    action: write(
+      ACCEPTANCE_TEST,
+      ACCEPTANCE_TEST_V1.replace(
+        'Scenario: Registered parcel reports its current depot',
+        'Scenario: Parcel teleports between depots',
+      ),
+    ),
+    expect: 'block',
+    expectRule: 'requireSpecBackedAcceptanceTest',
+    expectAiSilent: ['tdd', 'language'],
+  },
+  {
     title: 'Acceptance test with Covers tag (single new @Test → both TDD and language fast-paths)',
     action: write(ACCEPTANCE_TEST, ACCEPTANCE_TEST_V1),
     expect: 'allow',

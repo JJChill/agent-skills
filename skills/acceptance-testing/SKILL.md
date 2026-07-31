@@ -35,6 +35,16 @@ User story ──▶ Concrete examples ──▶ Executable specifications ─�
 3. **Automate at least one test per acceptance criterion, before production code.** These failing specifications are the target the implementation aims at.
 4. **Definition of done:** every acceptance criterion has at least one passing automated acceptance test.
 
+### The Feature File Comes First
+
+The examples live in a durable, human-readable spec artifact — a Gherkin `.feature` file or a Markdown feature file (`docs/specs/<feature>.feature.md` with one `## Scenario: <title>` heading per example) — written and agreed **before** any test code. The test then *transcribes* the scenario and declares which one it covers, one tag per scenario:
+
+```kotlin
+// Covers: onboarding.feature.md :: Scenario: New user completes onboarding
+```
+
+An acceptance test with no feature file behind it is not a specification — it's a test someone will reverse-engineer intent from later. The order is mechanical: scenario heading first, then the test that claims it. The tags make traceability checkable in both directions (every scenario covered, every tag resolving to a real scenario); mark scenarios still being driven outside-in `## Scenario (wip):`. Teams enforcing this with hooks can use the `requireSpecBackedAcceptanceTest` / `enforceSpecTestParity` rules in the Probity templates (`hooks/PROBITY.md`).
+
 ### The Language Test
 
 Apply the **least-technical-person test**: the least technical person who understands the problem domain must be able to read the specification and confirm it says what they want. If the spec mentions clicking, pages, fields, JSON, tables, or services, it fails.
@@ -143,6 +153,7 @@ Trustworthy tests control all the variables.
 
 - Specifications mentioning pages, buttons, fields, URLs, endpoints, JSON, tables, or any named UI element
 - Acceptance criteria written after the implementation, or reverse-engineered from it
+- Acceptance test code with no feature file behind it — scenarios that exist only as test method names, or `Covers:` tags pointing at scenarios that don't exist
 - Test code calling the SUT's internals or HTTP endpoints directly from the test case layer (no DSL/driver layers)
 - Logic, assertions, or SUT interaction inside Gherkin step definitions
 - `sleep`/fixed waits anywhere in the suite
@@ -156,6 +167,7 @@ Trustworthy tests control all the variables.
 After writing or changing acceptance tests, confirm:
 
 - [ ] Every acceptance criterion of the story has at least one automated executable specification
+- [ ] Every scenario exists as a heading in a feature file **before** its test, and every test declares the scenario it covers (`Covers:` tag) — traceability holds in both directions
 - [ ] Specifications were written (and seen failing) before the production code — or, when a spec is retrofitted onto behavior that already exists (common on brownfield projects), it was **mutation-checked**: temporarily break the behavior it specifies, watch the spec go red, restore, and watch it go green. A retrofitted spec that has never failed proves nothing. Choose the mutation against the *covered* scenario set — and if a probe stays green under every suite, that is a **coverage finding** (the behavior's scenario is unwritten, unclaimed, or sitting in an adoption baseline): record it as such rather than silently switching to a different probe
 - [ ] Each spec passes the least-technical-person test — domain language, zero implementation detail
 - [ ] Each spec asserts a single outcome

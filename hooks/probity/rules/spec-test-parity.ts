@@ -222,6 +222,102 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
 }
 
 /**
+ * Matches a test-case declaration in the acceptance layer: a Kotlin/
+ * Java `@Test` annotation or a Swift XCTest `func test…` method. The
+ * pattern is intentionally coarse — it only needs to detect that a
+ * write ADDS test cases, not parse them.
+ */
+const DEFAULT_TEST_DECLARATION = /@Test\b|\bfunc\s+test\w*\s*\(/g
+
+function countTests(content: string, pattern: RegExp): number {
+  return [...content.matchAll(pattern)].length
+}
+
+/**
+ * Spec-first, made mechanical: a write that adds a new acceptance
+ * test case is blocked unless it also adds a `Covers:` tag pointing
+ * at a `## Scenario:` heading that ALREADY EXISTS in `specsDir`. The
+ * executable specification (`*.feature.md`) must be written before
+ * the test that claims it — an agent that codes the test first gets
+ * told exactly what to create and where.
+ *
+ * This is the write-time front half of the traceability story;
+ * {@link enforceSpecTestParity} is the commit-time back half (every
+ * scenario covered, every tag resolving). Together they close the
+ * gap where an agent authors a whole acceptance suite with no
+ * feature file and nothing objects until commit — or ever, if the
+ * tests carry no tags at all.
+ *
+ * Delta-based and deterministic (no AI call): only NEW test cases
+ * demand a NEW resolving tag, so edits inside an existing brownfield
+ * test file pass untouched, and a pre-existing dangling tag can't
+ * block unrelated work (the commit gate owns that). `(wip)` and
+ * `(planned)` scenarios count as existing — they are exactly the
+ * headings outside-in work drives against.
+ *
+ * Applies to: write actions — scope it via a `{ files, rules }`
+ * block to the acceptance test-case layer only (e.g.
+ * `**\/acceptance/**\/*Spec.kt`), never to drivers/DSL/infrastructure.
+ *
+ * @param options.specsDir — absolute path to the specs directory.
+ *   Missing directory ⇒ every new tag is unresolved ⇒ the deny
+ *   message says to create the first feature file (greenfield
+ *   enforcement, not a free pass).
+ * @param options.testDeclarationPattern — what counts as a test-case
+ *   declaration (default: Kotlin/Java `@Test` or Swift `func test…`).
+ */
+export function requireSpecBackedAcceptanceTest(options: {
+  specsDir: string
+  testDeclarationPattern?: RegExp
+}): Rule {
+  const declaration = options.testDeclarationPattern ?? DEFAULT_TEST_DECLARATION
+  return async function requireSpecBackedAcceptanceTest(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    const before = await ctx?.readFile?.(action.path)
+    const beforeContent = before?.kind === 'present' ? before.content : ''
+    const testsAdded =
+      countTests(action.content, declaration) > countTests(beforeContent, declaration)
+    if (!testsAdded) return { kind: 'pass' }
+    const beforeKeys = new Set(
+      extractCoversRefs(action.path, beforeContent).map((ref) => ref.key),
+    )
+    const newRefs = extractCoversRefs(action.path, action.content).filter(
+      (ref) => !beforeKeys.has(ref.key),
+    )
+    if (newRefs.length === 0) {
+      return {
+        kind: 'violation',
+        reason:
+          'This write adds a new acceptance test case with no new ' +
+          '`Covers:` tag. Acceptance tests are written spec-first: ' +
+          `add a \`## Scenario: <title>\` to a *.feature.md under ` +
+          `${options.specsDir} describing the behavior in domain ` +
+          'language, then re-apply this test with\n' +
+          '  // Covers: <spec>.feature.md :: Scenario: <title>\n' +
+          'If the scenario is still being shaped, write it as ' +
+          '`## Scenario (wip):` — it still counts.',
+      }
+    }
+    const known = new Set(scanSpecs(options.specsDir).map((s) => s.key))
+    const unresolved = newRefs.filter((ref) => !known.has(ref.key))
+    if (unresolved.length === 0) return { kind: 'pass' }
+    return {
+      kind: 'violation',
+      reason:
+        'This write adds acceptance test(s) whose `Covers:` tag points ' +
+        'at a scenario that does not exist yet. The feature file comes ' +
+        'first: create the scenario heading (exact title match, ' +
+        `case-insensitive) under ${options.specsDir}, then re-apply ` +
+        'this test.\n' +
+        formatList(unresolved.map((ref) => `${ref.specFile} :: Scenario: ${ref.title}`)),
+    }
+  }
+}
+
+/**
  * Surfaces link breakage at the moment it is created: when a write
  * to a `*.feature.md` file removes or renames a `## Scenario:`
  * heading that acceptance tests still claim, the write is blocked

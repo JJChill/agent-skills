@@ -39,6 +39,7 @@ import {
   enforceAdapterObservability,
   enforcePortsBoundary,
 } from './rules/ports-and-adapters.js'
+import { requireSpecBackedAcceptanceTest } from './rules/spec-test-parity.js'
 
 // Ubiquitous-language glossary (copy GLOSSARY.template.md here). The
 // glossary-aware rules degrade gracefully while it doesn't exist yet.
@@ -101,6 +102,19 @@ export default defineConfig({
     {
       files: ['docs/GLOSSARY.md'],
       rules: [surfaceGlossaryTermBreakage({ searchRoots: [ROOT] })],
+    },
+
+    // Spec-first, at write time: adding a new acceptance test case
+    // requires a new Covers: tag resolving to a `## Scenario:` that
+    // already exists in docs/specs — the feature file is written
+    // before the test that claims it. Deterministic; the pattern also
+    // matches Swift XCTest (`func test…`), so an XCUITest acceptance
+    // glob works here unchanged.
+    {
+      files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt'],
+      rules: [
+        requireSpecBackedAcceptanceTest({ specsDir: join(ROOT, 'docs/specs') }),
+      ],
     },
 
     // ── AI-validated judgment layer ──────────────────────────────────

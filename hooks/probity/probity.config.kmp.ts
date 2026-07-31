@@ -32,6 +32,7 @@ import {
 } from './rules/acceptance-language.js'
 import {
   enforceSpecTestParity,
+  requireSpecBackedAcceptanceTest,
   surfaceScenarioLinkBreakage,
 } from './rules/spec-test-parity.js'
 import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
@@ -142,6 +143,18 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
     {
       files: ['docs/specs/**/*.feature.md'],
       rules: [surfaceScenarioLinkBreakage({ testRoots: [root] })],
+    },
+
+    // Spec-first, at write time: adding a new acceptance test case
+    // requires a new Covers: tag resolving to a scenario that already
+    // exists in docs/specs — the feature file is written before the
+    // test that claims it. Scoped to the test-case layer only
+    // (*Spec.kt); drivers/DSL/scenario bodies add no @Test functions.
+    {
+      files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt'],
+      rules: [
+        requireSpecBackedAcceptanceTest({ specsDir: join(root, 'docs/specs') }),
+      ],
     },
 
     // Ubiquitous-language drift: renaming or removing a glossary term
