@@ -40,6 +40,11 @@ export const XCUITEST_MECHANICS = /XCUIApplication|XCUIElement|XCUICoordinate/
  * `xcrun xcresulttool get test-results summary` reports
  * `"result" : "Passed"`. Either counts as evidence; a recorded
  * invocation with neither is not a passing suite.
+ *
+ * `-quiet` suppresses the verdict banner (confirmed against a real
+ * run: the last line is just `Testing started`), so with a -quiet
+ * runbook the xcresulttool readback is the ONLY green evidence the
+ * gate will see — make it a mandatory step of "run the tests".
  */
 export const XCODEBUILD_TEST_COMMAND =
   /\bxcodebuild\b[\s\S]*\btest(?:-without-building)?\b|xcresulttool\s+get\s+test-results/

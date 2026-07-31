@@ -123,11 +123,19 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     },
 
     // Spec-first, at write time: adding a new acceptance test case
-    // (func test…) requires a new Covers: tag resolving to a
+    // (func test…) requires a Covers: tag resolving to a
     // `## Scenario:` heading that already exists in docs/specs — the
-    // feature file is written before the test that claims it.
+    // feature file is written before the test that claims it. A file
+    // whose existing tag already resolves may gain further driver
+    // tests for the same scenario (one scenario, many drivers).
+    // Scoped to the whole suite directory, not *Tests.swift: XCTest
+    // only discovers `func test…` methods, so the declaration pattern
+    // is the real detector and a creative filename can't dodge the
+    // rule. NOTE the directory itself is the boundary — acceptance
+    // tests added outside it (e.g. a new App/Tests/ target) are
+    // invisible to every rule here until the globs learn the path.
     {
-      files: ['AcceptanceTests/**/*Tests.swift'],
+      files: ['AcceptanceTests/**'],
       rules: [
         requireSpecBackedAcceptanceTest({ specsDir: join(root, 'docs/specs') }),
       ],
@@ -166,12 +174,22 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // until it is reverted. Telemetry-only additions pass
     // deterministically so the observability rule and the TDD gate
     // never contradict each other.
+    // App/*.swift catches root-level sources (AppDelegate.swift lives
+    // beside App/Sources, not inside it) — audit these globs against
+    // your tree with scripts/scope-report.ts; a write no rule matches
+    // is a silent free pass.
     {
-      files: ['App/Sources/**', 'AcceptanceTests/**', 'VPNNetworkExtension/**'],
+      files: [
+        'App/*.swift',
+        'App/Sources/**',
+        'AcceptanceTests/**',
+        'VPNNetworkExtension/**',
+      ],
       rules: [
         withMutationProbe(
           withTelemetryFastPath(enforceTdd(), {
             patterns: SWIFT_TELEMETRY_LINES,
+            filePattern: /\.swift$/,
           }),
         ),
       ],
@@ -207,7 +225,7 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
               'port-tap decorator wired where the app composes its ' +
               'dependencies.',
           }),
-          { patterns: SWIFT_TELEMETRY_LINES },
+          { patterns: SWIFT_TELEMETRY_LINES, filePattern: /\.swift$/ },
         ),
       ],
     },
@@ -252,7 +270,13 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // No commit on an unverified tree. Matches `xcodebuild … test`
     // and xcresulttool summary readbacks; the recorded output must
     // actually be green (** TEST SUCCEEDED ** or "result": "Passed"),
-    // not merely exist.
+    // not merely exist. CALIBRATE AGAINST YOUR REAL COMMAND: a
+    // `-quiet` run suppresses the verdict banner entirely (verified
+    // live), so a runbook that mandates -quiet must also mandate the
+    // `xcrun xcresulttool get test-results summary` readback — that
+    // readback is the output this gate accepts. Run your documented
+    // test command once and confirm successPattern matches what it
+    // actually prints before trusting the gate.
     requireGreenTestRun({
       command: XCODEBUILD_TEST_COMMAND,
       successPattern: XCODEBUILD_TEST_SUCCEEDED,

@@ -394,6 +394,31 @@ Then the parcel is registered
     expectAiSilent: ['tdd', 'language'],
   },
   {
+    title: 'Second driver test for the already-covered scenario (one scenario, many drivers — spec-first must not fire)',
+    action: write(
+      ACCEPTANCE_TEST,
+      ACCEPTANCE_TEST_V1 +
+        `
+class ParcelTrackingSplitDriverAcceptanceTest {
+    private val tracking = TrackingRobot()
+
+    @Test
+    fun \`registered parcel reports its current depot via the split driver\`() {
+        tracking.registerParcel("parcel2")
+        tracking.parcelArrivesAtDepot("parcel2", "depot7")
+        tracking.confirmCurrentLocation("parcel2", "depot7")
+    }
+}
+`,
+    ),
+    expect: 'allow',
+    expectNote: 'fast-path',
+    // No NEW Covers key is added — the file's existing tag already
+    // resolves, which is exactly how a second/third driver transcribes
+    // an already-claimed scenario. The spec-first rule must stay quiet.
+    expectAiSilent: ['tdd', 'language'],
+  },
+  {
     title: 'Production code before any failing test was observed',
     action: write(USECASE, USECASE_V1),
     expect: 'block',
