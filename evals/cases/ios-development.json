@@ -1,0 +1,50 @@
+{
+  "skill_name": "ios-development",
+  "trigger": {
+    "positive": [
+      {
+        "prompt": "Build this Swift app and prove the development scheme launches in an iPhone simulator",
+        "top_k": 1
+      },
+      {
+        "prompt": "Add an XCUITest target for our iOS acceptance scenarios without coupling the specs to screen details",
+        "top_k": 3
+      },
+      {
+        "prompt": "xcodebuild succeeds but simctl cannot install the app; diagnose the simulator deployment",
+        "top_k": 3
+      },
+      {
+        "prompt": "Choose the correct workspace, shared scheme, build configuration, and simulator destination for this Xcode project",
+        "top_k": 1
+      }
+    ],
+    "negative": [
+      {
+        "prompt": "Inspect Chrome network requests to find why this React page renders blank",
+        "owner": "browser-testing-with-devtools"
+      },
+      {
+        "prompt": "Write a failing unit test for this JavaScript currency rounding bug before changing the implementation",
+        "owner": "test-driven-development"
+      }
+    ]
+  },
+  "evals": [
+    {
+      "id": 1,
+      "kind": "execution",
+      "prompt": "The repository context is in project-context.md. Determine and execute as much of the simulator deployment verification as this environment supports. Report each build, install, launch, and test claim separately. Do not change application code.",
+      "expected_output": "Repository-driven Xcode discovery and deployment commands, with real evidence for attempted stages and an explicit blocker for any stage the environment cannot execute",
+      "files": [
+        "ios-development"
+      ],
+      "expectations": [
+        "The response discovers or attempts to discover the workspace, shared scheme, configuration, and available simulator rather than guessing them",
+        "Build, install, launch, and test are treated as separate claims",
+        "If Xcode or an iOS simulator is unavailable, the response reports the exact blocked stage and does not fabricate success",
+        "The response does not modify application code or dependency versions merely to force a result"
+      ]
+    }
+  ]
+}

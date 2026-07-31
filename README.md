@@ -193,9 +193,9 @@ Already installed? How you roll the pack out depends on your codebase. The **[Ad
 
 ---
 
-## All 31 Skills
+## All 32 Skills
 
-The commands above are entry points. The pack includes 31 skills total — 30 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
+The commands above are entry points. The pack includes 32 skills total — 31 lifecycle skills plus the `using-agent-skills` meta-skill. Each skill is a structured workflow with steps, verification gates, and anti-rationalization tables. You can also reference any skill directly.
 
 ### Meta - Discover which skill applies
 
@@ -232,6 +232,7 @@ The commands above are entry points. The pack includes 31 skills total — 30 li
 | [source-driven-development](skills/source-driven-development/SKILL.md) | Ground every framework decision in official documentation - verify, cite sources, flag what's unverified | You want authoritative, source-cited code for any framework or library |
 | [doubt-driven-development](skills/doubt-driven-development/SKILL.md) | Adversarial fresh-context review of every non-trivial decision in-flight - CLAIM → EXTRACT → DOUBT → RECONCILE → STOP, with optional user-authorized cross-model escalation | Stakes are high (production, security, irreversible), working in unfamiliar code, or a confident output is cheaper to verify now than to debug later |
 | [frontend-ui-engineering](skills/frontend-ui-engineering/SKILL.md) | Component architecture, design systems, state management, responsive design, WCAG 2.1 AA accessibility | Building or modifying user-facing interfaces |
+| [ios-development](skills/ios-development/SKILL.md) | Repository-driven Xcode builds, simulator deployment, XCTest/XCUITest design, and evidence-based Apple-platform diagnostics | Building, launching, testing, or troubleshooting a native iOS app |
 | [api-and-interface-design](skills/api-and-interface-design/SKILL.md) | Contract-first design, Hyrum's Law, One-Version Rule, error semantics, boundary validation | Designing APIs, module boundaries, or public interfaces |
 | [ports-and-adapters](skills/ports-and-adapters/SKILL.md) | Hexagonal architecture, strictly enforced — every unowned or separately-deployed dependency (incl. UI, frameworks, OS clock/fs/env) behind a port, thin translation-only adapters, fakes swapped only at ports | Adding any external dependency, structuring a service, or reviewing boundary/test-seam violations |
 
@@ -348,6 +349,7 @@ agent-skills/
 │   ├── source-driven-development/     #   Build
 │   ├── doubt-driven-development/      #   Build
 │   ├── frontend-ui-engineering/       #   Build
+│   ├── ios-development/               #   Build / Verify
 │   ├── test-driven-development/       #   Build
 │   ├── api-and-interface-design/      #   Build
 │   ├── ports-and-adapters/            #   Build
