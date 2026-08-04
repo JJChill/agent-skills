@@ -55,7 +55,7 @@
     },
     {
       "id": 3,
-      "prompt": "Add debit entries to the ledger, test-first. A debit subtracts its amount from the balance and must not drive the balance below zero.",
+      "prompt": "Add debit entries to the ledger, test-first. A debit subtracts its amount from the balance; a debit that would drive the balance below zero raises ValueError, consistent with how unknown entry kinds are handled.",
       "expected_output": "A failing unittest written and shown failing first, a minimal implementation, and the full suite run with the repository's own Python test command",
       "files": [
         "test-driven-development-ecosystem"
