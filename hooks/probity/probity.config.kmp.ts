@@ -34,6 +34,7 @@ import {
   enforceSpecTestParity,
   requireSpecBackedAcceptanceTest,
   surfaceScenarioLinkBreakage,
+  type DriverScope,
 } from './rules/spec-test-parity.js'
 import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
@@ -69,8 +70,18 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
  * Relative globs (`docs/...`) are NOT anchored here: Probity's
  * `loadConfig` anchors them against this file's directory at load
  * time, and the tooling replicates that via `rules/scoping.ts`.
+ *
+ * `parity` optionally switches on the per-scenario driver mapping
+ * (`driverScopes`/`defaultScopes` on the commit-time parity gate) —
+ * projects normally enable it by uncommenting the block in the
+ * `enforceSpecTestParity` call below; the parameter exists so the
+ * workflow eval can exercise the scope checks without changing the
+ * template's default-off posture.
  */
-export function kmpRuleEntries(root: string): RuleEntry[] {
+export function kmpRuleEntries(
+  root: string,
+  parity?: { driverScopes?: DriverScope[]; defaultScopes?: string[] },
+): RuleEntry[] {
   // Ubiquitous-language glossary (copy GLOSSARY.template.md here).
   // The glossary-aware rules degrade gracefully while the file
   // doesn't exist yet — wiring it up front costs nothing.
@@ -288,6 +299,7 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
       //   { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
       // ],
       // defaultScopes: ['view-model'],
+      ...parity,
     }),
 
     // The commit half of the mutation-probe round-trip: no commit

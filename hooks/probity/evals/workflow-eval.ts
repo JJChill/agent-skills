@@ -3,7 +3,8 @@
  *
  * A made-up feature ("parcel tracking") is driven through the entire
  * outside-in loop — spec → acceptance test → red → green → boundary
- * violations → traceability breakage → commit gates — as a sequence
+ * violations → traceability breakage → commit gates → per-scenario
+ * driver scopes — as a sequence
  * of synthetic write/command actions run through the real rules from
  * ../rules/. Each step asserts the expected decision and, for blocks,
  * the rule that fired.
@@ -72,6 +73,11 @@ const DRIVER =
   'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/TrackingViewModelDriver.kt'
 // Incremental-adoption baseline for the spec↔test parity gate.
 const BASELINE = 'docs/specs/.parity-baseline'
+// System-level driver suite: the eval declares a `system` driver
+// scope over this directory, and a `## Scenario [system]:` tag makes
+// the parity gate demand coverage from here on top of the base check.
+const SYSTEM_TEST =
+  'feature/tracking/src/commonTest/kotlin/com/example/tracking/acceptance/system/ParcelTrackingSystemTest.kt'
 const ADAPTER =
   'feature/tracking/src/androidMain/kotlin/com/example/tracking/adapter/RoomParcelStore.kt'
 const DI_MODULE =
@@ -251,6 +257,31 @@ class TrackParcel(private val parcels: ParcelStore) {
     suspend fun arriveAtDepot(parcelId: String, depotId: String) {
         val parcel = parcels.byId(parcelId) ?: return
         parcels.save(parcel.withLocation(depotId))
+    }
+}
+`
+
+// Spec state after the wip promotion step, used by the driver-scope
+// sequence at the end of the episode.
+const SPEC_PROMOTED = SPEC_V1.replace('## Scenario (wip):', '## Scenario:')
+
+// Thin spec class in the system-driver suite: same shared scenario
+// body, different driver — exactly how a `[system]` coverage floor is
+// honored under the four-layer model.
+const SYSTEM_TEST_V1 = `package com.example.tracking.acceptance.system
+
+import com.example.tracking.acceptance.TrackingRobot
+import kotlin.test.Test
+
+class ParcelTrackingSystemTest {
+    private val tracking = TrackingRobot()
+
+    // Covers: parcel-tracking.feature.md :: Scenario: Registered parcel reports its current depot
+    @Test
+    fun \`registered parcel reports its current depot end to end\`() {
+        tracking.registerParcel("parcel9")
+        tracking.parcelArrivesAtDepot("parcel9", "depot7")
+        tracking.confirmCurrentLocation("parcel9", "depot7")
     }
 }
 `
@@ -623,6 +654,83 @@ class ParcelTrackingSplitDriverAcceptanceTest {
     ),
     expect: 'allow',
   },
+
+  // ── Per-scenario driver scopes ────────────────────────────────────
+  // The eval instantiates the parity gate with a `system` driver
+  // scope (see ENTRIES below); tagging a scenario `[system]` then
+  // demands coverage from that suite on top of the base check.
+  {
+    title: 'Tag the depot scenario with a misspelled driver scope (title unchanged — no link breakage)',
+    action: write(
+      SPEC,
+      SPEC_PROMOTED.replace(
+        '## Scenario: Registered parcel reports its current depot',
+        '## Scenario [sistem]: Registered parcel reports its current depot',
+      ),
+    ),
+    expect: 'allow',
+    ai: { language: 'pass' },
+  },
+  {
+    title: 'Run the suite — green before the scope-tag commit',
+    action: command(GREEN_RUN.command),
+    commandOutput: GREEN_RUN.output,
+    expect: 'allow',
+  },
+  {
+    title: 'Commit with a tag naming an undeclared scope (misspelling protection)',
+    action: command('git commit -m "flag depot scenario for system coverage"'),
+    expect: 'block',
+    expectRule: 'enforceSpecTestParity',
+  },
+  {
+    title: 'Fix the tag to the declared [system] scope',
+    action: write(
+      SPEC,
+      SPEC_PROMOTED.replace(
+        '## Scenario: Registered parcel reports its current depot',
+        '## Scenario [system]: Registered parcel reports its current depot',
+      ),
+    ),
+    expect: 'allow',
+    ai: { language: 'pass' },
+  },
+  {
+    title: 'Run the suite — green with the scope floor still unmet',
+    action: command(GREEN_RUN.command),
+    commandOutput: GREEN_RUN.output,
+    expect: 'allow',
+  },
+  {
+    title: 'Commit with the tagged scenario covered only by the view-model suite',
+    action: command('git commit -m "flag depot scenario for system coverage"'),
+    expect: 'block',
+    expectRule: 'enforceSpecTestParity',
+  },
+  {
+    title: 'System-driver test claiming the tagged scenario (thin class over the shared body)',
+    action: write(SYSTEM_TEST, SYSTEM_TEST_V1),
+    expect: 'allow',
+    // Single new @Test → the TDD Kotlin fast-path stays deterministic.
+    // The language fast-path deliberately does NOT fire: it only
+    // trusts vocabulary declared in the same directory, and this new
+    // system/ suite calls the Robot from its parent — a new directory
+    // of spec classes is exactly what the validator should judge once.
+    expectNote: 'fast-path',
+    expectAiSilent: ['tdd'],
+    ai: { language: 'pass' },
+  },
+  {
+    title: 'Run the suite — green with the system suite in place',
+    action: command(GREEN_RUN.command),
+    commandOutput: GREEN_RUN.output,
+    expect: 'allow',
+  },
+  {
+    title: 'Commit with the [system] coverage floor satisfied',
+    action: command('git commit -m "flag depot scenario for system coverage"'),
+    expect: 'allow',
+  },
 ]
 
 // ── Harness ─────────────────────────────────────────────────────────
@@ -694,7 +802,19 @@ const ctx: RuleContext = {
 // anchors them. Glob semantics come from rules/scoping.ts — a pinned
 // replica of the engine's matcher — so a template glob edit is
 // exercised here automatically.
-const ENTRIES = anchorEntries(kmpRuleEntries(ROOT), ROOT)
+// The parity gate additionally gets a `system` driver scope so the
+// episode can exercise the per-scenario driver mapping — passed via
+// the factory's `parity` parameter, so the template's default-off
+// posture (the commented driverScopes block) stays exactly what real
+// projects load.
+const ENTRIES = anchorEntries(
+  kmpRuleEntries(ROOT, {
+    driverScopes: [
+      { name: 'system', filePattern: /[/\\]acceptance[/\\]system[/\\]/ },
+    ],
+  }),
+  ROOT,
+)
 
 type Decision =
   | { kind: 'allow'; notes: string }
