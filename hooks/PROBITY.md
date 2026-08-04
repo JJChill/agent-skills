@@ -113,7 +113,7 @@ Probity lives in the **consuming project** (the codebase you're building), not i
          {
            "matcher": "Bash|Write|Edit|NotebookEdit",
            "hooks": [
-             { "type": "command", "command": "./node_modules/.bin/probity --agent claude-code" }
+             { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity --agent claude-code" }
            ]
          }
        ]
@@ -121,7 +121,7 @@ Probity lives in the **consuming project** (the codebase you're building), not i
    }
    ```
 
-   Prefer the direct bin path over `npx @nizos/probity`: the hook runs on **every** matched tool call, and npx's resolution overhead is ~0.6-1.6s per call vs ~0.2s for the bin (measured on a warm cache). A truly resident validator process would cut the remaining startup too, but that's engine work — worth an upstream issue, not something the templates can provide.
+   Anchor the hook with `cd "$CLAUDE_PROJECT_DIR" &&`, never a bare relative `./node_modules/...`: hooks are not guaranteed to run with the repo root as their working directory (a session launched from a parent directory, a worktree, a `cd` elsewhere). A bare relative path then fails to resolve and the hook errors **non-blocking** — every rule silently stops enforcing while work continues. The `cd` also matters beyond binary resolution: Probity discovers `probity.config.ts` by searching upward from the working directory, so a hook run from the wrong cwd finds no config even with an absolute bin path. Prefer the direct bin path over `npx @nizos/probity`: the hook runs on **every** matched tool call, and npx's resolution overhead is ~0.6-1.6s per call vs ~0.2s for the bin (measured on a warm cache). A truly resident validator process would cut the remaining startup too, but that's engine work — worth an upstream issue, not something the templates can provide.
 
 ## Mental model
 
