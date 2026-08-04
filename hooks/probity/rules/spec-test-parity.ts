@@ -22,9 +22,21 @@ import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
  * In-progress scenarios being driven outside-in are exempted with
  * `## Scenario (wip):` — the parity gate ignores them until the
  * marker is dropped.
+ *
+ * Scenarios may additionally declare **driver scopes** — coverage
+ * floors naming which driver suites must cover them, on top of the
+ * base "at least one test" requirement:
+ *
+ *   ## Scenario [system]: Payment is retried after a network failure
+ *
+ * Scope names are policy labels ("also proven against the deployed
+ * system"), not mechanisms; the mapping from scope name to test files
+ * is the `driverScopes` option. Tags never change the scenario key,
+ * so Covers tags and baselines are unaffected by adding one.
  */
 
-const SCENARIO_HEADING = /^##\s*Scenario(\s*\((?:wip|planned)\))?\s*:\s*(.+?)\s*$/gm
+const SCENARIO_HEADING =
+  /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/gm
 const COVERS_TAG = /Covers:\s*([\w.-]+\.feature\.md)\s*::\s*Scenario:\s*([^\n]+)/g
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -48,18 +60,34 @@ function scenarioKey(specFile: string, title: string): string {
   return `${basename(specFile)} :: ${normalizeTitle(title)}`
 }
 
-type Scenario = { key: string; specFile: string; title: string; wip: boolean }
+type Scenario = {
+  key: string
+  specFile: string
+  title: string
+  wip: boolean
+  /** Driver scopes the heading declares, e.g. `[system]` → ['system']. */
+  scopes: string[]
+}
 type CoversRef = { key: string; testFile: string; specFile: string; title: string }
+
+function parseScopes(tag: string | undefined): string[] {
+  if (!tag) return []
+  return tag
+    .split(',')
+    .map((scope) => scope.trim().toLowerCase())
+    .filter(Boolean)
+}
 
 export function extractScenarios(specFile: string, content: string): Scenario[] {
   const scenarios: Scenario[] = []
   for (const match of content.matchAll(SCENARIO_HEADING)) {
-    const title = match[2] ?? ''
+    const title = match[4] ?? ''
     scenarios.push({
       key: scenarioKey(specFile, title),
       specFile,
       title: title.trim(),
       wip: match[1] !== undefined,
+      scopes: parseScopes(match[3]),
     })
   }
   return scenarios
@@ -99,10 +127,41 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const DEFAULT_TEST_FILE_PATTERN = /[/\\]acceptance[/\\]/
 
+/**
+ * A named driver scope: which test files count as coverage from a
+ * given driver suite. Scope names are the vocabulary scenario
+ * headings may use in `[scope, ...]` tags — lowercase by convention
+ * (tags are lowercased before matching).
+ */
+export type DriverScope = { name: string; filePattern: RegExp }
+
 type ScanOptions = {
   specsDir: string
   testRoots: string[]
   testFilePattern?: RegExp
+  /**
+   * Per-scenario driver mapping (optional). Each entry names a driver
+   * suite and the test files that belong to it (e.g.
+   * `{ name: 'system', filePattern: /AcceptanceTests[/\\]UITests[/\\]/ }`).
+   * A scenario tagged `## Scenario [system]:` must then be covered by
+   * at least one test matching that scope's pattern — **in addition
+   * to** the base requirement that some acceptance test covers it.
+   * Tags are floors, never ceilings: extra coverage in other scopes
+   * is always fine, and untagged scenarios only need `defaultScopes`
+   * (below) plus the base requirement. A tag naming a scope absent
+   * from this list is a violation (misspelling protection); with no
+   * `driverScopes` configured, any tag is unknown, so adopting tags
+   * requires configuring scopes first.
+   */
+  driverScopes?: DriverScope[]
+  /**
+   * Scope names every non-wip, non-baselined scenario must satisfy
+   * even without a tag — the project's standard driver set (e.g.
+   * `['view-model']`). Names must exist in `driverScopes`. Omit for
+   * the status-quo default: untagged scenarios need any one covering
+   * test, regardless of driver.
+   */
+  defaultScopes?: string[]
   /**
    * Incremental-adoption baseline (optional). Path to a text file of
    * scenario keys — one `<spec>.feature.md :: <title>` per line, `#`
@@ -184,9 +243,19 @@ function formatList(lines: string[], max = 10): string {
  * @param options.baselinePath — optional incremental-adoption
  *   baseline; scenarios listed there are exempt from the orphan
  *   check (see {@link readBaseline}). Missing file → full enforcement.
+ * @param options.driverScopes — optional per-scenario driver mapping;
+ *   see {@link DriverScope}. Scenarios tagged `[scope]` (and every
+ *   scenario, for `defaultScopes` entries) must be covered by a test
+ *   matching that scope's `filePattern`, on top of the base check.
+ * @param options.defaultScopes — scope names required of untagged
+ *   scenarios too (the project's standard driver set).
  */
 export function enforceSpecTestParity(options: ScanOptions): Rule {
   const pattern = options.testFilePattern ?? DEFAULT_TEST_FILE_PATTERN
+  const scopes = new Map(
+    (options.driverScopes ?? []).map((scope) => [scope.name.toLowerCase(), scope]),
+  )
+  const defaultScopes = (options.defaultScopes ?? []).map((name) => name.toLowerCase())
   return function enforceSpecTestParity(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
     if (!/git commit/.test(action.command)) return { kind: 'pass' }
@@ -200,7 +269,36 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key),
     )
     const dangling = refs.filter((ref) => !known.has(ref.key))
-    if (orphaned.length === 0 && dangling.length === 0) return { kind: 'pass' }
+    const unknownScopes: string[] = []
+    const missingScopes: string[] = []
+    for (const scenario of scenarios) {
+      if (scenario.wip || baseline.has(scenario.key)) continue
+      const required = [...new Set([...defaultScopes, ...scenario.scopes])]
+      for (const name of required) {
+        const scope = scopes.get(name)
+        if (!scope) {
+          unknownScopes.push(
+            `${basename(scenario.specFile)} :: ${scenario.title} — [${name}]`,
+          )
+          continue
+        }
+        const covered = refs.some(
+          (ref) => ref.key === scenario.key && scope.filePattern.test(ref.testFile),
+        )
+        if (!covered) {
+          missingScopes.push(
+            `${basename(scenario.specFile)} :: ${scenario.title} — needs [${name}] coverage`,
+          )
+        }
+      }
+    }
+    if (
+      orphaned.length === 0 &&
+      dangling.length === 0 &&
+      unknownScopes.length === 0 &&
+      missingScopes.length === 0
+    )
+      return { kind: 'pass' }
     const sections: string[] = ['Spec↔test parity check failed.']
     if (orphaned.length > 0) {
       sections.push(
@@ -215,6 +313,23 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         'Covers tags pointing at no existing scenario (spec renamed or ' +
           'removed — update or delete these tests):\n' +
           formatList(dangling.map((r) => `${r.testFile} → ${r.specFile} :: ${r.title}`)),
+      )
+    }
+    if (missingScopes.length > 0) {
+      sections.push(
+        'Scenarios covered, but not by every driver scope they require ' +
+          '(add a covering test in the named suite — with shared ' +
+          'scenario bodies this is a thin spec class calling the ' +
+          'existing body):\n' +
+          formatList(missingScopes),
+      )
+    }
+    if (unknownScopes.length > 0) {
+      sections.push(
+        'Scenario tags naming driver scopes this gate does not know ' +
+          `(known scopes: ${scopes.size > 0 ? [...scopes.keys()].join(', ') : 'none configured'} — ` +
+          'fix the tag or add the scope to `driverScopes`):\n' +
+          formatList(unknownScopes),
       )
     }
     return { kind: 'violation', reason: sections.join('\n') }

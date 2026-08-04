@@ -270,10 +270,24 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
     // — and commit it: baselined scenarios are exempt while new ones
     // are enforced from day one; burn the file down by deleting lines
     // as coverage lands. No baseline file → full enforcement.
+    //
+    // Per-scenario driver mapping (optional): declare named driver
+    // scopes and tag scenarios that need more than the default suite —
+    // `## Scenario [system]: …` then requires a covering test whose
+    // path matches that scope. Tags are floors, not ceilings; with
+    // shared scenario bodies (*Scenarios.kt) the extra covering test
+    // is a thin spec class calling the existing body. CALIBRATE THE
+    // PATTERNS TO YOUR LAYOUT before uncommenting — a pattern matching
+    // zero files makes every tagged scenario fail, loudly.
     enforceSpecTestParity({
       specsDir: join(root, 'docs/specs'),
       testRoots: [root],
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
+      // driverScopes: [
+      //   { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
+      //   { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
+      // ],
+      // defaultScopes: ['view-model'],
     }),
 
     // The commit half of the mutation-probe round-trip: no commit

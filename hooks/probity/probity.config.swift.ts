@@ -253,11 +253,25 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // every tag resolves to a real scenario. Brownfield adoption:
     // generate a baseline once with scripts/spec-parity.mjs
     // --write-baseline and burn it down (see hooks/PROBITY.md).
+    // Per-scenario driver mapping (optional): declare named driver
+    // scopes and tag scenarios that need more than the default suite —
+    // `## Scenario [system]: …` then requires a covering test whose
+    // path matches that scope. Tags are floors, not ceilings; with a
+    // shared scenario layer (AcceptanceTests/Scenarios/) the extra
+    // covering test is a thin spec class calling the existing body.
+    // The example scopes match the calibration app's layout — the
+    // XCUITest target under Specs/, the app-hosted component target
+    // under Component/. CALIBRATE TO YOUR LAYOUT before uncommenting.
     enforceSpecTestParity({
       specsDir: join(root, 'docs/specs'),
       testRoots: [root],
       testFilePattern: ACCEPTANCE_TEST_FILES,
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
+      // driverScopes: [
+      //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
+      //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },
+      // ],
+      // defaultScopes: ['hosted-ui'],
     }),
 
     // The commit half of the mutation-probe round-trip: no commit
