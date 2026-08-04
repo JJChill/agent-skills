@@ -390,14 +390,19 @@ const TELEMETRY_LINE_PATTERNS: RegExp[] = [
  */
 export function withTelemetryFastPath(
   rule: Rule,
-  options: { patterns?: RegExp[] } = {},
+  options: { patterns?: RegExp[]; filePattern?: RegExp } = {},
 ): Rule {
   const patterns = options.patterns ?? TELEMETRY_LINE_PATTERNS
+  // The extension guard is a parameter: a config passing Swift (or
+  // any non-Kotlin) telemetry patterns MUST also pass the matching
+  // filePattern, or the fast path silently never fires and every
+  // source write costs a model call (found live on an iOS trial).
+  const filePattern = options.filePattern ?? /\.kts?$/
   const wrapped = async function telemetryFastPath(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
-    if (action.kind !== 'write' || !/\.kts?$/.test(action.path)) {
+    if (action.kind !== 'write' || !filePattern.test(action.path)) {
       return rule(action, ctx)
     }
     const before = await ctx?.readFile?.(action.path)

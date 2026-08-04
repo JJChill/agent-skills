@@ -284,15 +284,23 @@ export function requireSpecBackedAcceptanceTest(options: {
     const beforeKeys = new Set(
       extractCoversRefs(action.path, beforeContent).map((ref) => ref.key),
     )
-    const newRefs = extractCoversRefs(action.path, action.content).filter(
-      (ref) => !beforeKeys.has(ref.key),
-    )
+    const afterRefs = extractCoversRefs(action.path, action.content)
+    const newRefs = afterRefs.filter((ref) => !beforeKeys.has(ref.key))
+    const known = new Set(scanSpecs(options.specsDir).map((s) => s.key))
     if (newRefs.length === 0) {
+      // No NEW tag — still fine when the file already claims a real
+      // scenario: "one scenario, many drivers" adds a second/third
+      // test transcribing an already-covered scenario to a file whose
+      // tag resolves. Only a file with no resolving tag at all is a
+      // spec-first violation. (File-level granularity by design: the
+      // commit-time parity gate owns the per-scenario bookkeeping.)
+      if (afterRefs.some((ref) => known.has(ref.key))) return { kind: 'pass' }
       return {
         kind: 'violation',
         reason:
-          'This write adds a new acceptance test case with no new ' +
-          '`Covers:` tag. Acceptance tests are written spec-first: ' +
+          'This write adds a new acceptance test case with no ' +
+          '`Covers:` tag resolving to an existing scenario. ' +
+          'Acceptance tests are written spec-first: ' +
           `add a \`## Scenario: <title>\` to a *.feature.md under ` +
           `${options.specsDir} describing the behavior in domain ` +
           'language, then re-apply this test with\n' +
@@ -301,7 +309,6 @@ export function requireSpecBackedAcceptanceTest(options: {
           '`## Scenario (wip):` — it still counts.',
       }
     }
-    const known = new Set(scanSpecs(options.specsDir).map((s) => s.key))
     const unresolved = newRefs.filter((ref) => !known.has(ref.key))
     if (unresolved.length === 0) return { kind: 'pass' }
     return {
@@ -355,12 +362,13 @@ export function surfaceScenarioLinkBreakage(
     if (removed.length === 0) return { kind: 'pass' }
     const refs = scanCoversRefs(options.testRoots, pattern)
     const broken = removed.flatMap((scenario) => {
-      const claimants = refs.filter((ref) => ref.key === scenario.key)
+      const claimants = [
+        ...new Set(
+          refs.filter((ref) => ref.key === scenario.key).map((ref) => ref.testFile),
+        ),
+      ]
       return claimants.length > 0
-        ? [
-            `"${scenario.title}" is still covered by:\n` +
-              formatList(claimants.map((ref) => ref.testFile)),
-          ]
+        ? [`"${scenario.title}" is still covered by:\n` + formatList(claimants)]
         : []
     })
     if (broken.length === 0) return { kind: 'pass' }
