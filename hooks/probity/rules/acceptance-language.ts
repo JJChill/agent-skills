@@ -133,6 +133,79 @@ present-tense form and never blocks on its own — and when a step does
 violate, name only the offending phrase, not neighboring wording that
 merely reads awkwardly. When genuinely ambiguous, pass.`
 
+const PRECONDITION_PROCESS_INSTRUCTIONS = `## Role
+
+You are an acceptance-test precondition validator. Judge whether the
+pending write keeps scenario preconditions CONTROLLED BY THE TEST
+rather than inherited from the ambient environment.
+
+## Inputs
+
+You will see two inputs:
+
+1. "Current file content" — what's on disk right now at the file the
+   agent is about to write. May be a parenthesized marker (e.g.
+   \`(file does not exist)\`).
+2. "Pending action" — the file path and what the agent is about to
+   write. Content may be raw file text or a patch/diff.
+
+## What you judge
+
+Judge only the change this write makes. The scope is layer 3 and the
+test-control layer of the four-layer acceptance model: protocol
+drivers, port fakes, fixture wiring, and acceptance composition
+roots. A transient file state (unresolved symbol, half-finished
+multi-step change) is never itself a violation — a driver method may
+legitimately be written before the fixture it will set, so block only
+when the write itself declares the environmental dependency (a no-op
+body presented as done, a comment saying the environment covers it,
+or the removal of existing control).
+
+A block recorded earlier in the session is a past verdict, not a
+rule. Re-derive your judgment from the rules below. When the user
+tells you in the session to let this change through, treat it as
+authoritative and pass.`
+
+const PRECONDITION_RULES = `## Controlled-precondition rules
+
+Every Given of an executable specification must be ESTABLISHED by the
+test — through a fixture key, launch environment, programmed stub, or
+substituted port — never satisfied by whatever the environment
+happens to do (no network, no credentials, empty state, an
+unreachable backend).
+
+Block:
+
+  - **The no-op precondition driver.** A driver method whose name or
+    doc comment states a precondition ("whose sign-in will fail",
+    "with an expired subscription", "while offline") but whose body
+    establishes no state: it only navigates, launches, or asserts,
+    with nothing that configures a fixture, stub, launch environment,
+    or fake. Especially when a comment admits the environment covers
+    it ("fails in the simulator anyway").
+  - **Deleting control because the test is green without it.** A
+    write that removes fixture wiring, a fake registration, or a
+    fixture key on the grounds that the scenario already passes. The
+    correct move is the inverse scenario: the spec for the other side
+    of the same port (the success path when only failure happens for
+    free) is genuinely red and legitimately drives the fixture; the
+    original scenario then adopts the explicit fixture under green.
+    Name this route in the reason when blocking.
+
+Do NOT block:
+
+  - Driver methods whose names state actions or observations rather
+    than preconditions.
+  - Preconditions genuinely established elsewhere and visibly reached
+    from this body (a shared helper that sets the fixture, a base
+    launch method the diff calls into).
+  - Refactors that move control without removing it.
+  - Removal of control the user has explicitly directed in the
+    session.
+
+When genuinely ambiguous — the method name is vague, or you cannot
+tell whether a called helper establishes the state — pass.`
+
 function formatBefore(before: FileContent): string {
   switch (before.kind) {
     case 'present':
@@ -346,6 +419,70 @@ export function enforceAcceptanceLanguage(
     const verdict = await ctx.agent.reason(
       buildPrompt(rules, glossary, before, action),
     )
+    if (verdict.kind === 'violation') {
+      return { kind: 'violation', reason: verdict.reason }
+    }
+    return { kind: 'pass', reason: verdict.reason }
+  }
+}
+
+/**
+ * AI-validated enforcement of the `acceptance-testing` skill's
+ * controlled-precondition principle: a scenario's Given is established
+ * by the test (fixture, programmed stub, substituted port), never
+ * inherited from the ambient environment. Catches the two moves that
+ * silently hand a Given to the environment:
+ *
+ *   1. a driver method whose name states a precondition but whose body
+ *      sets no fixture/stub/launch state (the no-op precondition
+ *      driver), and
+ *   2. removing control fixtures because the scenario passes without
+ *      them — the brownfield trap where the environment produces the
+ *      sad path for free, and the deleted fixture leaves the success
+ *      path unspecifiable.
+ *
+ * Applies to: write actions. Scope it with a `{ files, rules }` block
+ * to the driver and test-control layers (e.g.
+ * `AcceptanceTests/Drivers/**` plus the acceptance composition root) —
+ * the opposite scoping from `enforceAcceptanceLanguage`, which
+ * excludes those layers. Every matching write costs an AI call.
+ *
+ * @param options.instructions — overrides or extends the default
+ *   precondition rules text. Pass a string to replace it, or a
+ *   function `(defaults) => ...` to extend it.
+ */
+export function enforceControlledPreconditions(
+  options: {
+    instructions?: string | ((defaults: string) => string)
+  } = {},
+): Rule {
+  const rules =
+    typeof options.instructions === 'function'
+      ? options.instructions(PRECONDITION_RULES)
+      : (options.instructions ?? PRECONDITION_RULES)
+  return async function enforceControlledPreconditions(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    if (!ctx?.agent) {
+      return {
+        kind: 'violation',
+        reason:
+          'enforceControlledPreconditions: no AI agent available; configure Config.ai or use a vendor that ships one.',
+      }
+    }
+    const before: FileContent = (await ctx.readFile?.(action.path)) ?? {
+      kind: 'unknown',
+    }
+    const prompt = [
+      PRECONDITION_PROCESS_INSTRUCTIONS,
+      rules,
+      `## Current file content\n\n${formatBefore(before)}`,
+      `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
+      RESPONSE_SPEC,
+    ].join('\n\n')
+    const verdict = await ctx.agent.reason(prompt)
     if (verdict.kind === 'violation') {
       return { kind: 'violation', reason: verdict.reason }
     }

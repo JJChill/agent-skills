@@ -24,10 +24,14 @@ import {
   type RuleEntry,
 } from '@nizos/probity'
 
-import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  enforceAcceptanceLanguage,
+  enforceControlledPreconditions,
+} from './rules/acceptance-language.js'
 import {
   enforceProbeReversion,
   requireGreenTestRun,
+  withInverseScenarioGuidance,
   withMutationProbe,
   withTelemetryFastPath,
 } from './rules/kotlin.js'
@@ -186,13 +190,36 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
         'VPNNetworkExtension/**',
       ],
       rules: [
-        withMutationProbe(
-          withTelemetryFastPath(enforceTdd(), {
-            patterns: SWIFT_TELEMETRY_LINES,
-            filePattern: /\.swift$/,
-          }),
+        // The inverse-scenario wrapper changes only the DENY TEXT, and
+        // only on the test-control layer (the acceptance composition
+        // root): when a fixture has no red demanding it because the
+        // environment already satisfies the scenario's Given, the
+        // correct move — write the inverse scenario and let its red
+        // drive the fixture — is stated at the decision point instead
+        // of leaving "observe a red first" to read as "delete the
+        // control".
+        withInverseScenarioGuidance(
+          withMutationProbe(
+            withTelemetryFastPath(enforceTdd(), {
+              patterns: SWIFT_TELEMETRY_LINES,
+              filePattern: /\.swift$/,
+            }),
+          ),
+          { filePattern: /App[/\\]Sources[/\\]Acceptance[/\\]/ },
         ),
       ],
+    },
+
+    // Preconditions are controlled, not observed: a driver method
+    // named for a Given must establish it (fixture key, launch
+    // environment, programmed fake), and control wiring is never
+    // deleted just because the scenario passes without it — on a
+    // brownfield system the environment produces the sad path for
+    // free, which is exactly when the seam matters most (the success
+    // path is unreachable until the port is controlled).
+    {
+      files: ['AcceptanceTests/Drivers/**', 'App/Sources/Acceptance/**'],
+      rules: [enforceControlledPreconditions()],
     },
 
     // Boundaries: ports-and-adapters judgments the screens can't make

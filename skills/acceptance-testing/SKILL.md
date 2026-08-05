@@ -135,6 +135,9 @@ Trustworthy tests control all the variables.
 3. **Controlling time:** systems that care about time read it from a clock port, never the OS clock. The test clock is a stub the DSL can set and advance — a week-long scenario runs in milliseconds, and daylight-saving boundaries become testable. Tag such tests (e.g. `@TimeTravel`) and run them on dedicated instances, not the shared parallel pool.
 4. **No sleeps, ever.** A fixed delay is a race condition postponed plus wasted time on every run. Protocol drivers poll for the **concluding event** with a generous timeout: fast when the system is fast, resilient when it's slow.
 5. **Fakes gate in-flight operations.** A driver that owns virtual time can pause the world anywhere; a driver that doesn't (a real UI toolkit with its own clock) cannot. Give port fakes a standard in-flight gate — a latch the test releases — so "the operation is still running" is a controllable fact in every driver, not a race. Build it into the fake once; don't reinvent it per feature.
+6. **Preconditions are controlled, not observed.** Every Given is *established by the test* — through a fixture, a programmed stub, or a substituted port — never inherited from whatever the environment happens to do. A scenario whose Given is "signing in will not succeed" is not honestly covered by running in a simulator that has no network: the assertion passes, but the test cannot distinguish the failure it asked for from the failure the machine produced, and on a connected machine the precondition silently inverts. An environmentally satisfied Given also hides a bigger cost: the *opposite* precondition is unreachable (nothing can make sign-in succeed), so the whole success side of the behavior is unspecifiable until the port is controlled.
+
+**When a control fixture can't get a red.** TDD discipline demands a failing test before fixture code — but a sad-path scenario the environment already satisfies will never go red, so the gate appears to "refuse" the fixture. Do not resolve that by deleting the control. The legitimate red lives in the **inverse scenario**: write the spec for the other side of the same port ("a new user who signs in successfully is taken into the app"), which genuinely fails until the port can be controlled, and let *that* red drive the fixture. Once the fixture exists, move the original scenario onto it explicitly — a refactor under green. And when a scenario cannot be honestly driven at all because a seam is missing, mark it `## Scenario (wip):` and surface the seam gap to the user as a design decision; never silently weaken the Given, reshape the scenario, or let the environment stand in.
 
 ## Where Acceptance Tests Run
 
@@ -153,6 +156,8 @@ Trustworthy tests control all the variables.
 | "We need the real payment provider / partner system in the test" | You don't control it, so the test can't control its variables. Fake it at the port and pin the interface with a contract test. |
 | "Just add a 2-second sleep, it's flaky under load" | That's a race condition with a timer on it. Poll for the concluding event in the protocol driver. |
 | "Testing variations of this input is easiest to add here" | Input variation is unit-test territory. One acceptance spec per behavior; push permutations down to the TDD inner loop. |
+| "The environment already makes this happen, so no fixture is needed" | Then the precondition is owned by the environment, not the test — green for reasons the test can't see, flaky the day the environment changes, and the opposite precondition is unspecifiable. Write the inverse scenario; its red drives the fixture, then this scenario adopts it under green. |
+| "TDD refused the fixture — no failing test demanded it" | The gate refused *this scenario's* demand, not the design. A tooling verdict is not a design decision: the failing test that demands the control is the inverse scenario on the same port. |
 | "Non-technical stakeholders will never read these anyway" | The domain language isn't (only) for stakeholders — it's what makes the specs durable, reusable, and decoupled from the implementation. |
 
 ## Red Flags
@@ -167,6 +172,8 @@ Trustworthy tests control all the variables.
 - An automated suite that drives a real external/third-party system
 - Scenarios with long chains of When/Then asserting many outcomes
 - A UI redesign or API rename that forces edits to test *cases* rather than one driver
+- A driver method whose name states a precondition ("startForNewUserWhoseSignInWillFail") but whose body sets no fixture, stub, or launch state — the Given is being inherited from the environment, not established
+- A control fixture deleted (or never written) because the scenario passes without it
 
 ## Verification
 
@@ -181,5 +188,6 @@ After writing or changing acceptance tests, confirm:
 - [ ] Scenarios needing more than the default driver set declare it on the heading (`## Scenario [system]: …`), and each declared scope has a covering test in that driver's suite
 - [ ] The SUT scope is a deployable unit; all external dependencies are faked at ports, with contract tests pinning the interfaces
 - [ ] Each test creates its own isolated data; the suite passes when run in parallel and when run twice in a row
+- [ ] Every Given is established by the test (fixture, programmed stub, substituted port) — no precondition is satisfied only by the ambient environment; where a control fixture had no red to drive it, the inverse scenario exists and drove it
 - [ ] No sleeps — concluding events are polled with timeouts
 - [ ] The suite runs in the pipeline's acceptance stage against a production-like deployment; in-progress specs are quarantined, completed ones enabled

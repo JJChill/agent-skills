@@ -509,6 +509,72 @@ export function withMutationProbe(rule: Rule): Rule {
   return wrapped
 }
 
+const INVERSE_SCENARIO_GUIDANCE =
+  'Note for test-control infrastructure (fixtures, fakes registered in an ' +
+  'acceptance composition root): if the scenario this control serves ' +
+  'passes WITHOUT it — the environment already satisfies its Given (no ' +
+  'network, no credentials, empty state) — do not resolve this block by ' +
+  'deleting the control. That leaves the precondition owned by the ' +
+  'environment and makes the opposite precondition unspecifiable. The ' +
+  'legitimate red is the INVERSE scenario on the same port (e.g. the ' +
+  'success path when only failure happens for free): write that scenario, ' +
+  'watch it fail, and let it drive this fixture; then move the original ' +
+  'scenario onto the explicit fixture as a refactor under green. If the ' +
+  'seam itself is missing, mark the scenario `## Scenario (wip):` and ' +
+  'surface the seam gap to the user instead of working around it.'
+
+/**
+ * Wraps a TDD rule so that a violation on a write to the project's
+ * test-control layer — acceptance composition roots, fixture/fake
+ * registrations — carries the inverse-scenario escape route in its
+ * deny text.
+ *
+ * Why: on brownfield systems the environment often produces the sad
+ * path for free (a simulator with no backend fails every sign-in), so
+ * a sad-path scenario never goes red and an unwrapped TDD gate appears
+ * to "refuse" the control fixture. The observed failure mode is the
+ * agent resolving that tension in the wrong direction — deleting the
+ * control and letting the environment own the Given. The deny message
+ * is what the agent reads at that decision point, so the correct move
+ * (write the inverse scenario; its red drives the fixture) must be
+ * stated there, not only in the skill prose.
+ *
+ * Pass-through everywhere else: verdicts are unchanged, only the
+ * violation reason on matching paths gains the guidance paragraph.
+ *
+ * @param rule — the TDD rule to wrap (already wrapped in fast-paths /
+ *   mutation-probe as usual).
+ * @param options.filePattern — paths that hold test-control
+ *   infrastructure (e.g. /App[/\\]Sources[/\\]Acceptance[/\\]/ or a
+ *   fixtures directory).
+ */
+export function withInverseScenarioGuidance(
+  rule: Rule,
+  options: { filePattern: RegExp },
+): Rule {
+  const wrapped = async function inverseScenarioGuidance(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    const result = await rule(action, ctx)
+    if (
+      result.kind === 'violation' &&
+      action.kind === 'write' &&
+      options.filePattern.test(action.path)
+    ) {
+      return {
+        ...result,
+        reason: `${result.reason ?? ''}\n\n${INVERSE_SCENARIO_GUIDANCE}`,
+      }
+    }
+    return result
+  }
+  Object.defineProperty(wrapped, 'name', {
+    value: `inverseScenarioGuidance(${rule.name || 'rule'})`,
+  })
+  return wrapped
+}
+
 /**
  * The commit half of the mutation-probe round-trip (see
  * {@link withMutationProbe}): blocks `git commit` while any source
