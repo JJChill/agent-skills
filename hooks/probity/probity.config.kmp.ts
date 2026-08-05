@@ -34,6 +34,7 @@ import {
   enforceSpecTestParity,
   requireSpecBackedAcceptanceTest,
   surfaceScenarioLinkBreakage,
+  type DriverScope,
 } from './rules/spec-test-parity.js'
 import { surfaceGlossaryTermBreakage } from './rules/ubiquitous-language.js'
 import {
@@ -69,8 +70,18 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
  * Relative globs (`docs/...`) are NOT anchored here: Probity's
  * `loadConfig` anchors them against this file's directory at load
  * time, and the tooling replicates that via `rules/scoping.ts`.
+ *
+ * `parity` optionally switches on the per-scenario driver mapping
+ * (`driverScopes`/`defaultScopes` on the commit-time parity gate) —
+ * projects normally enable it by uncommenting the block in the
+ * `enforceSpecTestParity` call below; the parameter exists so the
+ * workflow eval can exercise the scope checks without changing the
+ * template's default-off posture.
  */
-export function kmpRuleEntries(root: string): RuleEntry[] {
+export function kmpRuleEntries(
+  root: string,
+  parity?: { driverScopes?: DriverScope[]; defaultScopes?: string[] },
+): RuleEntry[] {
   // Ubiquitous-language glossary (copy GLOSSARY.template.md here).
   // The glossary-aware rules degrade gracefully while the file
   // doesn't exist yet — wiring it up front costs nothing.
@@ -270,10 +281,25 @@ export function kmpRuleEntries(root: string): RuleEntry[] {
     // — and commit it: baselined scenarios are exempt while new ones
     // are enforced from day one; burn the file down by deleting lines
     // as coverage lands. No baseline file → full enforcement.
+    //
+    // Per-scenario driver mapping (optional): declare named driver
+    // scopes and tag scenarios that need more than the default suite —
+    // `## Scenario [system]: …` then requires a covering test whose
+    // path matches that scope. Tags are floors, not ceilings; with
+    // shared scenario bodies (*Scenarios.kt) the extra covering test
+    // is a thin spec class calling the existing body. CALIBRATE THE
+    // PATTERNS TO YOUR LAYOUT before uncommenting — a pattern matching
+    // zero files makes every tagged scenario fail, loudly.
     enforceSpecTestParity({
       specsDir: join(root, 'docs/specs'),
       testRoots: [root],
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
+      // driverScopes: [
+      //   { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
+      //   { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
+      // ],
+      // defaultScopes: ['view-model'],
+      ...parity,
     }),
 
     // The commit half of the mutation-probe round-trip: no commit

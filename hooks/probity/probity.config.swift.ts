@@ -24,10 +24,14 @@ import {
   type RuleEntry,
 } from '@nizos/probity'
 
-import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  enforceAcceptanceLanguage,
+  enforceControlledPreconditions,
+} from './rules/acceptance-language.js'
 import {
   enforceProbeReversion,
   requireGreenTestRun,
+  withInverseScenarioGuidance,
   withMutationProbe,
   withTelemetryFastPath,
 } from './rules/kotlin.js'
@@ -186,13 +190,36 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
         'VPNNetworkExtension/**',
       ],
       rules: [
-        withMutationProbe(
-          withTelemetryFastPath(enforceTdd(), {
-            patterns: SWIFT_TELEMETRY_LINES,
-            filePattern: /\.swift$/,
-          }),
+        // The inverse-scenario wrapper changes only the DENY TEXT, and
+        // only on the test-control layer (the acceptance composition
+        // root): when a fixture has no red demanding it because the
+        // environment already satisfies the scenario's Given, the
+        // correct move — write the inverse scenario and let its red
+        // drive the fixture — is stated at the decision point instead
+        // of leaving "observe a red first" to read as "delete the
+        // control".
+        withInverseScenarioGuidance(
+          withMutationProbe(
+            withTelemetryFastPath(enforceTdd(), {
+              patterns: SWIFT_TELEMETRY_LINES,
+              filePattern: /\.swift$/,
+            }),
+          ),
+          { filePattern: /App[/\\]Sources[/\\]Acceptance[/\\]/ },
         ),
       ],
+    },
+
+    // Preconditions are controlled, not observed: a driver method
+    // named for a Given must establish it (fixture key, launch
+    // environment, programmed fake), and control wiring is never
+    // deleted just because the scenario passes without it — on a
+    // brownfield system the environment produces the sad path for
+    // free, which is exactly when the seam matters most (the success
+    // path is unreachable until the port is controlled).
+    {
+      files: ['AcceptanceTests/Drivers/**', 'App/Sources/Acceptance/**'],
+      rules: [enforceControlledPreconditions()],
     },
 
     // Boundaries: ports-and-adapters judgments the screens can't make
@@ -253,11 +280,25 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // every tag resolves to a real scenario. Brownfield adoption:
     // generate a baseline once with scripts/spec-parity.mjs
     // --write-baseline and burn it down (see hooks/PROBITY.md).
+    // Per-scenario driver mapping (optional): declare named driver
+    // scopes and tag scenarios that need more than the default suite —
+    // `## Scenario [system]: …` then requires a covering test whose
+    // path matches that scope. Tags are floors, not ceilings; with a
+    // shared scenario layer (AcceptanceTests/Scenarios/) the extra
+    // covering test is a thin spec class calling the existing body.
+    // The example scopes match the calibration app's layout — the
+    // XCUITest target under Specs/, the app-hosted component target
+    // under Component/. CALIBRATE TO YOUR LAYOUT before uncommenting.
     enforceSpecTestParity({
       specsDir: join(root, 'docs/specs'),
       testRoots: [root],
       testFilePattern: ACCEPTANCE_TEST_FILES,
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
+      // driverScopes: [
+      //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
+      //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },
+      // ],
+      // defaultScopes: ['hosted-ui'],
     }),
 
     // The commit half of the mutation-probe round-trip: no commit
