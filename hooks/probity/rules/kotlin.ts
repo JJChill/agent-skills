@@ -509,6 +509,25 @@ export function withMutationProbe(rule: Rule): Rule {
   return wrapped
 }
 
+// The inverse-scenario note only helps when the denial is about a
+// missing red or when the write is removing control — appended
+// anywhere else it reads as boilerplate (observed live on a
+// minimal-green denial about an undefined symbol).
+const MISSING_RED_REASON =
+  /never (?:been )?observed|not (?:been )?observed failing|no (?:clean |assertion-level |prior )*red|passe[sd] (?:all|without)|without (?:a |any )?(?:failing|red)/i
+
+// The other recurring composition-root denial: a multi-part fixture
+// (fake + fixture accessor + enum value) landed piecewise, and the
+// first write is blocked for referencing a sibling it doesn't define.
+const UNDEFINED_SIBLING_REASON =
+  /not defined|no declaration|undefined|not declared|does not (?:add|define|declare)|isn't defined/i
+
+const ATOMIC_FIXTURE_HINT =
+  'Note: if this block cites a symbol the write references but does not ' +
+  'define, the fake, its fixture key/accessor, and its enum value are ' +
+  'ONE coherent unit — land them in a single atomic write instead of ' +
+  'piecewise edits judged alone.'
+
 const INVERSE_SCENARIO_GUIDANCE =
   'Note for test-control infrastructure (fixtures, fakes registered in an ' +
   'acceptance composition root): if the scenario this control serves ' +
@@ -540,7 +559,13 @@ const INVERSE_SCENARIO_GUIDANCE =
  * stated there, not only in the skill prose.
  *
  * Pass-through everywhere else: verdicts are unchanged, only the
- * violation reason on matching paths gains the guidance paragraph.
+ * violation reason on matching paths gains a guidance paragraph — and
+ * only the paragraph that applies. The inverse-scenario note is
+ * appended when the denial is about a missing red (or the write
+ * removes existing content — the deletion temptation); a denial citing
+ * an undefined symbol gets the atomic-fixture hint instead (a
+ * multi-part fixture judged piecewise). Other denials pass through
+ * untouched, so the guidance never reads as boilerplate.
  *
  * @param rule — the TDD rule to wrap (already wrapped in fast-paths /
  *   mutation-probe as usual).
@@ -558,14 +583,29 @@ export function withInverseScenarioGuidance(
   ): Promise<RuleResult> {
     const result = await rule(action, ctx)
     if (
-      result.kind === 'violation' &&
-      action.kind === 'write' &&
-      options.filePattern.test(action.path)
+      result.kind !== 'violation' ||
+      action.kind !== 'write' ||
+      !options.filePattern.test(action.path)
     ) {
-      return {
-        ...result,
-        reason: `${result.reason ?? ''}\n\n${INVERSE_SCENARIO_GUIDANCE}`,
-      }
+      return result
+    }
+    const reason = result.reason ?? ''
+    let removesContent = false
+    const before = await ctx?.readFile?.(action.path)
+    if (before?.kind === 'present') {
+      const after = new Set(
+        action.content.split('\n').map((line) => line.trim()),
+      )
+      removesContent = before.content
+        .split('\n')
+        .map((line) => line.trim())
+        .some((line) => line.length > 0 && !after.has(line))
+    }
+    if (removesContent || MISSING_RED_REASON.test(reason)) {
+      return { ...result, reason: `${reason}\n\n${INVERSE_SCENARIO_GUIDANCE}` }
+    }
+    if (UNDEFINED_SIBLING_REASON.test(reason)) {
+      return { ...result, reason: `${reason}\n\n${ATOMIC_FIXTURE_HINT}` }
     }
     return result
   }

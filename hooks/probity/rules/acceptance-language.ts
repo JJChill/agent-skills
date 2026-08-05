@@ -18,11 +18,17 @@ entry; nouns that carry domain meaning do.
 
 `
 
+// reason comes FIRST in the shape: an autoregressive model commits to
+// each field in order, so kind-first forces the verdict before the
+// analysis — observed live producing a "violation" whose reason
+// reasoned its way to "Passing." Reason-first lets the model conclude,
+// then label.
 const RESPONSE_SPEC = `## Response format
 
 Respond with a single JSON object of exactly this shape:
-{"kind":"pass"|"violation","reason":"<short explanation>"}
-On "pass", leave reason an empty string (""); only a "violation" needs an explanation.
+{"reason":"<your analysis>","kind":"pass"|"violation"}
+Write reason FIRST and set kind to the conclusion your reason reached —
+the two must agree. Keep reason brief on a clear pass ("" is fine).
 Return JSON only. No prose, no code fences.`
 
 const PROCESS_INSTRUCTIONS = `## Role
