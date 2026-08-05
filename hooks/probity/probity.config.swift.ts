@@ -29,8 +29,10 @@ import {
   enforceControlledPreconditions,
 } from './rules/acceptance-language.js'
 import {
+  enforceCharacterizationResolution,
   enforceProbeReversion,
   requireGreenTestRun,
+  withCharacterizationTest,
   withInverseScenarioGuidance,
   withMutationProbe,
   withTelemetryFastPath,
@@ -198,12 +200,23 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
         // drive the fixture — is stated at the decision point instead
         // of leaving "observe a red first" to read as "delete the
         // control".
+        // The characterization wrapper sanctions the FIRST test for
+        // behavior that predates it (born green, so no red can be
+        // observed before it exists): a test-layer write carrying
+        // `// probity: characterization` passes, and the marker only
+        // comes off through a proof-checked removal (a recorded run
+        // where that test failed under a mutation probe). The
+        // resolution gate below blocks commits while a marker is on
+        // disk, so the bypass is a round-trip, not an exemption.
         withInverseScenarioGuidance(
-          withMutationProbe(
-            withTelemetryFastPath(enforceTdd(), {
-              patterns: SWIFT_TELEMETRY_LINES,
-              filePattern: /\.swift$/,
-            }),
+          withCharacterizationTest(
+            withMutationProbe(
+              withTelemetryFastPath(enforceTdd(), {
+                patterns: SWIFT_TELEMETRY_LINES,
+                filePattern: /\.swift$/,
+              }),
+            ),
+            { filePattern: /AcceptanceTests[/\\]/ },
           ),
           { filePattern: /App[/\\]Sources[/\\]Acceptance[/\\]/ },
         ),
@@ -304,6 +317,15 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // The commit half of the mutation-probe round-trip: no commit
     // while a `probity: mutation-probe` marker is still on disk.
     enforceProbeReversion({
+      roots: [root],
+      filePattern: SWIFT_PROBE_FILE_PATTERN,
+    }),
+
+    // The commit half of the characterization round-trip: no commit
+    // while a `probity: characterization` marker is still on disk —
+    // the marker only comes off once the transcript records the
+    // marked test failing under a mutation probe.
+    enforceCharacterizationResolution({
       roots: [root],
       filePattern: SWIFT_PROBE_FILE_PATTERN,
     }),

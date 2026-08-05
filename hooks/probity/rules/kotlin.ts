@@ -625,6 +625,196 @@ export function enforceProbeReversion(options: {
 }
 
 /**
+ * Marker that declares a test a characterization test: the first test
+ * for behavior that already exists in production, so no natural red
+ * can precede it (the test is born green). Put it in a comment on or
+ * directly above the test function:
+ *
+ *     // probity: characterization
+ *     func testSignedInUserWithoutAnEntitlementIsOfferedPlans() async { … }
+ */
+export const CHARACTERIZATION_MARKER = /probity:\s*characterization\b/
+
+const FUNCTION_NAME = /(?:func|fun)\s+`?([A-Za-z_]\w*)/
+
+/** Test names whose characterization markers this write removes,
+ *  paired with `null` when a marker can't be tied to a function. */
+function removedMarkerTests(
+  before: string,
+  after: string,
+): (string | null)[] {
+  const names = (content: string): (string | null)[] => {
+    const lines = content.split('\n')
+    const found: (string | null)[] = []
+    lines.forEach((line, index) => {
+      if (!CHARACTERIZATION_MARKER.test(line)) return
+      for (let scan = index; scan < Math.min(index + 6, lines.length); scan++) {
+        const match = lines[scan]!.match(FUNCTION_NAME)
+        if (match) {
+          found.push(match[1]!)
+          return
+        }
+      }
+      found.push(null)
+    })
+    return found
+  }
+  const remaining = new Set(names(after).filter(Boolean))
+  return names(before).filter((name) => name === null || !remaining.has(name))
+}
+
+/**
+ * Wraps a TDD rule to sanction the **characterization round-trip** —
+ * the only honest way to add the FIRST test for behavior that predates
+ * it (common on brownfield systems). A test for existing behavior is
+ * born green, so no red keyed to it can be observed before it exists;
+ * an unwrapped TDD gate correctly denies it, and a mutation probe
+ * can't help yet because a probe only fails tests that already exist.
+ * Without this wrapper the only ways out are an override or leaving
+ * the behavior unspecified.
+ *
+ * The round-trip, each step enforced:
+ *
+ *   1. Write the test carrying {@link CHARACTERIZATION_MARKER} — this
+ *      wrapper passes it deterministically (test-layer paths only).
+ *   2. Run the suite green, then mutation-probe the production path
+ *      (`// probity: mutation-probe`) and observe the new test FAIL —
+ *      the recorded red is the proof the test bites.
+ *   3. Revert the probe. Remove the characterization marker — this
+ *      wrapper allows the removal only when the session transcript
+ *      records a test run in which the marked test failed.
+ *   4. Commit — {@link enforceCharacterizationResolution} blocks while
+ *      any marker is still on disk, so an unproven characterization
+ *      test can't land.
+ *
+ * The bypass is confined: only writes to paths matching
+ * `options.filePattern` (the test layer) skip the wrapped rule, so a
+ * production write can't borrow the marker. Same inherent limit as
+ * every transcript gate: reds observed in another terminal or CI are
+ * invisible — run the probe in-session.
+ *
+ * @param rule — the TDD rule to wrap (fast-paths/probe wrappers
+ *   included as usual).
+ * @param options.filePattern — paths that hold test code (e.g.
+ *   /AcceptanceTests[/\\]/ or /src[/\\]\w+Test[/\\]/). Required: it is
+ *   the boundary that keeps the marker useless in production files.
+ */
+export function withCharacterizationTest(
+  rule: Rule,
+  options: { filePattern: RegExp },
+): Rule {
+  const wrapped = async function characterizationTest(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || !options.filePattern.test(action.path)) {
+      return rule(action, ctx)
+    }
+    const before = await ctx?.readFile?.(action.path)
+    const beforeText =
+      before?.kind === 'present' ? before.content : ''
+    const markerRemains = CHARACTERIZATION_MARKER.test(action.content)
+    const removed = removedMarkerTests(beforeText, action.content)
+    if (removed.length > 0) {
+      if (removed.some((name) => name === null)) {
+        return {
+          kind: 'violation',
+          reason:
+            'A characterization marker is being removed but could not ' +
+            'be tied to a test function — keep the marker in a comment ' +
+            'directly above the test it declares, and remove them ' +
+            'together with the proof in hand.',
+        }
+      }
+      const history = (await ctx?.history?.()) ?? []
+      const unproven = (removed as string[]).filter(
+        (name) =>
+          !history.some(
+            (event) =>
+              event.kind === 'command' &&
+              'output' in event &&
+              typeof event.output === 'string' &&
+              event.output.includes(name) &&
+              /fail/i.test(event.output),
+          ),
+      )
+      if (unproven.length > 0) {
+        return {
+          kind: 'violation',
+          reason:
+            'Characterization marker removed without a recorded red: no ' +
+            'test run in this session shows the marked test(s) failing ' +
+            `(${unproven.join(', ')}). Prove the test bites first — ` +
+            'mutation-probe the production path it specifies ' +
+            '(// probity: mutation-probe), run the suite, watch this ' +
+            'test fail on its concluding assertion, revert the probe — ' +
+            'then remove the marker.',
+        }
+      }
+      return { kind: 'pass', notes: [{ kind: 'characterization-resolved' }] }
+    }
+    if (markerRemains) {
+      return { kind: 'pass', notes: [{ kind: 'characterization' }] }
+    }
+    return rule(action, ctx)
+  }
+  Object.defineProperty(wrapped, 'name', {
+    value: `characterizationTest(${rule.name || 'rule'})`,
+  })
+  return wrapped
+}
+
+/**
+ * The commit half of the characterization round-trip (see
+ * {@link withCharacterizationTest}): blocks `git commit` while any
+ * test file under `roots` still carries the characterization marker —
+ * the marker only comes off through the proof-checked removal path,
+ * so a characterization test that has never been observed failing
+ * cannot land. Deterministic filesystem scan — no AI call.
+ *
+ * Applies to: command actions matching `git commit`.
+ *
+ * @param options.roots — absolute paths to scan.
+ * @param options.filePattern — which files can carry the marker
+ *   (default: `.kt`/`.kts`/`.java`).
+ */
+export function enforceCharacterizationResolution(options: {
+  roots: string[]
+  filePattern?: RegExp
+}): Rule {
+  const filePattern = options.filePattern ?? DEFAULT_PROBE_FILE_PATTERN
+  return function enforceCharacterizationResolution(
+    action: Action,
+  ): RuleResult {
+    if (action.kind !== 'command') return { kind: 'pass' }
+    if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    const outstanding = options.roots.flatMap((root) =>
+      walkFiles(root)
+        .filter((file) => filePattern.test(file))
+        .filter((file) => {
+          try {
+            return CHARACTERIZATION_MARKER.test(readFileSync(file, 'utf8'))
+          } catch {
+            return false
+          }
+        })
+        .map((file) => relative(root, file)),
+    )
+    if (outstanding.length === 0) return { kind: 'pass' }
+    return {
+      kind: 'violation',
+      reason:
+        'Characterization marker(s) still on disk — a first test for ' +
+        'pre-existing behavior must be proven to bite before it lands: ' +
+        'mutation-probe the production path, watch the marked test ' +
+        'fail, revert the probe, then remove the marker (the removal ' +
+        'is checked against the recorded red):\n' +
+        outstanding.map((file) => `    ${file}`).join('\n'),
+    }
+  }
+}
+
+/**
  * Kotlin/Android addendum for `enforcePortsBoundary` — pass as
  * `enforcePortsBoundary({ instructions: (d) => d + KOTLIN_BOUNDARY_ADDENDUM })`
  * and extend the "Project layout" section with your module/package
