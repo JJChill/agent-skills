@@ -127,11 +127,20 @@ export function forbidNewAmbientEffects(options: {
  * @param options.successPattern — output must match to count as green.
  * @param options.failurePattern — output matching this is red even if
  *   the success pattern also appears.
+ * @param options.forWrites — only demand the run when a write whose
+ *   path matches happened (default: any write). Lets an expensive
+ *   suite gate only the files it covers — e.g. adapter integration
+ *   tests that need a local backend running: scope them to the
+ *   adapter paths so domain-only commits don't pay the friction.
+ * @param options.reason — appended to the no-run deny text to name
+ *   the suite and any setup it needs (e.g. "supabase start").
  */
 export function requireGreenTestRun(options: {
   command: RegExp
   successPattern: RegExp
   failurePattern: RegExp
+  forWrites?: RegExp
+  reason?: string
 }): Rule {
   return async function requireGreenTestRun(
     action: Action,
@@ -141,9 +150,14 @@ export function requireGreenTestRun(options: {
     if (!/git commit/.test(action.command)) return { kind: 'pass' }
     const history = (await ctx?.history?.()) ?? []
     const lastWrite = history.reduce(
-      (last, event, index) => (event.kind === 'write' ? index : last),
+      (last, event, index) =>
+        event.kind === 'write' &&
+        (!options.forWrites || options.forWrites.test(event.path))
+          ? index
+          : last,
       -1,
     )
+    if (options.forWrites && lastWrite === -1) return { kind: 'pass' }
     const runs = history.filter(
       (event, index) =>
         index > lastWrite &&
@@ -151,11 +165,12 @@ export function requireGreenTestRun(options: {
         options.command.test(event.command),
     )
     if (runs.length === 0) {
+      const extra = options.reason ? ` ${options.reason}` : ''
       return {
         kind: 'violation',
         reason:
           'Run the test suite after the last change before committing ' +
-          '(see test-driven-development: commit only on green).',
+          `(see test-driven-development: commit only on green).${extra}`,
       }
     }
     const lastRun = runs[runs.length - 1]!
