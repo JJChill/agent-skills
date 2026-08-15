@@ -263,9 +263,12 @@ export function surfaceRemovedStringUsage(options: {
       .filter((file) => pattern.test(file))
     const broken: string[] = []
     for (const text of removed) {
+      // Case-insensitive: specs routinely select via /log out/i-style
+      // regexes whose source is lowercased relative to the UI text.
+      const needle = text.toLowerCase()
       const users = files.filter((file) => {
         try {
-          return readFileSync(file, 'utf8').includes(text)
+          return readFileSync(file, 'utf8').toLowerCase().includes(needle)
         } catch {
           return false
         }
