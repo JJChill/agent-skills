@@ -53,15 +53,6 @@ const KNOWN_INFRASTRUCTURE_IMPORTS =
 
 export default defineConfig({
   rules: [
-    // ── Inner loop: test-driven-development ─────────────────────────
-    // Red → Green → Refactor on all production and test code. This is
-    // the expensive rule (AI call per matching write) — scope it to
-    // the code you actually TDD.
-    {
-      files: ['src/**', 'test/**', 'tests/**'],
-      rules: [enforceTdd()],
-    },
-
     // ── Boundaries: ports-and-adapters ──────────────────────────────
     // Core purity. Point these globs at your core/domain/use-case
     // code only — adapters and composition roots import vendors by
@@ -94,6 +85,18 @@ export default defineConfig({
     {
       files: ['**/*.test.*', '**/*.spec.*', 'test/**', 'tests/**'],
       rules: [forbidInternalModuleMocks()],
+    },
+
+    // ── Inner loop: test-driven-development ─────────────────────────
+    // Red → Green → Refactor on all production and test code. This is
+    // the expensive rule (AI call per matching write) — scope it to
+    // the code you actually TDD. Listed AFTER the deterministic
+    // screens above: Probity stops at the first violation, so a
+    // vendor import in core code is rejected free by the import
+    // screen, never after a model call.
+    {
+      files: ['src/**', 'test/**', 'tests/**'],
+      rules: [enforceTdd()],
     },
 
     // ── Outer loop: acceptance-testing ──────────────────────────────
