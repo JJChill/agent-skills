@@ -285,4 +285,4 @@ After instrumenting a feature, confirm:
 - [ ] Critical user journeys have synthetic probes using isolated test data, tagged and excluded from SLIs
 - [ ] An induced failure in staging was located via telemetry alone, without reading the source
 
-For the at-a-glance version of this list, including the pre-launch instrumentation gate, see `references/observability-checklist.md`.
+For the at-a-glance version of this list, including the pre-launch instrumentation gate, see `../../references/observability-checklist.md`.
