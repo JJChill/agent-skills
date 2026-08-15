@@ -16,6 +16,13 @@ evals/        → Skill eval cases + framework (see evals/README.md)
 docs/         → Setup guides for different tools
 ```
 
+## Upstreams
+
+This fork tracks two upstream projects; check both when looking for updates to carry in:
+
+- [`addyosmani/agent-skills`](https://github.com/addyosmani/agent-skills) — the parent repository for the skill catalog itself (remote name: `upstream`).
+- [`nizos/probity`](https://github.com/nizos/probity) — the PreToolUse rule engine that `hooks/PROBITY.md` and the `hooks/probity/` enforcement templates build on. Its releases can change rule behavior the templates depend on.
+
 ## Skills by Phase
 
 **Define:** interview-me, idea-refine, event-storming, user-stories, story-mapping, specification-by-example, spec-driven-development, ubiquitous-language
