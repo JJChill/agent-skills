@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "devDependencies": {
+    "@ast-grep/lang-kotlin": "^0.0.7",
+    "@ast-grep/napi": "^0.45.1",
     "@nizos/probity": "^1.10.0",
     "tsx": "^4.19.0"
   }
