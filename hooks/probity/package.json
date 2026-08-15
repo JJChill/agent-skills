@@ -1,0 +1,9 @@
+{
+  "name": "probity-templates",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@nizos/probity": "^1.10.0",
+    "tsx": "^4.19.0"
+  }
+}

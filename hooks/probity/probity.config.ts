@@ -15,15 +15,28 @@
  * hooks/PROBITY.md), then adjust every glob below to your layout —
  * the globs here describe a common src/core + src/adapters layout and
  * WILL need editing.
+ *
+ * Brownfield? The mutation-probe and characterization round-trips
+ * (`withMutationProbe`/`enforceProbeReversion`,
+ * `withCharacterizationTest`/`enforceCharacterizationResolution` in
+ * rules/kotlin.ts — language-neutral despite the filename, they take
+ * marker/file patterns as options) sanction retrofitting tests onto
+ * pre-existing behavior, which the plain TDD gate otherwise blocks
+ * (a test for existing behavior is born green). Wire them when you
+ * start backfilling coverage; see hooks/PROBITY.md.
  */
 import {
   defineConfig,
   enforceTdd,
   forbidContentPattern,
-  requireCommand,
 } from '@nizos/probity'
 
 import { enforceAcceptanceLanguage } from './rules/acceptance-language.js'
+import {
+  forbidNewAmbientEffects,
+  JS_AMBIENT_EFFECT_PATTERNS,
+  requireGreenTestRun,
+} from './rules/gates.js'
 import {
   enforcePortsBoundary,
   forbidInternalModuleMocks,
@@ -65,6 +78,12 @@ export default defineConfig({
             'the dependency through an adapter (see the ' +
             'ports-and-adapters skill).',
         }),
+        // Clock, randomness, and environment are ports too. Delta-based:
+        // existing call sites don't block; net-new ones do. Point
+        // seamHint at your canonical ports once they exist.
+        forbidNewAmbientEffects({
+          patterns: JS_AMBIENT_EFFECT_PATTERNS,
+        }),
         enforcePortsBoundary(),
       ],
     },
@@ -92,16 +111,16 @@ export default defineConfig({
     },
 
     // ── Ship gate ────────────────────────────────────────────────────
-    // No commit on an unverified tree: the full suite must have run
-    // after the last write. Mirrors the /build and /ship commands'
-    // prose gate. Match your real test command.
-    requireCommand({
-      before: { kind: 'command', match: /git commit/ },
-      command: /npm (run )?test|vitest|jest|pytest/,
-      after: { kind: 'write' },
-      reason:
-        'Run the test suite after the last change before committing ' +
-        '(see test-driven-development: commit only on green).',
+    // No commit on an unverified tree — and the recorded run must be
+    // GREEN. Probity's built-in requireCommand only checks that a test
+    // command ran after the last write; a run whose output was all
+    // failures would still unlock the commit. Match your real test
+    // command and your runner's summary lines (defaults below cover
+    // vitest and jest).
+    requireGreenTestRun({
+      command: /npm (run )?test|vitest|jest/,
+      successPattern: /Test Files\s+\d+ passed|Tests:\s+.*\b\d+ passed/,
+      failurePattern: /\d+ failed|FAIL\s/,
     }),
   ],
 })

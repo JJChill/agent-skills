@@ -4,6 +4,13 @@ import { join, relative } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
+import {
+  forbidNewAmbientEffects as forbidNewAmbientEffectsGeneric,
+  introducedPatterns,
+  requireGreenTestRun as requireGreenTestRunGeneric,
+  type NamedPattern,
+} from './gates.js'
+
 /**
  * Kotlin/JVM/Android preset for the ports-and-adapters rules. The
  * JS-ecosystem screens in `ports-and-adapters.ts` (ESM imports,
@@ -40,8 +47,6 @@ export const MOCKING_LIBRARY_IMPORTS =
  */
 export const GRADLE_TEST_COMMAND = /gradlew?\s+(?:[\w:./-]+\s+)*:?[\w:.-]*[tT]est\w*/
 
-type NamedPattern = { label: string; pattern: RegExp }
-
 const STATIC_MOCK_PATTERNS: NamedPattern[] = [
   { label: 'Mockito.mockStatic()', pattern: /\bmockStatic\s*[(<]/g },
   { label: 'mockkStatic()', pattern: /\bmockkStatic\s*\(/g },
@@ -61,33 +66,6 @@ const AMBIENT_EFFECT_PATTERNS: NamedPattern[] = [
   { label: 'Random()/Math.random()', pattern: /\bRandom\s*\(|\bMath\.random\s*\(/g },
   { label: 'System.getenv', pattern: /\bSystem\.getenv\b/g },
 ]
-
-function countMatches(content: string, pattern: RegExp): number {
-  let count = 0
-  for (const _ of content.matchAll(pattern)) count++
-  return count
-}
-
-/** Patterns whose occurrence count grows from before → after. */
-async function introducedPatterns(
-  action: { path: string; content: string },
-  ctx: RuleContext | undefined,
-  patterns: NamedPattern[],
-): Promise<string[]> {
-  const hits = patterns.filter(
-    ({ pattern }) => countMatches(action.content, pattern) > 0,
-  )
-  if (hits.length === 0) return []
-  const before = await ctx?.readFile?.(action.path)
-  const beforeContent = before?.kind === 'present' ? before.content : ''
-  return hits
-    .filter(
-      ({ pattern }) =>
-        countMatches(action.content, pattern) >
-        countMatches(beforeContent, pattern),
-    )
-    .map(({ label }) => label)
-}
 
 /**
  * Kotlin counterpart of `forbidInternalModuleMocks`: blocks test
@@ -158,27 +136,12 @@ export function forbidStaticMocks(): Rule {
 export function forbidNewAmbientEffects(
   options: { seamHint?: string; patterns?: NamedPattern[] } = {},
 ): Rule {
-  const patterns = options.patterns ?? AMBIENT_EFFECT_PATTERNS
-  return async function forbidNewAmbientEffects(
-    action: Action,
-    ctx?: RuleContext,
-  ): Promise<RuleResult> {
-    if (action.kind !== 'write') return { kind: 'pass' }
-    const introduced = await introducedPatterns(action, ctx, patterns)
-    if (introduced.length === 0) return { kind: 'pass' }
-    const hint = options.seamHint ? ` ${options.seamHint}.` : ''
-    return {
-      kind: 'violation',
-      reason:
-        `This write introduces direct ambient-effect calls (${introduced.join(
-          ', ',
-        )}). Clock, randomness, and environment are unowned OS ` +
-        'dependencies: reach them through a port injected into this ' +
-        `code, implemented by a thin adapter.${hint} Existing call ` +
-        'sites in the file are untouched by this rule — only new ones ' +
-        'are blocked.',
-    }
-  }
+  // Kotlin-defaulted wrapper over the language-neutral rule in
+  // gates.ts (JS/TS configs use it directly with their own patterns).
+  return forbidNewAmbientEffectsGeneric({
+    patterns: options.patterns ?? AMBIENT_EFFECT_PATTERNS,
+    seamHint: options.seamHint,
+  })
 }
 
 type AstGrepNode = { findAll(rule: unknown): unknown[] }
@@ -322,46 +285,13 @@ export function requireGreenTestRun(options: {
   successPattern?: RegExp
   failurePattern?: RegExp
 }): Rule {
-  const success = options.successPattern ?? /BUILD SUCCESSFUL/
-  const failure = options.failurePattern ?? /FAILED|BUILD FAILED/
-  return async function requireGreenTestRun(
-    action: Action,
-    ctx?: RuleContext,
-  ): Promise<RuleResult> {
-    if (action.kind !== 'command') return { kind: 'pass' }
-    if (!/git commit/.test(action.command)) return { kind: 'pass' }
-    const history = (await ctx?.history?.()) ?? []
-    const lastWrite = history.reduce(
-      (last, event, index) => (event.kind === 'write' ? index : last),
-      -1,
-    )
-    const runs = history.filter(
-      (event, index) =>
-        index > lastWrite &&
-        event.kind === 'command' &&
-        options.command.test(event.command),
-    )
-    if (runs.length === 0) {
-      return {
-        kind: 'violation',
-        reason:
-          'Run the test suite after the last change before committing ' +
-          '(see test-driven-development: commit only on green).',
-      }
-    }
-    const lastRun = runs[runs.length - 1]!
-    const output = 'output' in lastRun ? (lastRun.output ?? '') : ''
-    if (failure.test(output) || !success.test(output)) {
-      return {
-        kind: 'violation',
-        reason:
-          'The last recorded test run after your changes was not ' +
-          'green — a recorded invocation is not a passing suite. Fix ' +
-          'the failures (or the build) and rerun before committing.',
-      }
-    }
-    return { kind: 'pass' }
-  }
+  // Gradle-defaulted wrapper over the language-neutral rule in
+  // gates.ts (JS/TS configs use it directly with their own patterns).
+  return requireGreenTestRunGeneric({
+    command: options.command,
+    successPattern: options.successPattern ?? /BUILD SUCCESSFUL/,
+    failurePattern: options.failurePattern ?? /FAILED|BUILD FAILED/,
+  })
 }
 
 /** Complete single-line telemetry calls — the only additions the
