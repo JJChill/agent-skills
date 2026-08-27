@@ -35,9 +35,14 @@ import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
  * so Covers tags and baselines are unaffected by adding one.
  */
 
-const SCENARIO_HEADING =
-  /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/gm
-const COVERS_TAG = /Covers:\s*([\w.-]+\.feature\.md)\s*::\s*Scenario:\s*([^\n]+)/g
+// Two spec formats during the .feature.md -> .feature migration:
+//   Markdown:  ## Scenario (wip) [system]: Title
+//   Gherkin:   @wip @system\n  Scenario: Title
+// parseScenarios below handles both, line by line.
+const MD_SCENARIO =
+  /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/
+const GHERKIN_SCENARIO = /^Scenario(?:\s+Outline)?:\s*(.+?)\s*$/
+const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^\n]+)/g
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -56,8 +61,15 @@ function normalizeTitle(title: string): string {
     .toLowerCase()
 }
 
+// A spec is identified by its stem (filename without .feature/.feature.md)
+// so a scenario keeps one key across the extension change and Covers tags
+// resolve regardless of which extension either side currently uses.
+function specStem(name: string): string {
+  return basename(name).replace(/\.feature(?:\.md)?$/i, '')
+}
+
 function scenarioKey(specFile: string, title: string): string {
-  return `${basename(specFile)} :: ${normalizeTitle(title)}`
+  return `${specStem(specFile)} :: ${normalizeTitle(title)}`
 }
 
 type Scenario = {
@@ -80,15 +92,47 @@ function parseScopes(tag: string | undefined): string[] {
 
 export function extractScenarios(specFile: string, content: string): Scenario[] {
   const scenarios: Scenario[] = []
-  for (const match of content.matchAll(SCENARIO_HEADING)) {
-    const title = match[4] ?? ''
-    scenarios.push({
-      key: scenarioKey(specFile, title),
-      specFile,
-      title: title.trim(),
-      wip: match[1] !== undefined,
-      scopes: parseScopes(match[3]),
-    })
+  let tags: string[] = []
+  for (const line of content.split(/\r?\n/)) {
+    const md = line.match(MD_SCENARIO)
+    if (md) {
+      const title = md[4] ?? ''
+      scenarios.push({
+        key: scenarioKey(specFile, title),
+        specFile,
+        title: title.trim(),
+        wip: md[1] !== undefined,
+        scopes: parseScopes(md[3]),
+      })
+      tags = []
+      continue
+    }
+    const trimmed = line.trim()
+    if (/^@\S/.test(trimmed)) {
+      tags.push(
+        ...trimmed
+          .split(/\s+/)
+          .filter((token) => token.startsWith('@'))
+          .map((token) => token.slice(1).toLowerCase()),
+      )
+      continue
+    }
+    const gherkin = trimmed.match(GHERKIN_SCENARIO)
+    if (gherkin) {
+      const title = gherkin[1] ?? ''
+      scenarios.push({
+        key: scenarioKey(specFile, title),
+        specFile,
+        title: title.trim(),
+        wip: tags.includes('wip') || tags.includes('planned'),
+        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned'),
+      })
+      tags = []
+      continue
+    }
+    // Tags only attach to the next Scenario; any non-tag, non-comment
+    // content (a Feature line, a step) ends a dangling tag block.
+    if (trimmed !== '' && !trimmed.startsWith('#')) tags = []
   }
   return scenarios
 }
@@ -195,10 +239,17 @@ export function readBaseline(path: string | undefined): Set<string> {
   )
 }
 
+/** All spec files (either extension) under a directory. */
+export function findSpecFiles(specsDir: string): string[] {
+  return walk(specsDir).filter(
+    (file) => file.endsWith('.feature.md') || file.endsWith('.feature'),
+  )
+}
+
 export function scanSpecs(specsDir: string): Scenario[] {
-  return walk(specsDir)
-    .filter((file) => file.endsWith('.feature.md'))
-    .flatMap((file) => extractScenarios(file, readFileSync(file, 'utf8')))
+  return findSpecFiles(specsDir).flatMap((file) =>
+    extractScenarios(file, readFileSync(file, 'utf8')),
+  )
 }
 
 export function scanCoversRefs(
@@ -207,7 +258,12 @@ export function scanCoversRefs(
 ): CoversRef[] {
   return testRoots
     .flatMap((root) => walk(root))
-    .filter((file) => testFilePattern.test(file) && !file.endsWith('.feature.md'))
+    .filter(
+      (file) =>
+        testFilePattern.test(file) &&
+        !file.endsWith('.feature.md') &&
+        !file.endsWith('.feature'),
+    )
     .flatMap((file) => extractCoversRefs(file, readFileSync(file, 'utf8')))
 }
 
@@ -260,7 +316,28 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     if (action.kind !== 'command') return { kind: 'pass' }
     if (!/git commit/.test(action.command)) return { kind: 'pass' }
     if (!existsSync(options.specsDir)) return { kind: 'pass' }
-    const scenarios = scanSpecs(options.specsDir)
+    // During the .feature.md -> .feature migration a spec is one extension
+    // or the other; the same stem in both forms double-counts scenarios and
+    // masks a half-finished rename.
+    const specFiles = findSpecFiles(options.specsDir)
+    const byStem = new Map<string, string>()
+    for (const file of specFiles) {
+      const stem = specStem(file)
+      const existing = byStem.get(stem)
+      if (existing) {
+        return {
+          kind: 'violation',
+          reason:
+            `Spec "${stem}" exists in both .feature and .feature.md forms:\n` +
+            `    ${existing}\n    ${file}\n` +
+            'Finish the migration for this spec — keep a single extension.',
+        }
+      }
+      byStem.set(stem, file)
+    }
+    const scenarios = specFiles.flatMap((file) =>
+      extractScenarios(file, readFileSync(file, 'utf8')),
+    )
     const refs = scanCoversRefs(options.testRoots, pattern)
     const baseline = readBaseline(options.baselinePath)
     const claimed = new Set(refs.map((ref) => ref.key))
@@ -464,7 +541,8 @@ export function surfaceScenarioLinkBreakage(
     ctx?: RuleContext,
   ): Promise<RuleResult> {
     if (action.kind !== 'write') return { kind: 'pass' }
-    if (!action.path.endsWith('.feature.md')) return { kind: 'pass' }
+    if (!action.path.endsWith('.feature.md') && !action.path.endsWith('.feature'))
+      return { kind: 'pass' }
     const before = await ctx?.readFile?.(action.path)
     if (!before || before.kind !== 'present') return { kind: 'pass' }
     const beforeKeys = new Map(

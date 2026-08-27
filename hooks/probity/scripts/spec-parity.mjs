@@ -41,16 +41,31 @@
  *
  * Conventions (shared with the probity rule):
  *   spec heading:  ## Scenario: <title>     (## Scenario (wip): exempt)
+ *                  or Gherkin `Scenario: <title>` (preceded by @wip / @scope tags)
  *   scope tag:     ## Scenario [system]: <title>   (after any (wip) marker)
- *   test tag:      Covers: <spec>.feature.md :: Scenario: <title>
+ *                  or a Gherkin `@system` tag on the scenario
+ *   test tag:      Covers: <spec>.feature[.md] :: Scenario: <title>
+ *
+ * Spec files may be either <name>.feature.md (Markdown) or <name>.feature
+ * (Gherkin); the two extensions are interchangeable (matched by stem) so a
+ * spec can convert one file at a time with parity green throughout. The
+ * same stem in both extensions at once is rejected (unfinished rename).
  */
 import { readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import process from 'node:process'
 
-const SCENARIO_HEADING =
-  /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/gm
-const COVERS_TAG = /Covers:\s*([\w.-]+\.feature\.md)\s*::\s*Scenario:\s*([^\n]+)/g
+// Scenario headings come in two forms during the migration from Markdown
+// feature files to real Gherkin:
+//   Markdown:  ## Scenario (wip) [system]: Title
+//   Gherkin:   @wip @system\n  Scenario: Title
+// Both are parsed per-line by parseScenarios below.
+const MD_SCENARIO =
+  /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/
+const GHERKIN_SCENARIO = /^Scenario(?:\s+Outline)?:\s*(.+?)\s*$/
+// Covers tags accept either extension so a tag survives its spec's
+// conversion unchanged: Covers: <spec>.feature[.md] :: Scenario: <title>
+const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^\n]+)/g
 const SKIP_DIRS = new Set(['node_modules', '.git', 'build', '.gradle', 'out', 'dist', '.idea'])
 
 function parseArgs(argv) {
@@ -107,7 +122,12 @@ function normalizeTitle(title) {
     .toLowerCase()
 }
 
-const key = (specFile, title) => `${basename(specFile)} :: ${normalizeTitle(title)}`
+// A spec is identified by its stem (filename without .feature or
+// .feature.md), so a scenario keeps the same key across the extension
+// change and Covers tags resolve regardless of which extension either side
+// currently uses.
+const specStem = (name) => basename(name).replace(/\.feature(?:\.md)?$/i, '')
+const key = (specFile, title) => `${specStem(specFile)} :: ${normalizeTitle(title)}`
 
 function walk(dir, out = []) {
   let entries
@@ -126,6 +146,64 @@ function walk(dir, out = []) {
   return out
 }
 
+const splitScopeList = (raw) =>
+  (raw ?? '')
+    .split(',')
+    .map((scope) => scope.trim().toLowerCase())
+    .filter(Boolean)
+
+/**
+ * Parse one spec file (Markdown `## Scenario:` or Gherkin `Scenario:`)
+ * into scenario records. Gherkin `@tags` on the lines preceding a
+ * `Scenario:` map to markers: `@wip`/`@planned` mark work-in-progress,
+ * every other tag is a driver-scope name (mirroring Markdown's
+ * `(wip)` marker and `[scope]` list).
+ */
+function parseScenarios(file) {
+  const scenarios = []
+  let tags = []
+  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const md = line.match(MD_SCENARIO)
+    if (md) {
+      scenarios.push({
+        key: key(file, md[4]),
+        specFile: basename(file),
+        title: md[4].trim(),
+        wip: md[1] !== undefined,
+        scopes: splitScopeList(md[3]),
+      })
+      tags = []
+      continue
+    }
+    const trimmed = line.trim()
+    if (/^@\S/.test(trimmed)) {
+      tags.push(
+        ...trimmed
+          .split(/\s+/)
+          .filter((token) => token.startsWith('@'))
+          .map((token) => token.slice(1).toLowerCase()),
+      )
+      continue
+    }
+    const gherkin = trimmed.match(GHERKIN_SCENARIO)
+    if (gherkin) {
+      scenarios.push({
+        key: key(file, gherkin[1]),
+        specFile: basename(file),
+        title: gherkin[1].trim(),
+        wip: tags.includes('wip') || tags.includes('planned'),
+        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned'),
+      })
+      tags = []
+      continue
+    }
+    // Tags only attach to the next Scenario. A Feature line, or any other
+    // non-tag, non-comment content, ends a dangling tag block.
+    if (trimmed !== '' && !trimmed.startsWith('#')) tags = []
+  }
+  return scenarios
+}
+
 const args = parseArgs(process.argv.slice(2))
 if (!existsSync(args.specs)) {
   console.log(`No specs directory at ${args.specs} — nothing to enforce.`)
@@ -133,24 +211,37 @@ if (!existsSync(args.specs)) {
 }
 const pattern = args.pattern ? new RegExp(args.pattern) : /[/\\]acceptance[/\\]/
 
-const scenarios = walk(args.specs)
-  .filter((file) => file.endsWith('.feature.md'))
-  .flatMap((file) =>
-    [...readFileSync(file, 'utf8').matchAll(SCENARIO_HEADING)].map((m) => ({
-      key: key(file, m[4]),
-      specFile: basename(file),
-      title: m[4].trim(),
-      wip: m[1] !== undefined,
-      scopes: (m[3] ?? '')
-        .split(',')
-        .map((scope) => scope.trim().toLowerCase())
-        .filter(Boolean),
-    })),
-  )
+const specFiles = walk(args.specs).filter(
+  (file) => file.endsWith('.feature.md') || file.endsWith('.feature'),
+)
+
+// During the .feature.md -> .feature migration a spec is one extension or
+// the other. The same stem in both forms would double-count scenarios and
+// mask a half-finished rename, so fail loudly instead of silently passing.
+const seenStems = new Map()
+for (const file of specFiles) {
+  const stem = specStem(file)
+  const existing = seenStems.get(stem)
+  if (existing) {
+    console.error(`Spec "${stem}" exists in both .feature and .feature.md forms:`)
+    console.error(`  ${existing}`)
+    console.error(`  ${file}`)
+    console.error('Finish the migration for this spec — keep a single extension.')
+    process.exit(2)
+  }
+  seenStems.set(stem, file)
+}
+
+const scenarios = specFiles.flatMap(parseScenarios)
 
 const refs = args.tests
   .flatMap((root) => walk(root))
-  .filter((file) => pattern.test(file) && !file.endsWith('.feature.md'))
+  .filter(
+    (file) =>
+      pattern.test(file) &&
+      !file.endsWith('.feature.md') &&
+      !file.endsWith('.feature'),
+  )
   .flatMap((file) =>
     [...readFileSync(file, 'utf8').matchAll(COVERS_TAG)].map((m) => ({
       key: key(m[1], m[2]),
