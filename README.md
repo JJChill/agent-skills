@@ -167,7 +167,11 @@ Use agent definitions from `agents/` as Copilot personas and skill content in `.
 
 <details>
   <summary><b>Kiro IDE & CLI </b></summary>
-  Skills for Kiro reside under ".kiro/skills/" and can be stored under Project or Global level. Kiro also supports Agents.md. See Kiro docs at https://kiro.dev/docs/skills/
+
+Skills for Kiro reside under `.kiro/skills/` (project or global level), and Kiro also reads `AGENTS.md`. See the Kiro docs at https://kiro.dev/docs/skills/.
+
+For **mechanical enforcement** — the same Probity guardrail the Claude Code integration uses (spec-first acceptance tests, no fixed sleeps, TDD on production writes, a commit green-gate) — install the Kiro hooks. Probity has no native Kiro vendor, so a thin preToolUse shim translates Kiro's tool events to Probity's `claude-code` contract and back, letting one `probity.config.ts` enforce both agents. Assets live in [`hooks/probity/kiro/`](hooks/probity/kiro/); see [docs/kiro-setup.md](docs/kiro-setup.md).
+
 </details>
 
 <details>

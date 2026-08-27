@@ -1,0 +1,174 @@
+# Kiro Setup
+
+This guide explains how to run the Agent Skills framework under **Kiro CLI**
+with the same mechanical enforcement the Claude Code integration gets from
+[Probity](https://github.com/nizos/probity): spec-first acceptance tests,
+no fixed sleeps, TDD on production writes, and a commit gate that blocks an
+unverified tree.
+
+Kiro already supports skills (`.kiro/skills/`) and `AGENTS.md`. What it does
+*not* get out of the box is the Probity guardrail, because Probity ships
+vendor adapters for `claude-code`, `codex`, and `github-copilot` — but not
+Kiro. This integration closes that gap with a thin translation shim, so one
+`probity.config.ts` enforces both agents.
+
+Assets live in [`hooks/probity/kiro/`](../hooks/probity/kiro/):
+
+| File | Role |
+|------|------|
+| `probity-kiro.sh` | preToolUse shim: translates a Kiro tool event to Probity's claude-code contract and back |
+| `probity-kiro-translate.py` | `event` (Kiro event → claude payload) and `reason` (deny → reason) helpers |
+| `kiro-transcript-to-claude.py` | transduces Kiro's session JSONL to the Anthropic shape Probity's history rules read |
+| `skill-activation-forced-eval.sh` | userPromptSubmit hook that forces explicit skill evaluation each turn |
+| `kiro-agent.template.json` | agent config template wiring the skills + both hooks |
+
+---
+
+## How it works (and why a shim)
+
+The two agents disagree on the hook contract in three ways the shim reconciles:
+
+1. **No Kiro vendor in Probity.** Rather than fork Probity, the shim maps
+   Kiro's tool events onto the `claude-code` payload Probity already
+   understands: `fs_write` (create / strReplace / insert) → `Write` / `Edit`,
+   and `shell` → `Bash`. Non-mutating tools (reads) are allowed immediately
+   without paying Node startup.
+
+2. **Block signalling is inverted.** Probity's `claude-code` path signals a
+   block by printing a deny JSON to stdout and exiting **0**. Kiro blocks a
+   tool when the hook exits **2**, returning stderr to the model. The shim
+   converts the former into the latter.
+
+3. **History lives in a different place.** Probity's stateful rules (the
+   commit green-gate, the TDD RED-before-GREEN judge) reconstruct
+   conversation history from a transcript. Claude Code passes a
+   `transcript_path`; Kiro instead exposes `KIRO_SESSION_ID` and persists a
+   differently-shaped JSONL at `~/.kiro/sessions/cli/<id>.jsonl`. The
+   transducer rewrites that stream into the Anthropic message shape Probity's
+   reader expects (mapping `shell` tool calls to `Bash` so the green-gate can
+   see `xcodebuild … test` output), and the shim passes it as `transcript_path`.
+
+**Fail-safe posture:** a genuine rule violation blocks (exit 2). Shim-internal
+errors (unparseable event, Probity not installed) warn on stderr and *allow*
+(exit 0), so a tooling bug never wedges a session — the commit green-gate
+remains the correctness backstop.
+
+**Alternative considered — a native Kiro vendor in Probity.** Cleaner
+long-term, but it lives in a third-party package (`@nizos/probity`) and would
+need upstreaming. The shim keeps the integration in this framework, which is
+also where the `probity.config.*.ts` presets and rules already live, so a fix
+made here when the dev cycle exposes a gap stays in one place.
+
+---
+
+## Prerequisites
+
+- Kiro CLI installed.
+- The project already uses this framework's Probity setup for Claude Code:
+  a `probity.config.ts` (from a `hooks/probity/probity.config.*.ts` preset),
+  the `rules/`, and `@nizos/probity` installed (`npm install`). The Kiro shim
+  reuses that exact config — it does not add a second rule set.
+- `python3` on PATH (used by the shim and transducer).
+
+---
+
+## Installation
+
+Run from the project root.
+
+### 1. Make the skills discoverable
+
+Kiro loads skills from `.kiro/skills/`. Symlink this framework's `skills/`
+directory in (a symlink keeps one source of truth; adjust the path to your
+checkout):
+
+```bash
+mkdir -p .kiro
+ln -sfn /path/to/agent-skills/skills .kiro/skills
+```
+
+If the symlink points outside the repo, ignore it so it isn't committed:
+
+```bash
+printf 'skills\n' > .kiro/.gitignore
+```
+
+### 2. Install the hooks
+
+```bash
+mkdir -p .kiro/hooks
+cp /path/to/agent-skills/hooks/probity/kiro/probity-kiro.sh            .kiro/hooks/
+cp /path/to/agent-skills/hooks/probity/kiro/probity-kiro-translate.py  .kiro/hooks/
+cp /path/to/agent-skills/hooks/probity/kiro/kiro-transcript-to-claude.py .kiro/hooks/
+cp /path/to/agent-skills/hooks/probity/kiro/skill-activation-forced-eval.sh .kiro/hooks/
+chmod +x .kiro/hooks/*.sh .kiro/hooks/*.py
+```
+
+The shim resolves the repo root from its own location (`.kiro/hooks/../..`)
+and finds `probity` at `node_modules/.bin/probity`, so no path edits are needed.
+
+### 3. Add the agent
+
+Copy the template and fill in the placeholders:
+
+```bash
+mkdir -p .kiro/agents
+cp /path/to/agent-skills/hooks/probity/kiro/kiro-agent.template.json \
+   .kiro/agents/<agent-name>.json
+```
+
+Then edit `.kiro/agents/<agent-name>.json`:
+
+- **`name`** — replace `REPLACE_WITH_AGENT_NAME`. To *override* a global
+  default agent, use the **same name** as the global one (a local
+  `.kiro/agents/<name>.json` takes precedence over `~/.kiro/agents/<name>.json`).
+  Otherwise pick any name and select it with `/agent`.
+- **`description`** — replace the `REPLACE:` text.
+- **`resources`** — `docs/GLOSSARY.md` is optional; remove it if the project
+  has none. Keep `file://AGENTS.md` and `skill://.kiro/skills/**/SKILL.md`.
+- **`prompt`** — optionally name the specific skills that govern the project's
+  workflow, so the per-turn evaluation has a strong prior.
+
+Nothing else needs changing: the `userPromptSubmit` and `preToolUse` hook
+commands already point at the scripts you copied in step 2.
+
+---
+
+## Verification
+
+1. Start Kiro in the project and run `/hooks`. You should see one
+   `userPromptSubmit` entry and two `preToolUse` entries (matchers `write`
+   and `shell`).
+2. Confirm the deterministic wall blocks. Feed a synthetic event straight to
+   the shim (this needs no model call):
+
+   ```bash
+   ROOT="$PWD"
+   printf '%s' "{\"hook_event_name\":\"preToolUse\",\"cwd\":\"$ROOT\",\"tool_name\":\"fs_write\",\"tool_input\":{\"command\":\"create\",\"path\":\"$ROOT/<your-acceptance-dir>/Probe.swift\",\"content\":\"Thread.sleep(forTimeInterval: 1)\"}}" \
+     | bash .kiro/hooks/probity-kiro.sh; echo "exit=$?"
+   ```
+
+   Expect `exit=2` and the fixed-waits reason on stderr. A read event, or a
+   write no rule matches, should print nothing and `exit=0`.
+3. Confirm the transducer emits valid JSONL against a real session:
+
+   ```bash
+   python3 .kiro/hooks/kiro-transcript-to-claude.py \
+     ~/.kiro/sessions/cli/<some-session-id>.jsonl | head
+   ```
+
+---
+
+## Limitations
+
+- **History rules need a session transcript.** When `KIRO_SESSION_ID` is
+  unset or its JSONL is missing, the shim omits `transcript_path` and Probity's
+  history-based rules (green-gate, TDD) fail *open* — exactly as Probity does
+  for Claude Code without a transcript. The deterministic rules (sleeps,
+  UI-mechanics location, spec-backed test, glossary/parity gates) are
+  unaffected.
+- **Tool-name coverage is scoped to the mutating tools.** `write` and `shell`
+  are gated; MCP tools and other built-ins are allowed. Widen the matchers if
+  a project needs more.
+- **Parity, not replacement.** Keep the Claude Code `.claude/settings.json`
+  hook if you use both agents; they share the one `probity.config.ts`.
