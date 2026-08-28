@@ -24,6 +24,27 @@ WRITE_TOOLS = {"fs_write", "write", "fsWrite"}
 SHELL_TOOLS = {"shell", "execute_bash", "execute_cmd", "executeBash", "executeCmd"}
 
 
+def _insert_result(path, cwd, content, insert_line):
+    """Reconstruct a file's content after a Kiro `insert`, so content-based
+    Probity rules (e.g. the glossary guard) see the true result rather than
+    only the introduced text. The pending write hasn't run yet, so the file on
+    disk is the pre-write state; fall back to the introduced text alone if it
+    cannot be read."""
+    full = path if os.path.isabs(path) else os.path.join(cwd, path)
+    try:
+        with open(full, "r", encoding="utf-8") as handle:
+            existing = handle.read()
+    except OSError:
+        return content
+    if isinstance(insert_line, int) and not isinstance(insert_line, bool):
+        lines = existing.splitlines(keepends=True)
+        idx = max(0, min(insert_line, len(lines)))
+        block = content if content.endswith("\n") else content + "\n"
+        return "".join(lines[:idx]) + block + "".join(lines[idx:])
+    separator = "" if existing == "" or existing.endswith("\n") else "\n"
+    return existing + separator + content
+
+
 def cmd_event():
     try:
         event = json.load(sys.stdin)
@@ -52,7 +73,19 @@ def cmd_event():
                 },
                 "cwd": cwd,
             }
-        else:  # create / insert / append -> Write of the introduced text
+        elif ti.get("command") == "insert":
+            # insert ADDS to an existing file; a Write of only the introduced
+            # text would tell Probity the whole file became that text. Rebuild
+            # the true resulting content from the pre-write file on disk.
+            payload = {
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": path,
+                    "content": _insert_result(path, cwd, ti.get("content", ""), ti.get("insertLine")),
+                },
+                "cwd": cwd,
+            }
+        else:  # create -> Write of the whole-file content
             payload = {
                 "tool_name": "Write",
                 "tool_input": {"file_path": path, "content": ti.get("content", "")},
