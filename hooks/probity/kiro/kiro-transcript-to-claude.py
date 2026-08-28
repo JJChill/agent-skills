@@ -40,15 +40,34 @@ import sys
 
 
 def _text_blocks(content):
-    """Join the text payloads of a Kiro content array into one string."""
+    """Join the payloads of a Kiro content array into one string.
+
+    Text blocks (`kind == "text"`) carry prompts and assistant prose. Tool
+    RESULTS, however, are persisted as `kind == "json"` blocks — the shell
+    tool's {exit_status, stdout, stderr} object, write confirmations, etc.
+    The history-based rules match on command OUTPUT (the green-gate looks for
+    a passing test run; the characterization gate looks for the marked test
+    failing), so those json payloads must be serialized in rather than
+    dropped — otherwise every command's output is invisible under Kiro and
+    the gates can never see a test run at all.
+    """
     out = []
     for item in content or []:
         if not isinstance(item, dict):
             continue
-        if item.get("kind") == "text":
-            data = item.get("data")
+        kind = item.get("kind")
+        data = item.get("data")
+        if kind == "text":
             if isinstance(data, str):
                 out.append(data)
+        elif kind == "json":
+            if isinstance(data, str):
+                out.append(data)
+            else:
+                try:
+                    out.append(json.dumps(data))
+                except (TypeError, ValueError):
+                    pass
     return "\n".join(out)
 
 
