@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
@@ -108,6 +109,27 @@ export function forbidNewAmbientEffects(options: {
 }
 
 /**
+ * Files the pending commit will record, repo-relative. Reads the
+ * staged set (`git diff --cached --name-only`); for a `git commit`
+ * with `-a`/`-am`/`--all` it also folds in modified-but-unstaged
+ * tracked files. Throws if git is unavailable — callers fail safe.
+ */
+function defaultListCommitFiles(command: string): string[] {
+  const run = (args: string[]): string[] =>
+    execFileSync('git', args, { cwd: process.cwd(), encoding: 'utf8' })
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+  const files = run(['diff', '--cached', '--name-only'])
+  if (/\s-\w*a\w*\b/.test(command) || /--all\b/.test(command)) {
+    for (const file of run(['diff', '--name-only'])) {
+      if (!files.includes(file)) files.push(file)
+    }
+  }
+  return files
+}
+
+/**
  * Commit-on-green, strictly: Probity's `requireCommand` checks only
  * that a matching test invocation was *recorded* after the last write
  * and would happily pass a transcript whose latest run FAILED. This
@@ -127,11 +149,16 @@ export function forbidNewAmbientEffects(options: {
  * @param options.successPattern — output must match to count as green.
  * @param options.failurePattern — output matching this is red even if
  *   the success pattern also appears.
- * @param options.forWrites — only demand the run when a write whose
- *   path matches happened (default: any write). Lets an expensive
- *   suite gate only the files it covers — e.g. adapter integration
- *   tests that need a local backend running: scope them to the
- *   adapter paths so domain-only commits don't pay the friction.
+ * @param options.enforceForPaths — only demand the run when the
+ *   pending commit stages a file whose repo-relative path matches.
+ *   Scopes an expensive suite to the code it covers: infra/docs/
+ *   tooling-only commits (CI config, Markdown, the Probity config
+ *   itself) pay no friction, since they change no behaviour the suite
+ *   validates and the prior green run still stands. Commit-accurate —
+ *   read from git's staged set, not the session's write history. Any
+ *   error listing files falls through to enforcing (fail safe).
+ * @param options.listCommitFiles — injectable staged-file lister
+ *   (defaults to reading git's staged set); present for testing.
  * @param options.reason — appended to the no-run deny text to name
  *   the suite and any setup it needs (e.g. "supabase start").
  */
@@ -139,25 +166,36 @@ export function requireGreenTestRun(options: {
   command: RegExp
   successPattern: RegExp
   failurePattern: RegExp
-  forWrites?: RegExp
+  enforceForPaths?: RegExp
+  listCommitFiles?: (command: string) => string[]
   reason?: string
 }): Rule {
+  const listCommitFiles = options.listCommitFiles ?? defaultListCommitFiles
   return async function requireGreenTestRun(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
     if (action.kind !== 'command') return { kind: 'pass' }
     if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    // Scope the gate to commits that stage code the suite validates.
+    // On any error listing files, fall through and enforce (fail safe).
+    if (options.enforceForPaths) {
+      const pattern = options.enforceForPaths
+      let files: string[] | undefined
+      try {
+        files = listCommitFiles(action.command)
+      } catch {
+        files = undefined
+      }
+      if (files && !files.some((file) => pattern.test(file))) {
+        return { kind: 'pass' }
+      }
+    }
     const history = (await ctx?.history?.()) ?? []
     const lastWrite = history.reduce(
-      (last, event, index) =>
-        event.kind === 'write' &&
-        (!options.forWrites || options.forWrites.test(event.path))
-          ? index
-          : last,
+      (last, event, index) => (event.kind === 'write' ? index : last),
       -1,
     )
-    if (options.forWrites && lastWrite === -1) return { kind: 'pass' }
     const runs = history.filter(
       (event, index) =>
         index > lastWrite &&

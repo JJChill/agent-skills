@@ -340,10 +340,15 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
     // readback is the output this gate accepts. Run your documented
     // test command once and confirm successPattern matches what it
     // actually prints before trusting the gate.
+    // Scope the commit-on-green gate to code the acceptance suite
+    // actually validates; infra/docs/tooling-only commits (CI config,
+    // lint config, Markdown, probity.config.ts, rules/**) aren't gated
+    // on a fresh xcodebuild run. Adjust the paths to your layout.
     requireGreenTestRun({
       command: XCODEBUILD_TEST_COMMAND,
       successPattern: XCODEBUILD_TEST_SUCCEEDED,
       failurePattern: XCODEBUILD_TEST_FAILED,
+      enforceForPaths: /^(?:App|AcceptanceTests|VPNNetworkExtension)\//,
     }),
   ]
 }

@@ -284,6 +284,9 @@ export function requireGreenTestRun(options: {
   command: RegExp
   successPattern?: RegExp
   failurePattern?: RegExp
+  enforceForPaths?: RegExp
+  listCommitFiles?: (command: string) => string[]
+  reason?: string
 }): Rule {
   // Gradle-defaulted wrapper over the language-neutral rule in
   // gates.ts (JS/TS configs use it directly with their own patterns).
@@ -291,6 +294,9 @@ export function requireGreenTestRun(options: {
     command: options.command,
     successPattern: options.successPattern ?? /BUILD SUCCESSFUL/,
     failurePattern: options.failurePattern ?? /FAILED|BUILD FAILED/,
+    enforceForPaths: options.enforceForPaths,
+    listCommitFiles: options.listCommitFiles,
+    reason: options.reason,
   })
 }
 

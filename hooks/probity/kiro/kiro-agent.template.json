@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json.schemastore.org/kiro-agent.json",
+  "name": "REPLACE_WITH_AGENT_NAME",
+  "description": "REPLACE: Workspace agent that surfaces the agent-skills library (via the .kiro/skills symlink) and enforces this project's Probity rules on every write/shell through the Kiro preToolUse shim.",
+  "prompt": "You are the default agent for this workspace. Treat AGENTS.md as the highest-priority context after the user's direct instructions. Honor the mandatory skill-activation sequence injected on every user prompt before implementing. Probity enforces this project's spec-first / test-first workflow mechanically as a preToolUse hook.",
+  "tools": [
+    "*"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "./**"
+      ]
+    },
+    "write": {
+      "allowedPaths": [
+        "./**"
+      ]
+    }
+  },
+  "resources": [
+    "file://AGENTS.md",
+    "file://docs/GLOSSARY.md",
+    "skill://.kiro/skills/**/SKILL.md"
+  ],
+  "hooks": {
+    "userPromptSubmit": [
+      {
+        "command": "bash \"$( (git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") )/.kiro/hooks/skill-activation-forced-eval.sh\""
+      }
+    ],
+    "preToolUse": [
+      {
+        "matcher": "write",
+        "command": "bash \"$( (git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") )/.kiro/hooks/probity-kiro.sh\"",
+        "timeout_ms": 120000
+      },
+      {
+        "matcher": "shell",
+        "command": "bash \"$( (git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") )/.kiro/hooks/probity-kiro.sh\"",
+        "timeout_ms": 120000
+      }
+    ]
+  }
+}
