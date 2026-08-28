@@ -52,7 +52,11 @@ TRANSCRIPT_TMP=""
 if [ -n "${KIRO_SESSION_ID:-}" ]; then
   KIRO_JSONL="$HOME/.kiro/sessions/cli/${KIRO_SESSION_ID}.jsonl"
   if [ -f "$KIRO_JSONL" ] && command -v python3 >/dev/null 2>&1; then
-    TRANSCRIPT_TMP="$(mktemp "${TMPDIR:-/tmp}/probity-kiro-transcript.XXXXXX.jsonl")"
+    # Trailing X's only: BSD/macOS mktemp substitutes a run of X's solely when
+    # it ends the template. A `.jsonl` suffix here would be taken literally,
+    # colliding on every second invocation. Probity reads the path, not the
+    # extension, so no suffix is needed.
+    TRANSCRIPT_TMP="$(mktemp "${TMPDIR:-/tmp}/probity-kiro-transcript.XXXXXX")"
     if ! python3 "$TRANSDUCER" "$KIRO_JSONL" >"$TRANSCRIPT_TMP" 2>/dev/null; then
       rm -f "$TRANSCRIPT_TMP"
       TRANSCRIPT_TMP=""
