@@ -1,0 +1,85 @@
+# @jjchill/probity-rules
+
+Versioned [Probity](https://github.com/nizos/probity) rule presets and CLI
+tooling for the [agent-skills](https://github.com/addyosmani/agent-skills)
+catalog. Turns three of the catalog's prose disciplines —
+test-driven-development, ports-and-adapters, acceptance-testing — into hard
+PreToolUse gates, plus spec-test parity and ubiquitous-language checks. See
+[`hooks/PROBITY.md`](../PROBITY.md) for full rule semantics.
+
+Rules and scripts live in this package now instead of being copied into a
+project; a project's `probity.config.ts` imports from it, so `npm update`
+brings rule fixes in instead of a fork rotting.
+
+## Install
+
+```sh
+npm install -D @nizos/probity @jjchill/probity-rules
+```
+
+## Presets
+
+Each preset is a factory returning `RuleEntry[]` from `@nizos/probity`. Copy
+the matching thin config template from the package root (`probity.config.ts`,
+`probity.config.kotlin.ts`, `probity.config.kmp.ts`,
+`probity.config.swift.ts`) into your project root, then edit its options.
+
+| Preset | Import | Config template |
+| --- | --- | --- |
+| Plain JS/TS | `@jjchill/probity-rules/presets/js` — `jsRuleEntries(options?)` | `probity.config.ts` |
+| Kotlin/JVM/Android | `@jjchill/probity-rules/presets/kotlin` — `kotlinRuleEntries(root, options?)` | `probity.config.kotlin.ts` |
+| Kotlin Multiplatform | `@jjchill/probity-rules/presets/kmp` — `kmpRuleEntries(root, parity?)` | `probity.config.kmp.ts` |
+| Swift/iOS | `@jjchill/probity-rules/presets/swift` — `swiftRuleEntries(root)` | `probity.config.swift.ts` |
+
+Minimal example (plain JS/TS):
+
+```ts
+// probity.config.ts
+import { defineConfig } from '@nizos/probity'
+import { jsRuleEntries } from '@jjchill/probity-rules/presets/js'
+
+export default defineConfig({
+  rules: jsRuleEntries({
+    coreGlobs: ['src/core/**', 'src/domain/**'],
+  }),
+})
+```
+
+Kotlin Multiplatform:
+
+```ts
+// probity.config.kmp.ts
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from '@nizos/probity'
+import { kmpRuleEntries } from '@jjchill/probity-rules/presets/kmp'
+
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default defineConfig({ rules: kmpRuleEntries(ROOT) })
+```
+
+Every preset's options and their current defaults are documented at the top
+of its module in `presets/`.
+
+## Bins
+
+- `npx probity-scope-report [--config probity.config.ts] [--root .] [--strict]`
+  — dry-runs your config's `{ files, rules }` blocks against your real repo
+  and reports dead scopes (globs matching zero files) and suspicious claims
+  (core-purity rules touching adapter code, the language rule touching
+  driver code).
+- `npx probity-spec-parity` — the CI mirror of the spec↔test traceability
+  rule: checks that every non-`wip` scenario under `docs/specs` is claimed
+  by an acceptance test.
+
+## Updating
+
+Run `/probity-update` (a plugin slash command) from your project to update
+the package, migrate your config to new options, refresh the Kiro shim
+files, and re-verify scoping — see the command for the full procedure.
+
+## Kiro
+
+`kiro/` ships the Kiro hook shim (unchanged install model: copy into your
+project's `.kiro/hooks/`). `/probity-update` re-copies changed files from
+here.

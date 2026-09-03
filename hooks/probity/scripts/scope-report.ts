@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Scoping dry-run for a Probity config: shows which files each
  * `{ files, rules }` block actually claims in YOUR repo, before the
@@ -18,23 +19,31 @@
  * picomatch semantics come from rules/scoping.ts, the same replica
  * the workflow eval uses.
  *
- * Usage (from the project root, next to your probity.config.ts):
+ * Usage (from your project root, next to your probity.config.ts):
  *
- *   npx tsx scripts/scope-report.ts [--config probity.config.ts]
- *                                   [--root .] [--strict]
+ *   npx probity-scope-report [--config probity.config.ts]
+ *                             [--root .] [--strict]
  *
  * --config defaults to probity.config.{ts,mts,js,mjs} found in
- * --root; --root defaults to the config's directory. --strict exits 1
- * when any warning fires (for CI); otherwise warnings are advisory
- * and the exit code is 0.
+ * --root; --root defaults to the current working directory. --strict
+ * exits 1 when any warning fires (for CI); otherwise warnings are
+ * advisory and the exit code is 0.
+ *
+ * The config is loaded via jiti — the same TypeScript loader Probity
+ * itself uses — rather than a bare dynamic `import()` of a .ts file,
+ * so this works whether the consumer's config is .ts, .mts, .js, or
+ * .mjs, with no separate build step for the config itself.
  */
 import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+
+import { createJiti } from 'jiti'
 
 import type { Config, RuleBlock } from '@nizos/probity'
 
 import { anchorGlob, buildMatcher, isRuleBlock } from '../rules/scoping.js'
+
+const jiti = createJiti(import.meta.url)
 
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -101,11 +110,11 @@ function ruleNames(block: RuleBlock): string {
 }
 
 const args = parseArgs(process.argv.slice(2))
-const configPath = resolve(args.config ?? findConfig(resolve(args.root ?? '.')))
+const root = resolve(args.root ?? process.cwd())
+const configPath = resolve(args.config ?? findConfig(root))
 const configDir = dirname(configPath)
-const root = resolve(args.root ?? configDir)
 
-const config = (await import(pathToFileURL(configPath).href)).default as Config
+const config = await jiti.import<Config>(configPath, { default: true })
 const tree = walk(root)
 
 console.log(`Scope report for ${configPath}`)
