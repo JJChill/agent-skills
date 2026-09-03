@@ -1,6 +1,8 @@
 # probity enforcement templates
 
-Opt-in hard enforcement for three of this catalog's disciplines — [`test-driven-development`](../skills/test-driven-development/SKILL.md), [`ports-and-adapters`](../skills/ports-and-adapters/SKILL.md), and [`acceptance-testing`](../skills/acceptance-testing/SKILL.md) — via [Probity](https://github.com/nizos/probity), a PreToolUse rule engine for coding agents.
+Hard enforcement for three of this catalog's disciplines — [`test-driven-development`](../skills/test-driven-development/SKILL.md), [`ports-and-adapters`](../skills/ports-and-adapters/SKILL.md), and [`acceptance-testing`](../skills/acceptance-testing/SKILL.md) — via [Probity](https://github.com/nizos/probity), a PreToolUse rule engine for coding agents.
+
+Probity is the second, required half of this distribution's install, not an add-on: the skills teach the disciplines, Probity enforces them on every tool call. The README's Quick Start ([Part 2](../README.md#part-2-install-and-configure-probity-in-the-target-project)) is the step-by-step install; this document is the reference behind it.
 
 ## Why
 
@@ -168,7 +170,7 @@ What the harness does not cover: Probity's own engine — hook payload parsing a
 ## Costs and caveats
 
 - **AI rules cost a model call per matching write.** Scope tightly. `enforceTdd({ fastPath: true })` skips the AI when a write adds exactly one test (at the price of skipping refactor enforcement). Fast-paths must cover **every** rule scoped to a file or they buy nothing: a single-`@Test` write under `acceptance/**` fast-paths the TDD rule *and* — via `withAcceptanceLanguageFastPath` — the Language Test, provided the new test only reuses vocabulary already declared in the suite's DSL files and contains no mechanism words; anything novel falls through to the validator.
-- **Agent support:** Probity supports Claude Code, GitHub Copilot CLI, and Codex. The skills in this catalog work in eight-plus tools; treat this as an optional hardening layer, not a dependency.
+- **Agent support:** Probity supports Claude Code, GitHub Copilot CLI, and Codex natively, and Kiro through the shim in [`probity/kiro/`](probity/kiro/). Wherever the agent can be hooked, Probity is a required part of the install. The skills in this catalog also run in tools Probity cannot hook (Cursor, Gemini CLI, Windsurf, …); there the skills run without gates, so record that limitation in the project's agent instructions rather than assuming enforcement is live.
 - **npm required** in the consuming project. The rules themselves are language-agnostic (they judge writes, not test runners), but `forbidInternalModuleMocks` recognizes jest/vitest specifically — extend `MODULE_MOCK_PATTERN` for other ecosystems.
 - **Fail-closed:** if a rule throws or the AI validator is unavailable, Probity blocks. The custom rules return an explicit violation naming the misconfiguration when no AI agent is wired.
 - **AI verdicts have variance.** The validator sees the pending file and the session transcript — not the definitions of types the file references — so it can occasionally deny on a wrong guess about a referenced type, and an identical re-replay may pass. Treat a surprising deny as worth one re-read of its reason before adapting; giving validators referenced-file access is an upstream improvement worth pursuing.

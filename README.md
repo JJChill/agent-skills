@@ -4,6 +4,8 @@
 
 Skills encode the workflows, quality gates, and best practices that senior engineers use when building software. These ones are packaged so AI agents follow them consistently across every phase of development.
 
+This distribution pairs the skills with **[Probity](https://github.com/nizos/probity)**, a PreToolUse rule engine that mechanically enforces the disciplines the skills teach: a failing test before production code, ports-and-adapters boundaries, spec-first acceptance tests, and a green test run before every commit. **A complete install has two parts: the skills, and a Probity guardrail installed and configured in the target project.** Installing only the skills leaves every gate switched off. See [Quick Start](#quick-start).
+
 <a href="https://trendshift.io/repositories/25200" target="_blank"><img src="https://trendshift.io/api/badge/repositories/25200" alt="addyosmani%2Fagent-skills | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 
 ![Addy's Agent Skills](https://addyosmani.com/assets/images/addys-agent-skills.jpg)
@@ -42,19 +44,32 @@ Skills also activate automatically based on what you're doing — designing an A
 
 ## Quick Start
 
+> **Installing with an AI agent?** The install is **not finished** once the skills are copied. Part 2 below (Probity) is a required step, not an optional extra: Probity must be installed *in the target project*, its config edited to that project's layout, its scoping verified, and its hook wired into the agent. Work through the [install checklist](#install-checklist) before reporting done.
+
+Setup has two parts. Do both.
+
+| Part | What it installs | Where it lives |
+|------|------------------|----------------|
+| **1. Skills** | The workflow skills, agent personas, and slash commands the agent *reads* | Your agent's skill or plugin directory |
+| **2. Probity** | The rule engine that *blocks* tool calls violating those workflows, plus this repo's rule templates | The target project's root (`probity.config.ts`, `rules/`, `scripts/`) and its agent hook config |
+
+### Part 1: Install the skills
+
+The commands below install from this fork, [JJChill/agent-skills](https://github.com/JJChill/agent-skills). It carries the full upstream [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) catalog plus the Probity templates that Part 2 depends on; installing from upstream gives you the skills but not `hooks/probity/`.
+
 **Fastest path — any agent, one command.** The open [skills CLI](https://github.com/vercel-labs/skills) installs into 70+ agents (Claude Code, Cursor, Codex, Copilot, Cline, and more):
 
 ```bash
-npx skills add addyosmani/agent-skills            # install all 31 skills
-npx skills add addyosmani/agent-skills --list     # browse before installing
+npx skills add JJChill/agent-skills            # install all 31 skills
+npx skills add JJChill/agent-skills --list     # browse before installing
 ```
 
 Or grab individual skills:
 
 ```bash
-npx skills add addyosmani/agent-skills --skill code-review-and-quality   # five-axis review before merge
-npx skills add addyosmani/agent-skills --skill interview-me              # requirements interrogation, one question at a time
-npx skills add addyosmani/agent-skills --skill test-driven-development   # red-green-refactor, enforced
+npx skills add JJChill/agent-skills --skill code-review-and-quality   # five-axis review before merge
+npx skills add JJChill/agent-skills --skill interview-me              # requirements interrogation, one question at a time
+npx skills add JJChill/agent-skills --skill test-driven-development   # red-green-refactor, enforced
 ```
 
 > **Installing one skill?** A per-skill `npx` install copies only
@@ -72,14 +87,14 @@ Prefer a native integration? Pick your tool below.
 **Marketplace install:**
 
 ```
-/plugin marketplace add addyosmani/agent-skills
-/plugin install agent-skills@addy-agent-skills
+/plugin marketplace add JJChill/agent-skills
+/plugin install agent-skills@jjchill-agent-skills
 ```
 
 > **SSH errors?** The marketplace clones repos via SSH. If you don't have SSH keys set up on GitHub, either [add your SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/adding-a-new-ssh-key-to-your-github-account) or use the full HTTPS URL to force HTTPS cloning during the marketplace-add step:
 > ```bash
-> /plugin marketplace add https://github.com/addyosmani/agent-skills.git
-> /plugin install agent-skills@addy-agent-skills
+> /plugin marketplace add https://github.com/JJChill/agent-skills.git
+> /plugin install agent-skills@jjchill-agent-skills
 > ```
 >
 > If `/plugin install` still fails with `git@github.com: Permission denied (publickey)` on Windows or macOS, the recommended workaround is to configure Git once to rewrite GitHub SSH URLs to HTTPS for subprocess clones:
@@ -90,7 +105,7 @@ Prefer a native integration? Pick your tool below.
 **Local / development:**
 
 ```bash
-git clone https://github.com/addyosmani/agent-skills.git
+git clone https://github.com/JJChill/agent-skills.git
 claude --plugin-dir /path/to/agent-skills
 ```
 
@@ -111,13 +126,13 @@ Install as a native plugin for skills, subagents, and slash commands. See [docs/
 **Install from the repo:**
 
 ```bash
-agy plugin install https://github.com/addyosmani/agent-skills.git
+agy plugin install https://github.com/JJChill/agent-skills.git
 ```
 
 **Install from a local clone:**
 
 ```bash
-git clone https://github.com/addyosmani/agent-skills.git
+git clone https://github.com/JJChill/agent-skills.git
 agy plugin install ./agent-skills
 ```
 
@@ -131,7 +146,7 @@ Install as native skills for auto-discovery, or add to `GEMINI.md` for persisten
 **Install from the repo:**
 
 ```bash
-gemini skills install https://github.com/addyosmani/agent-skills.git --path skills
+gemini skills install https://github.com/JJChill/agent-skills.git --path skills
 ```
 
 **Install from a local clone:**
@@ -170,7 +185,7 @@ Use agent definitions from `agents/` as Copilot personas and skill content in `.
 
 Skills for Kiro reside under `.kiro/skills/` (project or global level), and Kiro also reads `AGENTS.md`. See the Kiro docs at https://kiro.dev/docs/skills/.
 
-For **mechanical enforcement** — the same Probity guardrail the Claude Code integration uses (spec-first acceptance tests, no fixed sleeps, TDD on production writes, a commit green-gate) — install the Kiro hooks. Probity has no native Kiro vendor, so a thin preToolUse shim translates Kiro's tool events to Probity's `claude-code` contract and back, letting one `probity.config.ts` enforce both agents. Assets live in [`hooks/probity/kiro/`](hooks/probity/kiro/); see [docs/kiro-setup.md](docs/kiro-setup.md).
+Kiro users still complete [Part 2 of the Quick Start](#part-2-install-and-configure-probity-in-the-target-project) (Probity installed and configured in the project); only the hook wiring differs. Probity has no native Kiro vendor, so a thin preToolUse shim translates Kiro's tool events to Probity's `claude-code` contract and back, letting one `probity.config.ts` enforce both agents. Assets live in [`hooks/probity/kiro/`](hooks/probity/kiro/); see [docs/kiro-setup.md](docs/kiro-setup.md).
 
 </details>
 
@@ -180,7 +195,7 @@ For **mechanical enforcement** — the same Probity guardrail the Claude Code in
 Install as a native Codex plugin (Codex CLI v0.122+):
 
 ```bash
-codex plugin marketplace add addyosmani/agent-skills
+codex plugin marketplace add JJChill/agent-skills
 codex plugin add agent-skills@agent-skills
 ```
 
@@ -194,9 +209,9 @@ The first command registers the marketplace; the second installs the plugin. Cod
 Install natively with the built-in `cmd skills` command. Command Code clones the repo, discovers every `SKILL.md`, and installs into `.commandcode/skills/`:
 
 ```bash
-cmd skills add addyosmani/agent-skills            # pick skills to install (project)
-cmd skills add addyosmani/agent-skills --global   # install for all projects (~/.commandcode/skills/)
-cmd skills add addyosmani/agent-skills -s spec-driven-development  # install a specific skill
+cmd skills add JJChill/agent-skills            # pick skills to install (project)
+cmd skills add JJChill/agent-skills --global   # install for all projects (~/.commandcode/skills/)
+cmd skills add JJChill/agent-skills -s spec-driven-development  # install a specific skill
 ```
 
 Installed skills show up in the TUI slash menu, e.g. `/spec-driven-development`. See [docs/commandcode-setup.md](docs/commandcode-setup.md).
@@ -212,11 +227,122 @@ Skills are plain Markdown - they work with any agent that accepts system prompts
 
 
 
+### Part 2: Install and configure Probity in the target project
+
+Probity lives in the **project you are building**, not in this repo. The skills tell the agent what good looks like; Probity intercepts every `Write`/`Edit`/`Bash` call before it executes and blocks the ones that break the rules, with a corrective message the agent recovers from. Without it, the skills are advice the agent can rationalize away under pressure. [hooks/PROBITY.md](hooks/PROBITY.md) is the full reference (every rule, what it enforces, and how); the steps below are the minimum viable setup.
+
+**Agent support.** Probity hooks into Claude Code, Codex, and GitHub Copilot CLI natively, and into Kiro through the shim in [`hooks/probity/kiro/`](hooks/probity/kiro/) ([docs/kiro-setup.md](docs/kiro-setup.md)). Other agents (Cursor, Gemini CLI, Windsurf, and so on) have no hook Probity can attach to, so they get the skills only. Record that in the project's agent instructions so nobody assumes the gates are live.
+
+Run everything below from the target project's root.
+
+**1. Install Probity.** Node is required even for non-Node projects; a one-dependency `package.json` next to `gradlew` or the `.xcworkspace` is fine (Swift projects: give it `"type": "module"`).
+
+```bash
+npm install -D @nizos/probity tsx
+```
+
+Kotlin projects can add the optional TDD fast-path grammar, which turns the most common TDD write (a single new `@Test`) into a free deterministic check instead of a model call:
+
+```bash
+npm install -D @ast-grep/napi @ast-grep/lang-kotlin
+```
+
+**2. Pick the preset for the project's language** and copy it in, along with the rule modules and helper scripts it imports. This needs a local clone of this repository: the per-skill installers in Part 1 do not copy `hooks/`.
+
+| Project | Preset to copy as `probity.config.ts` | Calibrated for |
+|---------|----------------------------------------|----------------|
+| JavaScript / TypeScript | [`hooks/probity/probity.config.ts`](hooks/probity/probity.config.ts) | `src/core` + `src/adapters` layout, vitest or jest |
+| Kotlin / JVM / Android | [`hooks/probity/probity.config.kotlin.ts`](hooks/probity/probity.config.kotlin.ts) | Multi-module Gradle, `*-core` / `*-ui` split, a mocking library present |
+| Kotlin Multiplatform | [`hooks/probity/probity.config.kmp.ts`](hooks/probity/probity.config.kmp.ts) | Per-feature hexagonal packages, fakes only, Markdown specs in `docs/specs/` |
+| Swift / iOS | [`hooks/probity/probity.config.swift.ts`](hooks/probity/probity.config.swift.ts) | Xcode workspace, `AcceptanceTests/` four-layer suite, XCUITest |
+
+```bash
+AGENT_SKILLS=/path/to/agent-skills                                       # your clone of this repo
+cp "$AGENT_SKILLS/hooks/probity/probity.config.ts" ./probity.config.ts   # or probity.config.kotlin.ts / .kmp.ts / .swift.ts
+cp -r "$AGENT_SKILLS/hooks/probity/rules"   ./rules
+cp -r "$AGENT_SKILLS/hooks/probity/scripts" ./scripts
+```
+
+If the project already has a `rules/` or `scripts/` directory, put these under a subdirectory (for example `probity/`) and update the relative `./rules/...` imports at the top of `probity.config.ts` to match. Keep `probity.config.ts` itself at the project root: Probity discovers it by searching upward from the working directory.
+
+If the project will use the glossary or spec-parity rules, seed the files they read: copy [`hooks/probity/GLOSSARY.template.md`](hooks/probity/GLOSSARY.template.md) to `docs/GLOSSARY.md`, and create `docs/specs/` for feature files. Both degrade gracefully while absent, but the Kotlin Multiplatform and Swift presets are built around them.
+
+**3. Edit the config for this project.** The presets describe a *typical* layout and **will not match yours as-is**. Open `probity.config.ts` and change, at minimum:
+
+- **Core-purity globs.** Point them at the project's domain, use-case, and port code only. Adapters, DI modules, composition roots, and UI must *not* match, or the boundary rule blocks work those files are supposed to do.
+- **TDD scope globs.** The production and test code you want red-green-refactor enforced on. This rule costs a model call per matching write, so scope it deliberately.
+- **Spec-layer globs.** The acceptance specification files only, never the DSL or protocol-driver layers (those legitimately contain the mechanics the Language Test blocks).
+- **Commit gate.** The `command`, `successPattern`, and `failurePattern` passed to `requireGreenTestRun` must match the project's real test command and its runner's summary lines. The JS/TS default covers vitest and jest, Kotlin defaults to Gradle, Swift to `xcodebuild`.
+- **Infrastructure import screen.** Extend the known-vendor regex with the project's actual frameworks, SDKs, and I/O libraries.
+- **Preset-specific paths.** Kotlin and Swift presets: `specsDir`, `testFilePattern`, module and package names. Optional `glossaryPath` and `seamHint` once a glossary and canonical ports exist.
+
+Brownfield codebase? The deterministic rules are delta-based (only what a write *introduces* blocks; existing call sites do not), and a spec suite that predates the parity gate gets a one-time baseline so existing gaps do not block every commit:
+
+```bash
+node scripts/spec-parity.mjs --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline
+```
+
+See "Brownfield adoption" in [hooks/PROBITY.md](hooks/PROBITY.md#spectest-traceability-kmp-preset).
+
+**4. Verify the scoping before the first agent session does.** Wrong globs are the main failure mode, and one direction is silent: a glob slightly too narrow never fires, and nothing notices.
+
+```bash
+npx tsx scripts/scope-report.ts --config probity.config.ts
+```
+
+Fix every `DEAD SCOPE` (a block matching zero files) and every warning about core rules claiming adapter/DI/UI paths or the acceptance-language rule claiming driver/DSL files. Re-run until it is clean. Add `--strict` in CI so layout drift fails the build instead of silently switching a rule off.
+
+**5. Wire the hook into the agent.** For Claude Code, install the Probity plugin:
+
+```
+/plugin marketplace add nizos/probity
+/plugin install probity@probity
+```
+
+Or add it to the project's `.claude/settings.json` so every teammate and every future session inherits it:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity --agent claude-code" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Keep the `cd "$CLAUDE_PROJECT_DIR" &&` anchor. Hooks are not guaranteed to run from the repo root; a bare relative path then fails **non-blocking** and every rule silently stops enforcing. Codex and Copilot CLI wiring is in [Probity's setup guide](https://github.com/nizos/probity/blob/main/docs/setup.md) (`--agent codex` / `--agent github-copilot`); Kiro is in [docs/kiro-setup.md](docs/kiro-setup.md).
+
+AI-validated rules reuse the agent's own authentication through the vendor SDK. No extra API key or billing is needed.
+
+**6. Prove a gate fires.** Start a fresh agent session in the project and ask it to add a small production function under a core path with no test. The write must be blocked with a Probity message naming the TDD rule. Then ask it to `git commit` without running the tests; the commit must be blocked by the green-run gate. If either action goes through, the hook is not wired or the globs do not claim that path. Go back to step 4.
+
+**7. Commit the setup.** `probity.config.ts`, `rules/`, `scripts/`, the hook settings, and any glossary or baseline files belong in the target repo. Enforcement that lives on one machine is not enforcement.
+
+### Install checklist
+
+An install of this pack is complete when all of the following are true in the target project. Agents performing the install: report each item explicitly, and do not describe Probity as optional.
+
+- [ ] Skills installed for the agent in use (Part 1)
+- [ ] `@nizos/probity` installed as a dev dependency in the target project
+- [ ] `probity.config.ts` copied from the matching language preset, with `rules/` and `scripts/` beside it
+- [ ] Every glob, the commit-gate test command, and the vendor import screen edited to this project's real layout
+- [ ] `scripts/scope-report.ts` runs clean (no dead scopes, no mis-claimed layers)
+- [ ] PreToolUse hook wired for the agent (plugin or settings file), anchored to the project directory
+- [ ] A deliberate violation was blocked in a live session (step 6)
+- [ ] Config, rules, scripts, and hook settings committed to the repo
+- [ ] If the agent in use is one Probity cannot hook (Cursor, Gemini CLI, Windsurf, ...), that limitation is written into the project's agent instructions
+
 ---
 
 ## Adoption
 
-Already installed? How you roll the pack out depends on your codebase. The **[Adoption Guide](docs/adoption-guide.md)** covers two paths: the full lifecycle from day one for a greenfield project, or an incremental, verification-first rollout for an established codebase.
+Skills and Probity both installed? How you roll the pack out depends on your codebase. The **[Adoption Guide](docs/adoption-guide.md)** covers two paths: the full lifecycle from day one for a greenfield project, or an incremental, verification-first rollout for an established codebase.
 
 ---
 
@@ -397,6 +523,7 @@ agent-skills/
 ├── agents/                            # 6 specialist personas
 ├── references/                        # 7 supplementary checklists
 ├── hooks/                             # Session lifecycle hooks
+│   └── probity/                       #   Probity enforcement: per-language configs, rules/, scripts/, Kiro shim (Part 2 of Quick Start)
 ├── .claude/commands/                  # 8 slash commands (Claude Code)
 ├── .gemini/commands/                  # 8 slash commands (Gemini CLI)
 ├── commands/                          # 8 slash commands (Antigravity CLI)

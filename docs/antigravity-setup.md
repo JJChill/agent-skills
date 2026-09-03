@@ -11,14 +11,14 @@ Antigravity CLI has a first-class plugin system that registers skills, agents, a
 **Install from the remote repository:**
 
 ```bash
-agy plugin install https://github.com/addyosmani/agent-skills.git
+agy plugin install https://github.com/JJChill/agent-skills.git
 ```
 
 **Install from a local clone:**
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/addyosmani/agent-skills.git
+   git clone https://github.com/JJChill/agent-skills.git
    ```
 2. Install the plugin using `agy`:
    ```bash
