@@ -65,9 +65,9 @@ made here when the dev cycle exposes a gap stays in one place.
 
 - Kiro CLI installed.
 - The project already uses this framework's Probity setup for Claude Code:
-  a `probity.config.ts` (from a `hooks/probity/probity.config.*.ts` preset),
-  the `rules/`, and `@nizos/probity` installed (`npm install`). The Kiro shim
-  reuses that exact config — it does not add a second rule set.
+  `@nizos/probity` and `@jjchill/probity-rules` installed (`npm install`), and
+  a `probity.config.ts` created from one of the package's preset templates.
+  The Kiro shim reuses that exact config — it does not add a second rule set.
 - `python3` on PATH (used by the shim and transducer).
 
 ---
@@ -95,17 +95,21 @@ printf 'skills\n' > .kiro/.gitignore
 
 ### 2. Install the hooks
 
+Copy the shim files from the installed `@jjchill/probity-rules` package's `kiro/` directory:
+
 ```bash
 mkdir -p .kiro/hooks
-cp /path/to/agent-skills/hooks/probity/kiro/probity-kiro.sh            .kiro/hooks/
-cp /path/to/agent-skills/hooks/probity/kiro/probity-kiro-translate.py  .kiro/hooks/
-cp /path/to/agent-skills/hooks/probity/kiro/kiro-transcript-to-claude.py .kiro/hooks/
-cp /path/to/agent-skills/hooks/probity/kiro/skill-activation-forced-eval.sh .kiro/hooks/
+cp node_modules/@jjchill/probity-rules/kiro/probity-kiro.sh            .kiro/hooks/
+cp node_modules/@jjchill/probity-rules/kiro/probity-kiro-translate.py  .kiro/hooks/
+cp node_modules/@jjchill/probity-rules/kiro/kiro-transcript-to-claude.py .kiro/hooks/
+cp node_modules/@jjchill/probity-rules/kiro/skill-activation-forced-eval.sh .kiro/hooks/
 chmod +x .kiro/hooks/*.sh .kiro/hooks/*.py
 ```
 
 The shim resolves the repo root from its own location (`.kiro/hooks/../..`)
 and finds `probity` at `node_modules/.bin/probity`, so no path edits are needed.
+Once these are installed, `/probity-update` refreshes them automatically whenever
+the package ships changes — you don't need to repeat this step by hand.
 
 ### 3. Add the agent
 
@@ -113,7 +117,7 @@ Copy the template and fill in the placeholders:
 
 ```bash
 mkdir -p .kiro/agents
-cp /path/to/agent-skills/hooks/probity/kiro/kiro-agent.template.json \
+cp node_modules/@jjchill/probity-rules/kiro/kiro-agent.template.json \
    .kiro/agents/<agent-name>.json
 ```
 

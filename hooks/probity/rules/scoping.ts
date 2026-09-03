@@ -30,6 +30,15 @@ export function isRuleBlock(entry: RuleEntry): entry is RuleBlock {
 }
 
 /**
+ * The non-empty glob list `RuleBlock.files` requires. A plain
+ * `string[]` (even one built from a non-empty literal) is NOT
+ * assignable to it — TS can't prove non-emptiness for a general array
+ * type — so preset option types and any `files:` glob list built up
+ * before use should be typed `Globs`, not `string[]`.
+ */
+export type Globs = NonNullable<RuleBlock['files']>
+
+/**
  * Builds a path matcher from include/exclude patterns. Patterns
  * prefixed with `!` are negations (picomatch's `ignore` option);
  * everything else is an include. An all-negations list gets `**` as

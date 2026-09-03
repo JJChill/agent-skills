@@ -7,3 +7,4 @@ node_modules/
 .claude/sdd-cache/
 evals/results/
 __pycache__/
+hooks/probity/dist/

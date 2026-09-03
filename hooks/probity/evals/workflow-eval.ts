@@ -20,8 +20,8 @@
  *                                     # evaluates the AI rules'
  *                                     # prompt quality
  *
- * Scoping is derived from the config template itself: the episode
- * runs the rule entries `probity.config.kmp.ts` exports, with block
+ * Scoping is derived from the KMP preset itself: the episode runs
+ * the rule entries `presets/kmp.ts` (`kmpRuleEntries`) exports, with block
  * `files` globs resolved by rules/scoping.ts (a pinned replica of
  * Probity's own picomatch matcher and glob anchoring). Out-of-scope
  * steps — an adapter with a vendor import, a Koin DI module, a
@@ -44,7 +44,7 @@ import { dirname, join } from 'node:path'
 
 import type { Action, Agent, RuleContext, RuleResult } from '@nizos/probity'
 
-import { kmpRuleEntries } from '../probity.config.kmp.js'
+import { kmpRuleEntries } from '../presets/kmp.js'
 import {
   actionMatchesFilesScope,
   anchorEntries,
@@ -796,9 +796,9 @@ const ctx: RuleContext = {
   },
 }
 
-// Scoping derived from the config template: the exact rule entries
-// probity.config.kmp.ts exports, instantiated against the episode
-// ROOT, with relative globs anchored the way Probity's loadConfig
+// Scoping derived from the KMP preset: the exact rule entries
+// presets/kmp.ts (kmpRuleEntries) exports, instantiated against the
+// episode ROOT, with relative globs anchored the way Probity's loadConfig
 // anchors them. Glob semantics come from rules/scoping.ts — a pinned
 // replica of the engine's matcher — so a template glob edit is
 // exercised here automatically.

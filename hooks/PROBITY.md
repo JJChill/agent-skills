@@ -12,7 +12,7 @@ The two layers are complementary by design: when Probity blocks an action, its r
 
 ## What's in the template
 
-[`probity/probity.config.ts`](probity/probity.config.ts) plus custom rule modules under [`probity/rules/`](probity/rules/). Language-neutral gate rules live in [`probity/rules/gates.ts`](probity/rules/gates.ts) — they take every language-shaped decision (test-command shape, ambient-call shape) as a pattern option, and the Kotlin preset re-exports them with JVM/Gradle defaults:
+The rules ship as the [`@jjchill/probity-rules`](https://www.npmjs.com/package/@jjchill/probity-rules) npm package — presets under `presets/`, custom rule modules under `rules/` — and the `probity.config*.ts` files in this directory are the thin consumer templates that import from it. Language-neutral gate rules live in [`probity/rules/gates.ts`](probity/rules/gates.ts) — they take every language-shaped decision (test-command shape, ambient-call shape) as a pattern option, and the Kotlin preset re-exports them with JVM/Gradle defaults:
 
 | Rule | Skill it enforces | Mechanism |
 |---|---|---|
@@ -59,14 +59,14 @@ Three deterministic rules in [`probity/rules/spec-test-parity.ts`](probity/rules
 
 - **`enforceSpecTestParity()`** gates `git commit`: it scans `docs/specs/*.feature{,.md}` for scenarios (Markdown `## Scenario:` or Gherkin `Scenario:`) and the acceptance dirs for `Covers:` tags, and blocks with a two-sided report — scenarios no test claims, and tags pointing at scenarios that no longer exist. Parity requires the *link*, not a passing run (the claiming test may still be red or quarantined); scenarios still being driven outside-in are exempted with `## Scenario (wip):` (or a Gherkin `@wip` tag).
 
-  **Brownfield adoption:** a spec suite that predates the gate would block every commit (a real KMP app we trialed this on had 454 scenarios and zero tags). The rule takes a `baselinePath`: generate the baseline once — `node scripts/spec-parity.mjs --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline` — and commit it. Baselined scenarios are exempt from the orphan check while every new scenario is enforced from day one; burn the file down by deleting lines as coverage lands. A missing baseline file means full enforcement (the greenfield default), and dangling `Covers:` tags are never baselined — they are actively wrong, not legacy.
+  **Brownfield adoption:** a spec suite that predates the gate would block every commit (a real KMP app we trialed this on had 454 scenarios and zero tags). The rule takes a `baselinePath`: generate the baseline once — `npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline` — and commit it. Baselined scenarios are exempt from the orphan check while every new scenario is enforced from day one; burn the file down by deleting lines as coverage lands. A missing baseline file means full enforcement (the greenfield default), and dangling `Covers:` tags are never baselined — they are actively wrong, not legacy.
 
   **Per-scenario driver mapping:** the rule optionally checks coverage per *(scenario, driver scope)*, not just per scenario. Declare named scopes (`driverScopes: [{ name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ }, …]`) mapping each scope to its test files, and tag scenarios that need more than the default suite — `## Scenario [system]: …` (composes with wip as `## Scenario (wip) [system]:`). A tagged scenario must be covered by a test matching that scope's pattern, on top of the base check; `defaultScopes` names scopes every scenario must satisfy even untagged (the project's standard driver set). Tags are floors, never ceilings — extra coverage in other scopes is always fine — and a tag naming an undeclared scope blocks (misspelling protection). Tags never change scenario keys, so existing `Covers:` tags and baselines are unaffected; baselined and wip scenarios are exempt from scope checks too. The rationale and the tag convention live in the `acceptance-testing` skill's Layer 3 section.
 
   **The baseline is where dead coverage hides.** While it exists, the parity gate is advisory for everything in it — and mutation checks are the mechanism that surfaces the cost: a mutation probe that stays green under every suite usually means the behavior's scenario is sitting in the baseline, untested. Treat every green probe as a burn-down prompt (write the claiming test, delete the baseline line), not as a reason to pick a different probe.
 - **`surfaceScenarioLinkBreakage()`** fires on `*.feature` / `*.feature.md` writes: removing or renaming a scenario heading that tests still claim blocks immediately, listing the affected tests — so a rename updates its `Covers:` tags in the same change instead of rotting until commit time.
 
-Because scenario titles are link keys, renames must touch the claiming tests — that's the point, and the breakage rule turns it into a guided step. Hooks only run in agent sessions, so [`probity/scripts/spec-parity.mjs`](probity/scripts/spec-parity.mjs) ships the same check as a zero-dependency CLI for CI and human commits: `node spec-parity.mjs --specs docs/specs` (exit 1 on breakage); driver scopes mirror as `--scope system=<path regex>` (repeatable) and `--default-scopes a,b`.
+Because scenario titles are link keys, renames must touch the claiming tests — that's the point, and the breakage rule turns it into a guided step. Hooks only run in agent sessions, so the same check ships as a zero-dependency CLI for CI and human commits too, exposed as the package's `probity-spec-parity` bin: `npx probity-spec-parity --specs docs/specs` (exit 1 on breakage); driver scopes mirror as `--scope system=<path regex>` (repeatable) and `--default-scopes a,b`.
 
 ## Brownfield seam gaps: preconditions are controlled, not observed
 
@@ -96,26 +96,26 @@ All three degrade gracefully while `docs/GLOSSARY.md` doesn't exist, so the wiri
 
 Probity lives in the **consuming project** (the codebase you're building), not in this repo.
 
-1. In your project:
+1. In your project, install Probity and the rule package (until `@jjchill/probity-rules` is published, install it from a local clone of this repo instead — see the README's Quick Start Part 2 for the exact command and the `npm run build` step it needs first):
 
    ```bash
-   npm install -D @nizos/probity
+   npm install -D @nizos/probity @jjchill/probity-rules
    ```
 
-2. Copy the templates to your project root:
+2. Copy the thin config template for your preset to your project root — this is the only file that needs copying; the rule modules and scripts it imports live inside the installed package:
 
    ```bash
-   cp <agent-skills>/hooks/probity/probity.config.ts .
-   cp -r <agent-skills>/hooks/probity/rules ./rules
-   cp -r <agent-skills>/hooks/probity/scripts ./scripts
+   cp node_modules/@jjchill/probity-rules/probity.config.ts .
    ```
 
-3. **Edit the globs.** The template assumes a `src/core` + `src/adapters` layout; point the core-purity block at your actual core/domain code, the spec block at your actual spec layer, and the commit gate at your real test command. Wrong scoping is the main failure mode, in both directions: `enforcePortsBoundary` on adapter files or `enforceAcceptanceLanguage` on protocol drivers will block work those files are supposed to do (both rules instruct the validator to pass on clearly mis-scoped files, but don't rely on that), while a glob slightly too narrow for your layout fails silently — the rule simply never fires.
+   (or `probity.config.kotlin.ts` / `.kmp.ts` / `.swift.ts`, matching the project's language.)
 
-4. **Check the scoping** before the first agent session finds out the hard way:
+3. **Edit the preset's options.** The template calls a preset factory (`jsRuleEntries`, `kotlinRuleEntries`, `kmpRuleEntries`, or `swiftRuleEntries`) with an options object — that object is what you edit, not the package internals. The defaults assume a `src/core` + `src/adapters` layout; point the core-purity option at your actual core/domain code, the spec option at your actual spec layer, and the commit-gate option at your real test command. Wrong scoping is the main failure mode, in both directions: `enforcePortsBoundary` on adapter files or `enforceAcceptanceLanguage` on protocol drivers will block work those files are supposed to do (both rules instruct the validator to pass on clearly mis-scoped files, but don't rely on that), while a glob slightly too narrow for your layout fails silently — the rule simply never fires.
+
+4. **Check the scoping** before the first agent session finds out the hard way, via the package's `probity-scope-report` bin:
 
    ```bash
-   npx tsx scripts/scope-report.ts --config probity.config.ts
+   npx probity-scope-report --config probity.config.ts
    ```
 
    The report resolves every `{ files, rules }` block against your real tree with Probity's own glob semantics and prints what each block claims, flagging dead scopes (globs matching zero files — the silent failure), core-purity rules claiming adapter/DI/UI-looking paths, and the acceptance-language rule claiming Robot/driver files. Re-run it (or wire `--strict` into CI) whenever the layout or the globs change.
@@ -146,6 +146,8 @@ Probity lives in the **consuming project** (the codebase you're building), not i
 
    Anchor the hook with `cd "$CLAUDE_PROJECT_DIR" &&`, never a bare relative `./node_modules/...`: hooks are not guaranteed to run with the repo root as their working directory (a session launched from a parent directory, a worktree, a `cd` elsewhere). A bare relative path then fails to resolve and the hook errors **non-blocking** — every rule silently stops enforcing while work continues. The `cd` also matters beyond binary resolution: Probity discovers `probity.config.ts` by searching upward from the working directory, so a hook run from the wrong cwd finds no config even with an absolute bin path. Prefer the direct bin path over `npx @nizos/probity`: the hook runs on **every** matched tool call, and npx's resolution overhead is ~0.6-1.6s per call vs ~0.2s for the bin (measured on a warm cache). A truly resident validator process would cut the remaining startup too, but that's engine work — worth an upstream issue, not something the templates can provide.
 
+**Updating:** once this is set up, run `/probity-update` to bring it forward instead of repeating these steps by hand — it upgrades the `@jjchill/probity-rules` package, proposes config migrations, refreshes the Kiro shim, and re-verifies scoping.
+
 ## Mental model
 
 Deterministic rules are the cheap outer wall (pattern matches, no latency); AI-validated rules are the judgment layer behind it. **Rule order enforces that economics:** Probity stops at the first violation, so both Kotlin configs list every deterministic screen before any AI rule — a vendor import in core code is rejected free by the import screen, never after a TDD model call. Preserve that ordering when editing the configs; the workflow eval asserts it (deterministically-blocked steps must consult no AI validator). Each AI rule sends the validator a distilled version of the corresponding SKILL.md's rules plus the current file and the pending write, and gets back a pass/violation verdict. The prompts follow Probity's own `enforceTdd` conventions: judge the *change* rather than the whole file, never punish transient in-progress states, and treat an explicit user instruction to let a change through as authoritative — it's a guardrail, not a jail.
@@ -165,7 +167,7 @@ Two modes:
 - `npx tsx workflow-eval.ts` — scripted AI verdicts. CI-safe and deterministic: exercises the wiring, rule ordering, and every deterministic rule exactly; the AI rules' *invocation* is verified while their verdicts are assumed.
 - `npx tsx workflow-eval.ts --live` — real verdicts via the `claude` CLI. Additionally evaluates the AI rules' prompt quality: does `enforceTdd` actually block the premature write and pass the post-red minimal one, does the Language Test catch the click-the-button scenario. Live mode asserts outcomes only (a write violating several rules may block on whichever rule runs first, as in a real session) and costs ~a dozen model calls.
 
-What the harness does not cover: Probity's own engine — hook payload parsing and transcript adapters — and any drift between `rules/scoping.ts` and the engine's matcher across Probity upgrades (the replica exists because Probity doesn't export its matcher; it is pinned to a version and documents what to diff on upgrade). A mis-scoped glob in **your** edited config is the scope report's job (Setup step 4), not the eval's: run `scripts/scope-report.ts` against your real tree at setup and whenever the layout changes.
+What the harness does not cover: Probity's own engine — hook payload parsing and transcript adapters — and any drift between `rules/scoping.ts` and the engine's matcher across Probity upgrades (the replica exists because Probity doesn't export its matcher; it is pinned to a version and documents what to diff on upgrade). A mis-scoped glob in **your** edited config is the scope report's job (Setup step 4), not the eval's: run `npx probity-scope-report` against your real tree at setup and whenever the layout changes.
 
 ## Costs and caveats
 
@@ -176,5 +178,5 @@ What the harness does not cover: Probity's own engine — hook payload parsing a
 - **AI verdicts have variance.** The validator sees the pending file and the session transcript — not the definitions of types the file references — so it can occasionally deny on a wrong guess about a referenced type, and an identical re-replay may pass. Treat a surprising deny as worth one re-read of its reason before adapting; giving validators referenced-file access is an upstream improvement worth pursuing.
 - **Override is in-session:** the agent can ask the user to wave a blocked change through, and the validator honors that on the next attempt. Softer than it sounds; it means disagreements surface to you instead of being silently forced either way.
 - **These gates deter rationalization, not deliberate deception.** An adversarial replay trial (real iOS project, 20 fabricated events) confirmed the honest paths and also the limits: the green-run gate matches *recorded output*, so an echoed success banner or a re-read of a stale `.xcresult` satisfies it, and its "writes since the last run" index only advances on Write/Edit tool events — a file changed via shell redirection (`cat > file <<EOF`) is invisible. Treat the gates as guardrails for an agent trying to cut corners under pressure, and keep CI as the arbiter of record. Anchoring the gate to result-bundle freshness (compare the `.xcresult` timestamp against source mtimes) is the known upstream improvement.
-- **Audit the write-rule globs against your real tree** (`scripts/scope-report.ts`). A write that no rule matches is a silent free pass, and layout surprises are common — the iOS trial found the app's `AppDelegate.swift` sitting *beside* `App/Sources/`, outside every glob, and an acceptance suite created in a new directory would be equally invisible. Scope rules to the *directory* that owns a layer, not to filename suffixes (`AcceptanceTests/**`, not `**/*Tests.swift` — a creative filename dodges a suffix; a test-method pattern inside the rule doesn't care what the file is called).
+- **Audit the write-rule globs against your real tree** (`npx probity-scope-report`). A write that no rule matches is a silent free pass, and layout surprises are common — the iOS trial found the app's `AppDelegate.swift` sitting *beside* `App/Sources/`, outside every glob, and an acceptance suite created in a new directory would be equally invisible. Scope rules to the *directory* that owns a layer, not to filename suffixes (`AcceptanceTests/**`, not `**/*Tests.swift` — a creative filename dodges a suffix; a test-method pattern inside the rule doesn't care what the file is called).
 - **Division of labor, observed live:** the deterministic screens are trivially evaded by construction (`"XCUI" + "Application"` slips a regex), but in the same trial the AI TDD validator caught exactly that obfuscation, with an accurate explanation — while also being the layer that costs seconds and can't see files the globs exclude. Regexes are the cheap wall, AI is the judgment backstop, and neither substitutes for correct scoping.

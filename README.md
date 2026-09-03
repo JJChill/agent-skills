@@ -23,7 +23,7 @@ This distribution pairs the skills with **[Probity](https://github.com/nizos/pro
 
 ## Commands
 
-8 slash commands that map to the development lifecycle. Each one activates the right skills automatically.
+9 slash commands that map to the development lifecycle. Each one activates the right skills automatically.
 
 | What you're doing | Command | Key principle |
 |-------------------|---------|---------------|
@@ -35,6 +35,7 @@ This distribution pairs the skills with **[Probity](https://github.com/nizos/pro
 | Audit web performance | `/webperf` | Measure before you optimize |
 | Simplify the code | `/code-simplify` | Clarity over cleverness |
 | Ship to production | `/ship` | Faster is safer |
+| Keep enforcement current | `/probity-update` | Updates flow, forks rot |
 
 Want fewer manual steps once the spec exists? **`/build auto`** generates the plan and implements every task in a single approved pass — you approve the plan once, then it runs autonomously. It removes the human stepping *between* tasks, not the verification: every task is still test-driven and committed individually, and it pauses on failures or risky steps.
 
@@ -235,11 +236,12 @@ Probity lives in the **project you are building**, not in this repo. The skills 
 
 Run everything below from the target project's root.
 
-**1. Install Probity.** Node is required even for non-Node projects; a one-dependency `package.json` next to `gradlew` or the `.xcworkspace` is fine (Swift projects: give it `"type": "module"`).
+**1. Install Probity and the rule package.** Node is required even for non-Node projects; a one-dependency `package.json` next to `gradlew` or the `.xcworkspace` is fine (Swift projects: give it `"type": "module"`).
 
 ```bash
-npm install -D @nizos/probity tsx
+npm install -D @nizos/probity @jjchill/probity-rules
 ```
+
 
 Kotlin projects can add the optional TDD fast-path grammar, which turns the most common TDD write (a single new `@Test`) into a free deterministic check instead of a model call:
 
@@ -247,27 +249,24 @@ Kotlin projects can add the optional TDD fast-path grammar, which turns the most
 npm install -D @ast-grep/napi @ast-grep/lang-kotlin
 ```
 
-**2. Pick the preset for the project's language** and copy it in, along with the rule modules and helper scripts it imports. This needs a local clone of this repository: the per-skill installers in Part 1 do not copy `hooks/`.
+**2. Pick the preset for the project's language** and copy in its thin config template — a short file that imports the preset's rule factory from the package and calls it with this project's options.
 
-| Project | Preset to copy as `probity.config.ts` | Calibrated for |
-|---------|----------------------------------------|----------------|
-| JavaScript / TypeScript | [`hooks/probity/probity.config.ts`](hooks/probity/probity.config.ts) | `src/core` + `src/adapters` layout, vitest or jest |
-| Kotlin / JVM / Android | [`hooks/probity/probity.config.kotlin.ts`](hooks/probity/probity.config.kotlin.ts) | Multi-module Gradle, `*-core` / `*-ui` split, a mocking library present |
-| Kotlin Multiplatform | [`hooks/probity/probity.config.kmp.ts`](hooks/probity/probity.config.kmp.ts) | Per-feature hexagonal packages, fakes only, Markdown specs in `docs/specs/` |
-| Swift / iOS | [`hooks/probity/probity.config.swift.ts`](hooks/probity/probity.config.swift.ts) | Xcode workspace, `AcceptanceTests/` four-layer suite, XCUITest |
+| Project | Preset factory / template | Calibrated for |
+|---------|----------------------------|-----------------|
+| JavaScript / TypeScript | `jsRuleEntries` · [`probity.config.ts`](hooks/probity/probity.config.ts) | `src/core` + `src/adapters` layout, vitest or jest |
+| Kotlin / JVM / Android | `kotlinRuleEntries` · [`probity.config.kotlin.ts`](hooks/probity/probity.config.kotlin.ts) | Multi-module Gradle, `*-core` / `*-ui` split, a mocking library present |
+| Kotlin Multiplatform | `kmpRuleEntries` · [`probity.config.kmp.ts`](hooks/probity/probity.config.kmp.ts) | Per-feature hexagonal packages, fakes only, Markdown specs in `docs/specs/` |
+| Swift / iOS | `swiftRuleEntries` · [`probity.config.swift.ts`](hooks/probity/probity.config.swift.ts) | Xcode workspace, `AcceptanceTests/` four-layer suite, XCUITest |
 
 ```bash
-AGENT_SKILLS=/path/to/agent-skills                                       # your clone of this repo
-cp "$AGENT_SKILLS/hooks/probity/probity.config.ts" ./probity.config.ts   # or probity.config.kotlin.ts / .kmp.ts / .swift.ts
-cp -r "$AGENT_SKILLS/hooks/probity/rules"   ./rules
-cp -r "$AGENT_SKILLS/hooks/probity/scripts" ./scripts
+cp node_modules/@jjchill/probity-rules/probity.config.ts ./probity.config.ts   # or probity.config.kotlin.ts / .kmp.ts / .swift.ts
 ```
 
-If the project already has a `rules/` or `scripts/` directory, put these under a subdirectory (for example `probity/`) and update the relative `./rules/...` imports at the top of `probity.config.ts` to match. Keep `probity.config.ts` itself at the project root: Probity discovers it by searching upward from the working directory.
+Keep `probity.config.ts` at the project root: Probity discovers it by searching upward from the working directory. The rule modules and scripts the template imports live inside the installed package — nothing else needs copying.
 
-If the project will use the glossary or spec-parity rules, seed the files they read: copy [`hooks/probity/GLOSSARY.template.md`](hooks/probity/GLOSSARY.template.md) to `docs/GLOSSARY.md`, and create `docs/specs/` for feature files. Both degrade gracefully while absent, but the Kotlin Multiplatform and Swift presets are built around them.
+If the project will use the glossary or spec-parity rules, seed the files they read: copy `node_modules/@jjchill/probity-rules/GLOSSARY.template.md` to `docs/GLOSSARY.md`, and create `docs/specs/` for feature files. Both degrade gracefully while absent, but the Kotlin Multiplatform and Swift presets are built around them.
 
-**3. Edit the config for this project.** The presets describe a *typical* layout and **will not match yours as-is**. Open `probity.config.ts` and change, at minimum:
+**3. Edit the config for this project.** The thin template calls the preset's rule factory (`jsRuleEntries`, `kotlinRuleEntries`, `kmpRuleEntries`, or `swiftRuleEntries`) with an options object — that options object, not the package internals, is what you edit. The presets describe a *typical* layout and **will not match yours as-is**. Open `probity.config.ts` and set its factory options to change, at minimum:
 
 - **Core-purity globs.** Point them at the project's domain, use-case, and port code only. Adapters, DI modules, composition roots, and UI must *not* match, or the boundary rule blocks work those files are supposed to do.
 - **TDD scope globs.** The production and test code you want red-green-refactor enforced on. This rule costs a model call per matching write, so scope it deliberately.
@@ -279,7 +278,7 @@ If the project will use the glossary or spec-parity rules, seed the files they r
 Brownfield codebase? The deterministic rules are delta-based (only what a write *introduces* blocks; existing call sites do not), and a spec suite that predates the parity gate gets a one-time baseline so existing gaps do not block every commit:
 
 ```bash
-node scripts/spec-parity.mjs --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline
+npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline
 ```
 
 See "Brownfield adoption" in [hooks/PROBITY.md](hooks/PROBITY.md#spectest-traceability-kmp-preset).
@@ -287,7 +286,7 @@ See "Brownfield adoption" in [hooks/PROBITY.md](hooks/PROBITY.md#spectest-tracea
 **4. Verify the scoping before the first agent session does.** Wrong globs are the main failure mode, and one direction is silent: a glob slightly too narrow never fires, and nothing notices.
 
 ```bash
-npx tsx scripts/scope-report.ts --config probity.config.ts
+npx probity-scope-report --config probity.config.ts
 ```
 
 Fix every `DEAD SCOPE` (a block matching zero files) and every warning about core rules claiming adapter/DI/UI paths or the acceptance-language rule claiming driver/DSL files. Re-run until it is clean. Add `--strict` in CI so layout drift fails the build instead of silently switching a rule off.
@@ -322,7 +321,9 @@ AI-validated rules reuse the agent's own authentication through the vendor SDK. 
 
 **6. Prove a gate fires.** Start a fresh agent session in the project and ask it to add a small production function under a core path with no test. The write must be blocked with a Probity message naming the TDD rule. Then ask it to `git commit` without running the tests; the commit must be blocked by the green-run gate. If either action goes through, the hook is not wired or the globs do not claim that path. Go back to step 4.
 
-**7. Commit the setup.** `probity.config.ts`, `rules/`, `scripts/`, the hook settings, and any glossary or baseline files belong in the target repo. Enforcement that lives on one machine is not enforcement.
+**7. Commit the setup.** `package.json`, the lockfile, `probity.config.ts`, the hook settings, and any glossary or baseline files belong in the target repo. Enforcement that lives on one machine is not enforcement.
+
+**Updating.** Once this is set up, keep it current with `/probity-update` instead of re-running these steps by hand. It upgrades the `@jjchill/probity-rules` package, proposes config migrations for anything the new version wires that your `probity.config.ts` doesn't yet, refreshes the Kiro shim files if the project uses Kiro, and re-verifies scoping.
 
 ### Install checklist
 
@@ -330,12 +331,12 @@ An install of this pack is complete when all of the following are true in the ta
 
 - [ ] Skills installed for the agent in use (Part 1)
 - [ ] `@nizos/probity` installed as a dev dependency in the target project
-- [ ] `probity.config.ts` copied from the matching language preset, with `rules/` and `scripts/` beside it
+- [ ] `@jjchill/probity-rules` installed and `probity.config.ts` created from the matching preset template
 - [ ] Every glob, the commit-gate test command, and the vendor import screen edited to this project's real layout
-- [ ] `scripts/scope-report.ts` runs clean (no dead scopes, no mis-claimed layers)
+- [ ] `npx probity-scope-report` runs clean (no dead scopes, no mis-claimed layers)
 - [ ] PreToolUse hook wired for the agent (plugin or settings file), anchored to the project directory
 - [ ] A deliberate violation was blocked in a live session (step 6)
-- [ ] Config, rules, scripts, and hook settings committed to the repo
+- [ ] Config, package.json, lockfile, and hook settings committed to the repo
 - [ ] If the agent in use is one Probity cannot hook (Cursor, Gemini CLI, Windsurf, ...), that limitation is written into the project's agent instructions
 
 ---
@@ -523,10 +524,10 @@ agent-skills/
 ├── agents/                            # 6 specialist personas
 ├── references/                        # 7 supplementary checklists
 ├── hooks/                             # Session lifecycle hooks
-│   └── probity/                       #   Probity enforcement: per-language configs, rules/, scripts/, Kiro shim (Part 2 of Quick Start)
-├── .claude/commands/                  # 8 slash commands (Claude Code)
-├── .gemini/commands/                  # 8 slash commands (Gemini CLI)
-├── commands/                          # 8 slash commands (Antigravity CLI)
+│   └── probity/                       #   Probity enforcement, published as @jjchill/probity-rules: presets, rules, bins, Kiro shim (Part 2 of Quick Start)
+├── .claude/commands/                  # 9 slash commands (Claude Code)
+├── .gemini/commands/                  # 9 slash commands (Gemini CLI)
+├── commands/                          # 9 slash commands (Antigravity CLI)
 ├── plugin.json                        # Antigravity plugin manifest
 └── docs/                              # Setup guides per tool
 ```

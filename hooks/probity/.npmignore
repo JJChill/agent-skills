@@ -1,0 +1,4 @@
+# kiro/ ships as a vendored shim directory (package.json "files"); its
+# own tests and bytecode cache are development-only.
+kiro/*.test.py
+kiro/__pycache__/
