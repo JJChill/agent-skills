@@ -83,3 +83,54 @@ files, and re-verify scoping — see the command for the full procedure.
 `kiro/` ships the Kiro hook shim (unchanged install model: copy into your
 project's `.kiro/hooks/`). `/probity-update` re-copies changed files from
 here.
+
+## Releasing
+
+Releases are published by GitHub Actions
+(`.github/workflows/publish-probity-rules.yml`) through npm **trusted
+publishing**: the workflow proves its identity to npm with a short-lived
+OIDC token, so there is no npm token to store and no second-factor prompt,
+and npm attaches a provenance statement linking the package to the exact
+commit and workflow run.
+
+To cut a release:
+
+1. Bump `version` in `hooks/probity/package.json` (semver: patch for rule
+   fixes, minor for new rules or options, major for changed option shapes
+   or removed exports).
+2. Add a `## <version>` entry to `CHANGELOG.md`. `/probity-update` reads
+   these entries to tell consumers what changed, so write them for the
+   consumer: which rule changed, what a config may need.
+3. Merge to `main`. The workflow runs typecheck, build, tests, the Kiro
+   shim tests, the 48-step eval, and a pack dry run; if the version is not
+   yet on the registry it publishes. If the version is already published,
+   the workflow succeeds without publishing.
+
+Do **not** create a bare git tag such as `0.1.1` for an npm release. The
+repository's `scripts/validate-versions.js` resolves the nearest git tag
+as the plugin manifest version, and an npm-version tag would break that
+check. Plugin releases keep their tags; npm releases are tracked by
+`package.json` and the registry.
+
+### One-time setup on npmjs.com
+
+Trusted publishing must be enabled once per package by a package
+maintainer, in the browser:
+
+1. Open https://www.npmjs.com/package/@jjchill/probity-rules/access
+   (Settings → Publishing access).
+2. Under **Trusted Publisher**, choose **GitHub Actions** and enter:
+   - Organization or user: `JJChill`
+   - Repository: `agent-skills`
+   - Workflow filename: `publish-probity-rules.yml` (filename only)
+   - Environment: leave empty
+3. Save. Optionally set the package to "Require two-factor authentication
+   or a trusted publisher" so that manual publishes still need a passkey
+   while the workflow does not.
+
+Until this is done, the workflow's publish step fails with an
+authentication error; the test job is unaffected.
+
+Manual fallback (not normally needed): from `hooks/probity`, with npm
+10.9 or later in an interactive terminal, `npm publish --access public`
+completes the second factor in the browser with a passkey.
