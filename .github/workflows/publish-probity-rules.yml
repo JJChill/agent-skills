@@ -1,0 +1,128 @@
+name: probity-rules
+
+# CI and release for the @jjchill/probity-rules npm package in hooks/probity/.
+#
+# - Every push and pull request touching hooks/probity/ runs typecheck,
+#   build, unit tests, the Kiro shim tests, the 48-step scripted
+#   enforcement eval, and a pack dry run.
+# - On main, if hooks/probity/package.json carries a version that is not
+#   yet on the registry, the package is published via npm trusted
+#   publishing (OIDC): no npm token, no second-factor prompt, provenance
+#   attached automatically. A one-time registration on npmjs.com links
+#   this repository and this workflow filename to the package; see
+#   hooks/probity/README.md "Releasing".
+#
+# Releasing = bump "version" in hooks/probity/package.json, add a
+# CHANGELOG entry, merge to main. Do NOT git-tag npm versions with bare
+# tags: scripts/validate-versions.js reads the nearest tag as the plugin
+# manifest version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'hooks/probity/**'
+      - '.github/workflows/publish-probity-rules.yml'
+  pull_request:
+    paths:
+      - 'hooks/probity/**'
+      - '.github/workflows/publish-probity-rules.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: probity-rules-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: hooks/probity
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: hooks/probity/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm run test:kiro
+      - name: Scripted enforcement eval (48 steps, no model calls)
+        run: npm run eval
+      - run: npm run pack:check
+
+  publish:
+    name: Publish to npm (trusted publishing)
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # never use caching in release builds
+
+      - name: Ensure npm >= 11.5.1 (trusted publishing minimum)
+        run: |
+          need=11.5.1
+          have=$(npm --version)
+          if [ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -1)" != "$need" ]; then
+            echo "npm $have is older than $need; upgrading"
+            npm install -g npm@latest
+          fi
+          npm --version
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Decide whether this version needs publishing
+        id: decide
+        run: |
+          name=$(node -p "require('./package.json').name")
+          version=$(node -p "require('./package.json').version")
+          published=$(npm view "$name@$version" version 2>/dev/null || true)
+          if [ "$published" = "$version" ]; then
+            echo "$name@$version is already on the registry; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$name@$version is not on the registry; publishing."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: steps.decide.outputs.publish == 'true'
+        run: npm publish --access public
+
+      - name: Summary
+        run: |
+          {
+            echo "## ${{ steps.decide.outputs.name }}@${{ steps.decide.outputs.version }}"
+            if [ "${{ steps.decide.outputs.publish }}" = "true" ]; then
+              echo "Published to https://www.npmjs.com/package/${{ steps.decide.outputs.name }}/v/${{ steps.decide.outputs.version }} with provenance."
+            else
+              echo "Already published; no action taken. Bump \`version\` in hooks/probity/package.json to release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
