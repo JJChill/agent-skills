@@ -1,6 +1,6 @@
 {
   "name": "@jjchill/probity-rules",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Versioned Probity rule presets and CLI tooling for the agent-skills catalog (test-driven-development, ports-and-adapters, acceptance-testing, spec-test parity, ubiquitous-language) — see hooks/PROBITY.md.",
   "license": "MIT",
   "type": "module",
@@ -34,21 +34,11 @@
   "peerDependencies": {
     "@nizos/probity": "^1.10.0"
   },
-  "peerDependenciesMeta": {
-    "@ast-grep/napi": {
-      "optional": true
-    },
-    "@ast-grep/lang-kotlin": {
-      "optional": true
-    }
-  },
   "dependencies": {
-    "picomatch": "^4.0.4",
-    "jiti": "^2.6.1"
+    "jiti": "^2.6.1",
+    "picomatch": "^4.0.4"
   },
   "devDependencies": {
-    "@ast-grep/lang-kotlin": "^0.0.7",
-    "@ast-grep/napi": "^0.45.1",
     "@nizos/probity": "^1.10.0",
     "@types/node": "^22.0.0",
     "@types/picomatch": "^3.0.2",
@@ -64,5 +54,9 @@
     "eval": "tsx evals/workflow-eval.ts",
     "prepublishOnly": "npm run clean && npm run build && npm test",
     "pack:check": "npm pack --dry-run"
+  },
+  "optionalDependencies": {
+    "@ast-grep/lang-kotlin": "0.0.7",
+    "@ast-grep/napi": "0.45.1"
   }
 }

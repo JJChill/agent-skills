@@ -243,11 +243,11 @@ npm install -D @nizos/probity @jjchill/probity-rules
 ```
 
 
-Kotlin projects can add the optional TDD fast-path grammar, which turns the most common TDD write (a single new `@Test`) into a free deterministic check instead of a model call:
-
-```bash
-npm install -D @ast-grep/napi @ast-grep/lang-kotlin
-```
+Kotlin parser support for the deterministic single-test TDD fast path ships
+with the rule package and installs automatically as optional dependencies. If
+a platform cannot install the parser, or disk/install constraints require
+`npm install --omit=optional`, Kotlin writes delegate to the AI TDD rule with
+an explicit fast-path-unavailable diagnostic.
 
 **2. Pick the preset for the project's language** and copy in its thin config template — a short file that imports the preset's rule factory from the package and calls it with this project's options.
 

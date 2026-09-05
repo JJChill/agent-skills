@@ -172,10 +172,11 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // Inner loop: test-driven-development. Android source sets
     // commonly keep .kt under src/main/java, so match both. Probity
     // has no built-in Kotlin fast-path; withKotlinFastPath supplies
-    // one — a write adding exactly one @Test function passes without
-    // an AI call. It needs the optional packages
-    // (`npm install -D @ast-grep/napi @ast-grep/lang-kotlin`) and
-    // falls through to plain enforceTdd when they're absent.
+    // one — a test-source write adding exactly one @Test function
+    // while preserving all prior source (additive test scaffolding is
+    // allowed) passes without an AI call. Its parser ships as optional
+    // dependencies; unavailable parser support delegates to
+    // enforceTdd with an explicit diagnostic.
     {
       files: tddGlobs,
       // Telemetry-only additions pass deterministically — see the
