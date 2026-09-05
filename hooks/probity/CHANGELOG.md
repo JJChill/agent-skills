@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.2
+
+Kotlin and KMP presets now retain up to 20 recent session events, each
+clipped at 6,000 characters, for the AI TDD judge. This keeps a nearby
+targeted red visible after normal source inspection while bounding prompt
+growth. Their Kotlin-specific guidance also makes explicit that:
+
+- as an exception to generic placeholder guidance, a targeted relevant test
+  executing `TODO()`/`kotlin.NotImplementedError` is clean red without a
+  second assertion-failure run, while implementation remains bounded by
+  assertions in that test source visible in recent history;
+- compile/import/signature failures authorize scaffolding only, not the
+  asserted production behavior;
+- one observed failure may drive one cohesive write across every method or
+  branch those visible assertions require, without artificial reruns
+  mid-write; and
+- Git staging/index state is irrelevant to the judgment.
+
+JavaScript and Swift presets retain their existing instructions and history
+windows.
+
 ## 0.2.1
 
 `requireGreenTestRun`'s Kotlin/Gradle defaults are stricter and cover more

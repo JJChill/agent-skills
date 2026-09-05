@@ -571,14 +571,12 @@ async function delegateWithFastPathUnavailable(
  * every single-test addition skips the green→red refactor-readiness
  * check the AI would otherwise perform.
  *
- * @param rule — the rule to wrap, normally `enforceTdd()`.
+ * @param rule — the TDD rule to wrap. Shipped presets pass their
+ *   Kotlin-specialized judge; custom wrappers may supply another rule.
  * @param options.patterns — replaces the default ast-grep test-node
  *   patterns (e.g. to add a Kotest spec pattern).
  * @param options.testFilePattern — limits deterministic passes to test
  *   source paths; defaults to classic and KMP `src/*Test/{java,kotlin}`.
- *
- * @example
- * { files: ['**\/src\/main\/**', '**\/src\/test\/**'], rules: [withKotlinFastPath(enforceTdd())] }
  */
 export function withKotlinFastPath(
   rule: Rule,
@@ -1051,8 +1049,8 @@ function walkFiles(dir: string, out: string[] = []): string[] {
  * imports, ambient effects) and the boundary validator still apply to
  * probe writes — a probe has no business introducing those.
  *
- * @param rule — the rule to wrap, normally
- *   `withKotlinFastPath(enforceTdd())`.
+ * @param rule — the wrapped TDD stack. Shipped presets supply their
+ *   package-internal Kotlin-specialized judge before applying this wrapper.
  */
 export function withMutationProbe(rule: Rule): Rule {
   const wrapped = async function mutationProbe(
