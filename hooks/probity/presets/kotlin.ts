@@ -231,12 +231,10 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // reverting the mutation removes the marker with it.
     enforceProbeReversion({ roots: [root] }),
 
-    // No commit on an unverified tree. GRADLE_TEST_COMMAND matches
-    // plain and flavored test tasks (`./gradlew test`,
-    // `./gradlew :app:testDevDebugUnitTest`); tighten it to your
-    // module's real task if you want the gate strict about which
-    // suite counts. Stricter than Probity's requireCommand: the
-    // recorded run's output must actually be green, not merely exist.
+    // No commit on an unverified tree. The default accepts test/
+    // test...Test, allTests, jvmTest, build, and check; a custom
+    // commitCommand replaces that task policy. The latest matching run
+    // must carry BUILD SUCCESSFUL or a trustworthy Kiro zero status.
     requireGreenTestRun({ command: options.commitCommand ?? GRADLE_TEST_COMMAND }),
   ]
 }

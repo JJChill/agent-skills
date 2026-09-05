@@ -146,26 +146,43 @@ function defaultListCommitFiles(command: string): string[] {
  * no AI call.
  *
  * @param options.command — regex matching a test invocation.
+ * @param options.commandPredicate — optional additive filter over the
+ *   raw command string: a recorded command counts only when both the
+ *   regex matches AND this returns true. Narrows, never widens, what
+ *   the regex accepts — lets a language preset layer a structural
+ *   parse on top of a broad regex.
  * @param options.successPattern — output must match to count as green.
+ * @param options.extraSuccessPredicate — optional command-aware extra
+ *   way to count a matched run as green (e.g. a structured exit-status
+ *   envelope the runner's own text banner wouldn't contain). Receives
+ *   the matched run's command and output. A run is green if EITHER
+ *   `successPattern` matches OR this returns true — but
+ *   `failurePattern`/`extraFailurePredicate` still win over both.
  * @param options.failurePattern — output matching this is red even if
  *   the success pattern also appears.
+ * @param options.extraFailurePredicate — optional command-aware extra
+ *   way to mark a matched run red (e.g. a structured exit-status
+ *   envelope reporting nonzero/malformed with no failure TEXT).
+ *   Receives the matched run's command and output; wins over both
+ *   `successPattern` and `extraSuccessPredicate`.
  * @param options.enforceForPaths — only demand the run when the
  *   pending commit stages a file whose repo-relative path matches.
- *   Scopes an expensive suite to the code it covers: infra/docs/
- *   tooling-only commits (CI config, Markdown, the Probity config
- *   itself) pay no friction, since they change no behaviour the suite
- *   validates and the prior green run still stands. Commit-accurate —
- *   read from git's staged set, not the session's write history. Any
- *   error listing files falls through to enforcing (fail safe).
+ *   Scopes an expensive suite to the code it covers — infra/docs-only
+ *   commits pay no friction. Commit-accurate (reads git's staged set,
+ *   not session history); any listing error falls through to
+ *   enforcing (fail safe).
  * @param options.listCommitFiles — injectable staged-file lister
  *   (defaults to reading git's staged set); present for testing.
- * @param options.reason — appended to the no-run deny text to name
- *   the suite and any setup it needs (e.g. "supabase start").
+ * @param options.reason — appended to either deny path to name the
+ *   suite, accepted forms, and any setup it needs.
  */
 export function requireGreenTestRun(options: {
   command: RegExp
+  commandPredicate?: (command: string) => boolean
   successPattern: RegExp
+  extraSuccessPredicate?: (command: string, output: string) => boolean
   failurePattern: RegExp
+  extraFailurePredicate?: (command: string, output: string) => boolean
   enforceForPaths?: RegExp
   listCommitFiles?: (command: string) => string[]
   reason?: string
@@ -200,10 +217,11 @@ export function requireGreenTestRun(options: {
       (event, index) =>
         index > lastWrite &&
         event.kind === 'command' &&
-        options.command.test(event.command),
+        options.command.test(event.command) &&
+        (!options.commandPredicate || options.commandPredicate(event.command)),
     )
+    const extra = options.reason ? ` ${options.reason}` : ''
     if (runs.length === 0) {
-      const extra = options.reason ? ` ${options.reason}` : ''
       return {
         kind: 'violation',
         reason:
@@ -213,13 +231,21 @@ export function requireGreenTestRun(options: {
     }
     const lastRun = runs[runs.length - 1]!
     const output = 'output' in lastRun ? (lastRun.output ?? '') : ''
-    if (options.failurePattern.test(output) || !options.successPattern.test(output)) {
+    const lastRunCommand = lastRun.kind === 'command' ? lastRun.command : ''
+    const isRed =
+      options.failurePattern.test(output) ||
+      (options.extraFailurePredicate?.(lastRunCommand, output) ?? false)
+    const isGreen =
+      !isRed &&
+      (options.successPattern.test(output) ||
+        (options.extraSuccessPredicate?.(lastRunCommand, output) ?? false))
+    if (!isGreen) {
       return {
         kind: 'violation',
         reason:
           'The last recorded test run after your changes was not ' +
           'green — a recorded invocation is not a passing suite. Fix ' +
-          'the failures (or the build) and rerun before committing.',
+          `the failures (or the build) and rerun before committing.${extra}`,
       }
     }
     return { kind: 'pass' }

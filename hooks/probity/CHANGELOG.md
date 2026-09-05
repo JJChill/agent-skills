@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.1
+
+`requireGreenTestRun`'s Kotlin/Gradle defaults are stricter and cover more
+real Gradle usage:
+
+- Accepts `build`/`check` (run tests without the word "test"),
+  module-qualified tasks, `allTests`, `jvmTest` — but rejects `--dry-run`,
+  `-x`/`--exclude-task`, flag values that read like a task (`--args=build`),
+  and lookalike tasks that don't run one (`assembleAndroidTest`, ...).
+- Recognizes verification invocations inside compound/piped strings while using
+  a structured command check to reject `./gradlew test; echo gradlew` as proof
+  from exit status alone.
+- Under Kiro, a quiet run with no `BUILD SUCCESSFUL` banner is accepted via
+  the tool result's structured `exit_status`, only when that Gradle
+  invocation is provably last; piped/chained/`|| true` runs still need the
+  banner. A malformed envelope or non-zero `exit_status` is always red.
+- Failure detection also recognizes `FAILURE:` and `Execution failed for
+  task`.
+- `gates.ts`'s `requireGreenTestRun` gained additive, optional hooks:
+  `commandPredicate`, `extraSuccessPredicate`, `extraFailurePredicate`.
+  Unused by default; no behavior change for existing callers.
+- Fixed an isolation defect: the Swift preset no longer inherits
+  Gradle-flavored deny text or the Kiro shortcut — both apply only when
+  `command` is referentially `GRADLE_TEST_COMMAND`.
+- `options.reason`, when set, now appends on both deny paths (previously
+  only "no run recorded" did).
+
 ## 0.2.0
 
 Kotlin presets now receive the ast-grep Kotlin parser automatically through

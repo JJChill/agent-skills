@@ -41,11 +41,19 @@ export const MOCKING_LIBRARY_IMPORTS =
   /import\s+(?:io\.mockk|org\.mockito|org\.powermock)\./
 
 /**
- * Matches Gradle test invocations (`./gradlew test`,
- * `./gradlew :mysudo:testDevDebugUnitTest`, flavored Android unit-test
- * tasks) for the commit-on-green `requireCommand` gate.
+ * Matches a Gradle invocation of a verification task — `test`,
+ * flavored/module-qualified `test...Test` tasks (`./gradlew
+ * :mysudo:testDevDebugUnitTest`), `allTests`, `jvmTest`, `build`, or
+ * `check` (Gradle's `build` and `check` both run the test tasks they
+ * depend on, without the literal word "test") — for the commit-on-green
+ * `requireGreenTestRun` gate. Matches `gradlew`/`gradle` anywhere in a
+ * piped (`./gradlew build | grep ...`) or compound
+ * (`foo; ./gradlew build`) command string, not only at its start.
+ * Deliberately excludes unrelated tasks such as `assemble`, which
+ * builds outputs without running verification.
  */
-export const GRADLE_TEST_COMMAND = /gradlew?\s+(?:[\w:./-]+\s+)*:?[\w:.-]*[tT]est\w*/
+export const GRADLE_TEST_COMMAND =
+  /\bgradlew?\b[^\n;&|]*(?:\b(?:build|check|test|allTests|jvmTest)\b|\btest[A-Za-z0-9]*Test\b)/
 
 const STATIC_MOCK_PATTERNS: NamedPattern[] = [
   { label: 'Mockito.mockStatic()', pattern: /\bmockStatic\s*[(<]/g },
@@ -674,28 +682,218 @@ export function withKotlinFastPath(
   return wrapped
 }
 
+// Kiro's tool-result envelope reports a command's outcome as JSON
+// (`{"exit_status": "exit status: 0", ...}`) instead of the runner's
+// own text, so a quiet/`-q` Gradle run with no "BUILD SUCCESSFUL" text
+// can still be trusted via exit_status — but only when the Gradle
+// invocation is provably the LAST simple command run (a pipe,
+// `|| true`, or trailing command reports THAT command's status, not
+// Gradle's). Kiro-specific: native Claude, or a caller supplying its
+// own successPattern/failurePattern, gets no such allowance.
+const KIRO_ZERO_EXIT_STATUS = 'exit status: 0'
+
+/** Parses a Kiro envelope's `exit_status` via `JSON.parse` + a shape
+ *  check, never a text regex — malformed/differently-shaped output is
+ *  no evidence, never a parsed zero. */
+function parseKiroExitStatus(output: string): string | null {
+  const trimmed = output.trim()
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return null
+    }
+    const record = parsed as Record<string, unknown>
+    const exitStatus = record['exit_status']
+    return typeof exitStatus === 'string' &&
+      typeof record['stdout'] === 'string' &&
+      typeof record['stderr'] === 'string'
+      ? exitStatus
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** True when `output` mentions an `exit_status` field but fails
+ *  {@link parseKiroExitStatus}'s canonical-shape check. Distinguishes
+ *  "no Kiro evidence" from a broken/non-canonical envelope, which is
+ *  red even if it contains banner-like text. */
+function isMalformedKiroEnvelope(output: string): boolean {
+  const trimmed = output.trim()
+  return (
+    (trimmed.startsWith('{') || trimmed.startsWith('[')) &&
+    trimmed.includes('"exit_status"') &&
+    parseKiroExitStatus(output) === null
+  )
+}
+
+/** Splits on top-level `;`, `&&`, `||`, `|`, background `&`, and
+ *  newlines, quote-aware, without splitting a redirect's `&` (`2>&1`).
+ *  Used only to find the LAST simple command for the Kiro check. */
+function splitTopLevelCommands(command: string): string[] {
+  const segments: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (quote) {
+      current += ch
+      if (ch === quote && command[i - 1] !== '\\') quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      current += ch
+      continue
+    }
+    const isRedirectAmpersand =
+      ch === '&' &&
+      (command[i - 1] === '>' ||
+        command[i - 1] === '<' ||
+        command[i + 1] === '>')
+    if ('\n|;&'.includes(ch) && !isRedirectAmpersand) {
+      if ('|&'.includes(ch) && command[i + 1] === ch) i++
+      segments.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  segments.push(current)
+  return segments
+}
+
+/** True when the LAST top-level simple command is itself a genuine
+ *  Gradle verification invocation — not followed by a pipe/`;`/`&&`/
+ *  `||`/other command, and not merely mentioning "gradlew" as an
+ *  argument (`echo gradlew`). Piped/chained runs still pass via
+ *  BUILD SUCCESSFUL; this only gates the exit-status shortcut. */
+function gradleInvocationIsFinalCommand(command: string): boolean {
+  const segments = splitTopLevelCommands(command)
+  let last = ''
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (segments[i]!.trim().length > 0) {
+      last = segments[i]!
+      break
+    }
+  }
+  return isGradleVerificationInvocation(last)
+}
+
+// Flags consuming the FOLLOWING word as a value (`--flag value`);
+// boolean flags like `--no-daemon` take none.
+const VALUE_TAKING_FLAGS = new Set([
+  '-P', '--project-prop', '-D', '--system-prop', '-I', '--init-script',
+  '-c', '--settings-file', '-b', '--build-file', '-p', '--project-dir',
+  '-g', '--gradle-user-home', '-x', '--exclude-task', '--args', '--task',
+  '--configuration-cache-problems', '--priority', '--max-workers',
+  '--console', '--warning-mode',
+])
+const EXCLUDE_TASK_FLAG = /^(?:-x(?:=?.+)?|--exclude-task(?:=.+)?)$/
+const REDIRECT = /^(?:\d*|&)(?:>>?|<<?)/
+const REDIRECT_WITH_SEPARATE_TARGET = /^(?:\d*|&)(?:>>?|<<?)$/
+
+function isVerificationTask(word: string): boolean {
+  const task = word.replace(/^:+/, '').split(':').pop() ?? ''
+  return (
+    task === 'build' ||
+    task === 'check' ||
+    task === 'test' ||
+    task === 'allTests' ||
+    task === 'jvmTest' ||
+    /^test[A-Za-z0-9]*Test$/.test(task)
+  )
+}
+
+/** Accepts one simple shell command as a genuine Gradle verification
+ *  invocation: first word `gradlew`/`./gradlew`/`gradle`; no
+ *  `--dry-run` or `-x`/`--exclude-task`; and at least one positional
+ *  task (not a flag, flag value, or redirect target) on the allowlist. */
+function isGradleVerificationInvocation(simpleCommand: string): boolean {
+  const words = simpleCommand.trim().split(/\s+/).filter(Boolean)
+  if (!/^(?:\.\/|[\w./-]*\/)?gradlew?$/.test(words[0] ?? '')) return false
+  if (words.some((word) => word === '--dry-run' || EXCLUDE_TASK_FLAG.test(word))) {
+    return false
+  }
+
+  let skipNext = false
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i]!
+    if (skipNext) {
+      skipNext = false
+      continue
+    }
+    if (REDIRECT.test(word)) {
+      skipNext = REDIRECT_WITH_SEPARATE_TARGET.test(word)
+      continue
+    }
+    if (word.startsWith('-')) {
+      skipNext = !word.includes('=') && VALUE_TAKING_FLAGS.has(word)
+      continue
+    }
+    if (isVerificationTask(word)) return true
+  }
+  return false
+}
+
+/** Kotlin-default command predicate: true if ANY top-level simple
+ *  command is a genuine Gradle verification invocation. */
+function isKotlinDefaultGradleCommand(command: string): boolean {
+  return splitTopLevelCommands(command).some(isGradleVerificationInvocation)
+}
+
+/** Kotlin-default extra-success predicate: trusts a parsed zero exit
+ *  status only when the Gradle invocation is the last command run. */
+function kotlinDefaultExtraSuccess(command: string, output: string): boolean {
+  return (
+    gradleInvocationIsFinalCommand(command) &&
+    parseKiroExitStatus(output) === KIRO_ZERO_EXIT_STATUS
+  )
+}
+
+const DEFAULT_SUCCESS_PATTERN = /BUILD SUCCESSFUL/
+// A script/dependency-resolution failure can print `FAILURE:` without
+// `BUILD FAILED`; a task failure names the task in `Execution failed
+// for task ':...'`.
+const DEFAULT_FAILURE_PATTERN =
+  /FAILED|BUILD FAILED|^FAILURE: |Execution failed for task/m
+
+/** Kotlin-default extra-failure predicate: a parsed non-zero exit
+ *  status, or output that looks like an ATTEMPTED but malformed/
+ *  non-canonical Kiro envelope, is always red — even alongside a
+ *  BUILD SUCCESSFUL banner (which may be echoed/stale text, or a
+ *  substring inside broken JSON, not this run's own verdict). */
+function kotlinDefaultExtraFailure(output: string): boolean {
+  if (isMalformedKiroEnvelope(output)) return true
+  const exitStatus = parseKiroExitStatus(output)
+  return exitStatus !== null && exitStatus !== KIRO_ZERO_EXIT_STATUS
+}
+
+const DEFAULT_GRADLE_GREEN_REASON =
+  'Accepted Gradle verification tasks: test/test...Test, build, or check ' +
+  '(including module-qualified tasks and allTests/jvmTest; not --dry-run ' +
+  'or -x/--exclude-task). Under Kiro, a quiet run with no BUILD ' +
+  'SUCCESSFUL text is accepted only when the tool result is the canonical ' +
+  '{"exit_status": "exit status: 0", ...} envelope (a zero exit_status) ' +
+  'AND the Gradle invocation is the LAST command run (no trailing pipe, ' +
+  '`; next-command`, or `|| fallback`) — those still need the BUILD ' +
+  'SUCCESSFUL banner itself.'
+
 /**
- * Commit-on-GREEN gate — the stricter sibling of Probity's built-in
- * `requireCommand`, which only checks that a matching test command was
- * *recorded* after the last write and would happily pass a transcript
- * whose latest run FAILED. This rule additionally judges the recorded
- * run's output: the last matching test command after the last write
- * must look green (`successPattern` present, `failurePattern` absent).
- *
- * Inherent limit (unchanged from requireCommand): the gate sees only
- * the session transcript. A green run in another terminal, CI, or a
- * wrapper script is invisible — rerun the suite in-session, and keep
- * the CI mirror for human commits.
- *
- * Applies to: command actions matching `git commit`. Deterministic —
- * no AI call.
- *
- * @param options.command — regex matching a test invocation (e.g.
- *   {@link GRADLE_TEST_COMMAND}).
- * @param options.successPattern — output must match to count as green
- *   (default `/BUILD SUCCESSFUL/`).
- * @param options.failurePattern — output matching this is red even if
- *   the success pattern also appears (default `/FAILED|BUILD FAILED/`).
+ * Gradle/Kiro-defaulted wrapper over `requireGreenTestRun` in
+ * `gates.ts` (see that export for the full option contract). The
+ * Kotlin defaults (command predicate, Kiro extra success/failure
+ * signal, default reason) apply ONLY when `options.command` is
+ * referentially the exported {@link GRADLE_TEST_COMMAND}; any other
+ * RegExp (a custom pattern, or a preset's own constant such as
+ * Swift's `XCODEBUILD_TEST_COMMAND`) falls through to the
+ * language-neutral behavior with the caller's own patterns/reason and
+ * no default appended. The Kiro exit-status extra-success/failure
+ * predicates apply only when the caller omits BOTH `successPattern`
+ * and `failurePattern` — supplying either fully suppresses the Kiro
+ * allowance, so a caller replacing the evidence contract gets exactly
+ * what they specified, nothing more.
  */
 export function requireGreenTestRun(options: {
   command: RegExp
@@ -705,15 +903,25 @@ export function requireGreenTestRun(options: {
   listCommitFiles?: (command: string) => string[]
   reason?: string
 }): Rule {
-  // Gradle-defaulted wrapper over the language-neutral rule in
-  // gates.ts (JS/TS configs use it directly with their own patterns).
+  const isDefaultGradleCommand = options.command === GRADLE_TEST_COMMAND
+  const allowKiroExtras =
+    isDefaultGradleCommand && !options.successPattern && !options.failurePattern
   return requireGreenTestRunGeneric({
     command: options.command,
-    successPattern: options.successPattern ?? /BUILD SUCCESSFUL/,
-    failurePattern: options.failurePattern ?? /FAILED|BUILD FAILED/,
+    commandPredicate: isDefaultGradleCommand
+      ? isKotlinDefaultGradleCommand
+      : undefined,
+    successPattern: options.successPattern ?? DEFAULT_SUCCESS_PATTERN,
+    extraSuccessPredicate: allowKiroExtras ? kotlinDefaultExtraSuccess : undefined,
+    failurePattern: options.failurePattern ?? DEFAULT_FAILURE_PATTERN,
+    extraFailurePredicate: allowKiroExtras
+      ? (_command, output) => kotlinDefaultExtraFailure(output)
+      : undefined,
     enforceForPaths: options.enforceForPaths,
     listCommitFiles: options.listCommitFiles,
-    reason: options.reason,
+    reason: isDefaultGradleCommand
+      ? options.reason ?? DEFAULT_GRADLE_GREEN_REASON
+      : options.reason,
   })
 }
 

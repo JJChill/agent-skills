@@ -299,10 +299,9 @@ export function kmpRuleEntries(
     // reverting the mutation removes the marker with it.
     enforceProbeReversion({ roots: [root] }),
 
-    // Matches testAndroidHostTest, :feature:x:testAndroidHostTest,
-    // :desktop:jvmTest, allTests, :app:testDevDebugUnitTest. Stricter
-    // than Probity's requireCommand: the recorded run's output must
-    // actually be green, not merely exist.
+    // Accepts test/test...Test, :desktop:jvmTest, allTests,
+    // build, and check. The latest matching run must carry BUILD
+    // SUCCESSFUL or a trustworthy Kiro zero status.
     requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ]
 }
