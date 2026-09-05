@@ -18,7 +18,9 @@
  */
 import { join } from 'node:path'
 
-import { enforceTdd, forbidContentPattern, type RuleEntry } from '@nizos/probity'
+import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
+
+import { enforceKotlinTdd } from '../internal/kotlin-tdd.js'
 
 import type { Globs } from '../rules/scoping.js'
 
@@ -192,7 +194,7 @@ export function kmpRuleEntries(
       // behavior by the TDD gate.
       rules: [
         withMutationProbe(
-          withTelemetryFastPath(withKotlinFastPath(enforceTdd())),
+          withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
         ),
       ],
     },

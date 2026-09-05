@@ -15,7 +15,9 @@
  */
 import { join } from 'node:path'
 
-import { enforceTdd, forbidContentPattern, type RuleEntry } from '@nizos/probity'
+import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
+
+import { enforceKotlinTdd } from '../internal/kotlin-tdd.js'
 
 import {
   enforceAcceptanceLanguage,
@@ -176,14 +178,14 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // while preserving all prior source (additive test scaffolding is
     // allowed) passes without an AI call. Its parser ships as optional
     // dependencies; unavailable parser support delegates to
-    // enforceTdd with an explicit diagnostic.
+    // enforceKotlinTdd with an explicit diagnostic and a bounded history.
     {
       files: tddGlobs,
       // Telemetry-only additions pass deterministically — see the
       // KMP preset's note on the TDD/observability tension.
       rules: [
         withMutationProbe(
-          withTelemetryFastPath(withKotlinFastPath(enforceTdd())),
+          withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
         ),
       ],
     },
