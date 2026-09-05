@@ -144,7 +144,14 @@ export function forbidNewAmbientEffects(
   })
 }
 
-type AstGrepNode = { findAll(rule: unknown): unknown[] }
+type AstGrepNode = {
+  ancestors(): AstGrepNode[]
+  children(): AstGrepNode[]
+  findAll(rule: unknown): AstGrepNode[]
+  kind(): string
+  range(): { start: { index: number }; end: { index: number } }
+  text(): string
+}
 type AstGrepModule = {
   registerDynamicLanguage: (langs: Record<string, unknown>) => void
   parse: (lang: string, code: string) => { root(): AstGrepNode }
@@ -160,10 +167,20 @@ const KOTLIN_TEST_PATTERNS: unknown[] = [
   {
     rule: {
       kind: 'function_declaration',
-      regex: '@(Test|ParameterizedTest|RepeatedTest|TestFactory)\\b',
+      has: {
+        kind: 'modifiers',
+        has: {
+          kind: 'annotation',
+          regex:
+            '^@(Test|ParameterizedTest|RepeatedTest|TestFactory)(?:\\b|\\s*\\()',
+        },
+      },
     },
   },
 ]
+
+const KOTLIN_TEST_FILE_PATTERN =
+  /(?:^|\/)src\/(?:test|[A-Za-z0-9]+Test)\/(?:java|kotlin)\//
 
 let astGrep: AstGrepModule | null | undefined
 
@@ -176,21 +193,346 @@ function loadKotlinAstGrep(): AstGrepModule | null {
     napi.registerDynamicLanguage({ kotlin: lang.default ?? lang })
     astGrep = napi
   } catch {
-    // Optional peer deps not installed — the wrapper falls through.
+    // Optional dependencies unavailable on this install or platform.
     astGrep = null
   }
   return astGrep
 }
 
-function countKotlinTests(
+function findKotlinTestNodes(
   napi: AstGrepModule,
   code: string,
   patterns: unknown[],
-): number {
+): AstGrepNode[] {
   const root = napi.parse('kotlin', code).root()
-  let count = 0
-  for (const pattern of patterns) count += root.findAll(pattern).length
-  return count
+  return patterns.flatMap((pattern) => root.findAll(pattern))
+}
+
+function kotlinTestNodes(
+  napi: AstGrepModule,
+  code: string,
+  patterns: unknown[],
+): string[] {
+  return findKotlinTestNodes(napi, code, patterns).map((node) => node.text())
+}
+
+function nodeIsInside(node: AstGrepNode, insertion: Insertion): boolean {
+  const range = node.range()
+  return (
+    range.start.index >= insertion.startByte &&
+    range.end.index <= insertion.endByte
+  )
+}
+
+function addedTestNode(
+  beforeTests: string[],
+  afterTests: AstGrepNode[],
+  insertion: Insertion,
+): AstGrepNode | null {
+  const unmatched = [...afterTests]
+  for (const beforeTest of beforeTests) {
+    const index = unmatched.findIndex((node) => node.text() === beforeTest)
+    if (index === -1) return null
+    unmatched.splice(index, 1)
+  }
+  if (unmatched.length !== 1) return null
+  const added = unmatched[0]!
+  if (beforeTests.includes(added.text())) return null
+  return nodeIsInside(added, insertion) ? added : null
+}
+
+type Insertion = { text: string; startByte: number; endByte: number }
+
+function singleInsertion(before: string, after: string): Insertion | null {
+  if (after.length <= before.length) return null
+  let prefix = 0
+  while (prefix < before.length && before[prefix] === after[prefix]) {
+    prefix += 1
+  }
+  let beforeSuffix = before.length
+  let afterSuffix = after.length
+  while (
+    beforeSuffix > prefix &&
+    before[beforeSuffix - 1] === after[afterSuffix - 1]
+  ) {
+    beforeSuffix -= 1
+    afterSuffix -= 1
+  }
+  if (beforeSuffix !== prefix) return null
+  const text = after.slice(prefix, afterSuffix)
+  const startByte = Buffer.byteLength(after.slice(0, prefix), 'utf8')
+  return {
+    text,
+    startByte,
+    endByte: startByte + Buffer.byteLength(text, 'utf8'),
+  }
+}
+
+function isRunnableTestNode(node: AstGrepNode): boolean {
+  const ancestors = node.ancestors()
+  const owner = ancestors[1]
+  if (
+    ancestors[0]?.kind() !== 'class_body' ||
+    owner?.kind() !== 'class_declaration' ||
+    ancestors[2]?.kind() !== 'source_file' ||
+    !owner.children().some((child) => child.kind() === 'class')
+  ) {
+    return false
+  }
+  const bodyStart = owner.text().indexOf('{')
+  const header = bodyStart === -1 ? owner.text() : owner.text().slice(0, bodyStart)
+  return countMatches(header, DISABLING_TEST_CONTROL) === 0
+}
+
+function onlyCommentsAndWhitespace(code: string): boolean {
+  return /^\s*$/.test(
+    code.replace(/\/\/[^\r\n]*\r?\n|\/\*[\s\S]*?\*\//g, ''),
+  )
+}
+
+function identifiersIn(tests: string[]): Set<string> {
+  return new Set(
+    tests.flatMap((test) =>
+      [...test.matchAll(/`([^`]+)`|\b([A-Za-z_]\w*)\b/g)].map(
+        (match) => match[1] ?? match[2]!,
+      ),
+    ),
+  )
+}
+
+function safeExistingFileInsertion(
+  napi: AstGrepModule,
+  before: string,
+  after: string,
+  addedTest: AstGrepNode,
+  beforeTests: string[],
+  patterns: unknown[],
+): boolean {
+  const insertion = singleInsertion(before, after)
+  if (!insertion || !nodeIsInside(addedTest, insertion)) return false
+  const addedText = addedTest.text()
+  const addedAt = insertion.text.indexOf(addedText)
+  if (addedAt !== -1) {
+    const remainder =
+      insertion.text.slice(0, addedAt) +
+      insertion.text.slice(addedAt + addedText.length)
+    if (onlyCommentsAndWhitespace(remainder)) return true
+  }
+
+  const trimmed = insertion.text.trim()
+  const priorIdentifiers = identifiersIn(beforeTests)
+  const root = napi.parse('kotlin', after).root()
+  return root.findAll({ rule: { kind: 'class_declaration' } }).some((node) => {
+    if (node.text().trim() !== trimmed) return false
+    const name = nodeName(node)
+    if (name && priorIdentifiers.has(name)) return false
+    const tests = patterns.flatMap((pattern) => node.findAll(pattern))
+    const functions = node.findAll({ rule: { kind: 'function_declaration' } })
+    return (
+      tests.length === 1 &&
+      tests[0]!.range().start.index === addedTest.range().start.index &&
+      tests[0]!.range().end.index === addedTest.range().end.index &&
+      isRunnableTestNode(addedTest) &&
+      functions.length === 1
+    )
+  })
+}
+
+function safeNewTestFile(
+  napi: AstGrepModule,
+  code: string,
+  addedTest: AstGrepNode,
+): boolean {
+  if (!isRunnableTestNode(addedTest)) return false
+  const root = napi.parse('kotlin', code).root()
+  return (
+    root.findAll({ rule: { kind: 'class_declaration' } }).length === 1 &&
+    root.findAll({ rule: { kind: 'function_declaration' } }).length === 1
+  )
+}
+
+const DISABLING_TEST_CONTROL =
+  /@(?:[A-Za-z_]\w*\.)*(?:Ignore|Disabled)\b|\benabled\s*=\s*false\b/g
+
+function countMatches(code: string, pattern: RegExp): number {
+  pattern.lastIndex = 0
+  return [...code.matchAll(pattern)].length
+}
+
+function introducesDisablingControl(before: string, after: string): boolean {
+  return (
+    countMatches(after, DISABLING_TEST_CONTROL) >
+    countMatches(before, DISABLING_TEST_CONTROL)
+  )
+}
+
+function nodeName(node: AstGrepNode): string | null {
+  const names = node
+    .children()
+    .filter((child) =>
+      child.kind() === 'simple_identifier' || child.kind() === 'type_identifier',
+    )
+  const direct = names.at(-1)?.text()
+  if (direct) return direct.replace(/^`|`$/g, '')
+  const nested = node.findAll({ rule: { kind: 'simple_identifier' } })[0]
+  return nested ? nested.text().replace(/^`|`$/g, '') : null
+}
+
+function enclosingScope(node: AstGrepNode): string {
+  const container = node
+    .ancestors()
+    .find((ancestor) =>
+      ancestor.kind() === 'class_declaration' ||
+      ancestor.kind() === 'object_declaration',
+    )
+  return container ? (nodeName(container) ?? '<anonymous>') : '<top-level>'
+}
+
+function testScopes(
+  napi: AstGrepModule,
+  code: string,
+  patterns: unknown[],
+): Set<string> {
+  const root = napi.parse('kotlin', code).root()
+  const scopes = new Set<string>()
+  for (const pattern of patterns) {
+    for (const node of root.findAll(pattern)) scopes.add(enclosingScope(node))
+  }
+  return scopes
+}
+
+function containerHeaders(napi: AstGrepModule, code: string): Map<string, string> {
+  const root = napi.parse('kotlin', code).root()
+  const headers = new Map<string, string>()
+  for (const kind of ['class_declaration', 'object_declaration']) {
+    for (const node of root.findAll({ rule: { kind } })) {
+      const name = nodeName(node)
+      if (!name) continue
+      const bodyStart = node.text().indexOf('{')
+      headers.set(
+        name,
+        (bodyStart === -1 ? node.text() : node.text().slice(0, bodyStart)).trim(),
+      )
+    }
+  }
+  return headers
+}
+
+function changesExistingTestContainer(
+  napi: AstGrepModule,
+  before: string,
+  after: string,
+  patterns: unknown[],
+): boolean {
+  const scopes = testScopes(napi, before, patterns)
+  const beforeHeaders = containerHeaders(napi, before)
+  const afterHeaders = containerHeaders(napi, after)
+  for (const scope of scopes) {
+    if (scope === '<top-level>') continue
+    if (beforeHeaders.get(scope) !== afterHeaders.get(scope)) return true
+  }
+  return false
+}
+
+type Declaration = { name: string; scope: string }
+
+function declarations(napi: AstGrepModule, code: string): Declaration[] {
+  const root = napi.parse('kotlin', code).root()
+  const found: Declaration[] = []
+  for (const kind of [
+    'function_declaration',
+    'property_declaration',
+    'class_declaration',
+    'object_declaration',
+  ]) {
+    for (const node of root.findAll({ rule: { kind } })) {
+      const name = nodeName(node)
+      if (name) found.push({ name, scope: enclosingScope(node) })
+    }
+  }
+  for (const node of root.findAll({ rule: { kind: 'import_header' } })) {
+    const alias = node.findAll({ rule: { kind: 'type_identifier' } }).at(-1)
+    const leaf = node.findAll({ rule: { kind: 'simple_identifier' } }).at(-1)
+    const name = (alias ?? leaf)?.text().replace(/^`|`$/g, '')
+    if (name) found.push({ name, scope: '<top-level>' })
+  }
+  return found
+}
+
+function introducedDeclarations(
+  before: Declaration[],
+  after: Declaration[],
+): Declaration[] {
+  const existing = new Map<string, number>()
+  for (const declaration of before) {
+    const key = `${declaration.scope}\u0000${declaration.name}`
+    existing.set(key, (existing.get(key) ?? 0) + 1)
+  }
+  return after.filter((declaration) => {
+    const key = `${declaration.scope}\u0000${declaration.name}`
+    const remaining = existing.get(key) ?? 0
+    if (remaining === 0) return true
+    existing.set(key, remaining - 1)
+    return false
+  })
+}
+
+function shadowsExistingTestIdentifier(
+  napi: AstGrepModule,
+  before: string,
+  after: string,
+  beforeTests: string[],
+  patterns: unknown[],
+): boolean {
+  const identifiers = new Set(
+    beforeTests.flatMap((test) =>
+      [...test.matchAll(/`([^`]+)`|\b([A-Za-z_]\w*)\b/g)].map(
+        (match) => match[1] ?? match[2]!,
+      ),
+    ),
+  )
+  const scopes = testScopes(napi, before, patterns)
+  return introducedDeclarations(
+    declarations(napi, before),
+    declarations(napi, after),
+  ).some(
+    ({ name, scope }) =>
+      identifiers.has(name) &&
+      (scope === '<top-level>' || scopes.has(scope)),
+  )
+}
+
+function matchesTestPath(pattern: RegExp, path: string): boolean {
+  pattern.lastIndex = 0
+  if (pattern !== KOTLIN_TEST_FILE_PATTERN) return pattern.test(path)
+  const match = pattern.exec(path)
+  if (!match) return false
+  const prefix = path.slice(0, match.index)
+  return !/(?:^|\/)src\/(?:main|[A-Za-z0-9]+Main)\/(?:java|kotlin)\//.test(
+    prefix,
+  )
+}
+
+async function delegateWithFastPathUnavailable(
+  rule: Rule,
+  action: Action,
+  ctx: RuleContext | undefined,
+  detail: string,
+): Promise<RuleResult> {
+  const result = await rule(action, ctx)
+  const diagnostic =
+    `Kotlin fast path unavailable (${detail}); delegated to the wrapped rule.`
+  if (result.kind === 'violation') {
+    return { kind: 'violation', reason: `${result.reason} ${diagnostic}` }
+  }
+  return {
+    ...result,
+    reason: result.reason ?? diagnostic,
+    notes: [
+      ...(result.notes ?? []),
+      { kind: 'kotlin-fast-path-unavailable' },
+    ],
+  }
 }
 
 /**
@@ -198,15 +540,24 @@ function countKotlinTests(
  * only implements for TS/JS/Python/C#/Ruby/PHP: wraps a rule so that a
  * `.kt`/`.kts` write adding exactly one new test function passes
  * deterministically — no AI call for the most common write in a TDD
- * loop, adding the next red test. Everything else (production writes,
- * multi-test writes, non-Kotlin files) delegates to the wrapped rule
- * unchanged.
+ * loop, adding the next red test. The write must target a Kotlin test
+ * source set and add exactly one runnable test function. Existing files
+ * must preserve every byte and test function and make one contiguous
+ * insertion: the test (plus comments/whitespace), or a separate test
+ * class with no additional functions. Brand-new files may include
+ * imports and property fixtures but only the one test function.
+ * Edits that target production paths, introduce disabling controls,
+ * alter an existing test container's header, shadow an identifier used
+ * by an existing test, or delete, disable, or weaken tests delegate to
+ * the wrapped rule. Everything else (multi-test writes and non-Kotlin
+ * files) delegates unchanged.
  *
- * Requires the optional packages `@ast-grep/napi` and
- * `@ast-grep/lang-kotlin` (`npm install -D` both). When they're
- * missing, or the current file content is unavailable, or parsing
- * fails, the wrapper transparently falls through to the wrapped rule
- * — it can only ever skip work, never block.
+ * The parser packages `@ast-grep/napi` and `@ast-grep/lang-kotlin`
+ * ship as optional dependencies, so supported npm installs receive
+ * them automatically. If a platform cannot install them, or the
+ * current file is unavailable, or parsing fails, the wrapper falls
+ * through to the wrapped rule — it can only ever skip work, never
+ * block.
  *
  * Same trade-off as Probity's own fast-path: a deterministic pass on
  * every single-test addition skips the green→red refactor-readiness
@@ -215,38 +566,104 @@ function countKotlinTests(
  * @param rule — the rule to wrap, normally `enforceTdd()`.
  * @param options.patterns — replaces the default ast-grep test-node
  *   patterns (e.g. to add a Kotest spec pattern).
+ * @param options.testFilePattern — limits deterministic passes to test
+ *   source paths; defaults to classic and KMP `src/*Test/{java,kotlin}`.
  *
  * @example
  * { files: ['**\/src\/main\/**', '**\/src\/test\/**'], rules: [withKotlinFastPath(enforceTdd())] }
  */
 export function withKotlinFastPath(
   rule: Rule,
-  options: { patterns?: unknown[] } = {},
+  options: { patterns?: unknown[]; testFilePattern?: RegExp } = {},
 ): Rule {
   const patterns = options.patterns ?? KOTLIN_TEST_PATTERNS
+  const testFilePattern = options.testFilePattern ?? KOTLIN_TEST_FILE_PATTERN
   const wrapped = async function kotlinFastPath(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
-    if (action.kind !== 'write' || !/\.kts?$/.test(action.path)) {
+    if (
+      action.kind !== 'write' ||
+      !/\.kts?$/.test(action.path) ||
+      !matchesTestPath(testFilePattern, action.path)
+    ) {
       return rule(action, ctx)
     }
     const napi = loadKotlinAstGrep()
-    if (!napi) return rule(action, ctx)
-    const before = await ctx?.readFile?.(action.path)
-    // An unknowable before-count makes any delta unverifiable; fall
-    // through to the wrapped rule rather than risk a false pass.
-    if (!before || before.kind === 'unknown') return rule(action, ctx)
-    const beforeText = before.kind === 'present' ? before.content : ''
-    let delta: number
-    try {
-      delta =
-        countKotlinTests(napi, action.content, patterns) -
-        countKotlinTests(napi, beforeText, patterns)
-    } catch {
-      return rule(action, ctx)
+    if (!napi) {
+      return delegateWithFastPathUnavailable(
+        rule,
+        action,
+        ctx,
+        'parser packages could not be loaded',
+      )
     }
-    if (delta === 1) return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
+    const before = await ctx?.readFile?.(action.path)
+    if (!before || before.kind === 'unknown') {
+      return delegateWithFastPathUnavailable(
+        rule,
+        action,
+        ctx,
+        'current file content unavailable',
+      )
+    }
+    const beforeText = before.kind === 'present' ? before.content : ''
+    const insertion =
+      beforeText.length === 0
+        ? {
+            text: action.content,
+            startByte: 0,
+            endByte: Buffer.byteLength(action.content, 'utf8'),
+          }
+        : singleInsertion(beforeText, action.content)
+    if (!insertion) return rule(action, ctx)
+
+    let fastPath = false
+    try {
+      const beforeTests = kotlinTestNodes(napi, beforeText, patterns)
+      const afterTestNodes = findKotlinTestNodes(napi, action.content, patterns)
+      const addedTest = addedTestNode(beforeTests, afterTestNodes, insertion)
+      if (addedTest) {
+        const unsafeInsertion =
+          introducesDisablingControl(beforeText, action.content) ||
+          changesExistingTestContainer(
+            napi,
+            beforeText,
+            action.content,
+            patterns,
+          ) ||
+          shadowsExistingTestIdentifier(
+            napi,
+            beforeText,
+            action.content,
+            beforeTests,
+            patterns,
+          )
+        fastPath =
+          !unsafeInsertion &&
+          isRunnableTestNode(addedTest) &&
+          (beforeText.length === 0
+            ? safeNewTestFile(napi, action.content, addedTest)
+            : safeExistingFileInsertion(
+                napi,
+                beforeText,
+                action.content,
+                addedTest,
+                beforeTests,
+                patterns,
+              ))
+      }
+    } catch {
+      return delegateWithFastPathUnavailable(
+        rule,
+        action,
+        ctx,
+        'parsing failed',
+      )
+    }
+    if (fastPath) {
+      return { kind: 'pass', notes: [{ kind: 'fast-path' }] }
+    }
     return rule(action, ctx)
   }
   // Surface the wrapped rule in engine traces and block reports:

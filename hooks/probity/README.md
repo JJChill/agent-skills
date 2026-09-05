@@ -17,6 +17,13 @@ brings rule fixes in instead of a fork rotting.
 npm install -D @nizos/probity @jjchill/probity-rules
 ```
 
+Kotlin parser support for the deterministic single-test fast path is included
+as exact-version optional dependencies. Supported installs receive it
+automatically. `npm install --omit=optional` disables that optimization; Kotlin
+writes then delegate to the AI TDD rule with an explicit diagnostic. Kotlin
+layouts outside the default classic/KMP `src/*Test/{java,kotlin}` shape can
+pass `testFilePattern` to `withKotlinFastPath`.
+
 ## Presets
 
 Each preset is a factory returning `RuleEntry[]` from `@nizos/probity`. Copy

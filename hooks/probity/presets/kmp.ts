@@ -12,9 +12,9 @@
  * boundary with Markdown Given/When/Then specs in docs/specs/.
  * Adjust globs and package names to your layout.
  *
- * Probity still runs on Node: `npm install -D @nizos/probity`
- * (plus optionally @ast-grep/napi @ast-grep/lang-kotlin for the TDD
- * fast-path) next to gradlew.
+ * Probity still runs on Node: install `@nizos/probity` and this rule
+ * package next to gradlew. The TDD fast-path parser ships as optional
+ * dependencies of the rule package.
  */
 import { join } from 'node:path'
 

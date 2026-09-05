@@ -15,9 +15,10 @@
  *
  *   npm install -D @nizos/probity @jjchill/probity-rules
  *
- * Probity still runs on Node: `npm install -D @nizos/probity`
- * (plus optionally @ast-grep/napi @ast-grep/lang-kotlin for the TDD
- * fast-path) next to gradlew.
+ * The Kotlin TDD fast-path parser ships automatically as optional
+ * dependencies of `@jjchill/probity-rules`. Use `npm install
+ * --omit=optional` only when the deterministic fast path is not
+ * required; Kotlin writes then delegate to the AI TDD rule.
  *
  * EDIT: the rule entries live in `presets/kmp.ts` (`kmpRuleEntries`).
  * The globs inside it (core/domain packages, source sets, adapter
