@@ -8,12 +8,21 @@ const packageJson = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 ) as {
   optionalDependencies?: Record<string, string>
+  repository?: { type: string; url: string; directory?: string }
 }
 
 test('published installs include the Kotlin fast-path parser dependencies', () => {
   assert.deepEqual(packageJson.optionalDependencies, {
     '@ast-grep/lang-kotlin': '0.0.7',
     '@ast-grep/napi': '0.45.1',
+  })
+})
+
+test('package repository metadata matches GitHub Actions provenance', () => {
+  assert.deepEqual(packageJson.repository, {
+    type: 'git',
+    url: 'https://github.com/JJChill/agent-skills',
+    directory: 'hooks/probity',
   })
 })
 
