@@ -269,7 +269,7 @@ export function kmpRuleEntries(
     // scripts/spec-parity.mjs.
     //
     // Brownfield adoption: a spec suite that predates the gate would
-    // block every commit. Generate a baseline once —
+    // block every specs/acceptance commit. Generate a baseline once —
     //   node scripts/spec-parity.mjs --specs docs/specs \
     //     --baseline docs/specs/.parity-baseline --write-baseline
     // — and commit it: baselined scenarios are exempt while new ones

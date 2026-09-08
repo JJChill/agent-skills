@@ -5,6 +5,7 @@
 // enforcement hook must parse both Markdown `## Scenario:` specs and
 // Gherkin `.feature` specs, treat the extensions as interchangeable in
 // Covers-tag resolution, and reject a stem present in both forms.
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -88,6 +89,86 @@ const commit = { kind: 'command', command: 'git commit -m x' } as const
   const res = await rule(commit as any)
   check('rule: duplicate stem -> violation', res.kind === 'violation' && /both .*forms|single extension/i.test((res as any).reason))
   rmSync(dir, { recursive: true, force: true })
+}
+
+// 7. A dirty specs checkout must not block an unrelated parent commit (issue #25).
+{
+  const dir = workspace({
+    'specs/features/sample.feature': 'Feature: F\n\n  Scenario: Newly untagged\n    Given a\n    Then b\n',
+  })
+  const originalCwd = process.cwd()
+  let commitFiles = ['sdk/core/src/commonMain/kotlin/Unrelated.kt']
+  process.chdir(dir)
+  try {
+    const root = process.cwd()
+    const rule = enforceSpecTestParity({
+      specsDir: join(root, 'specs/features'),
+      testRoots: [root],
+      testFilePattern: /[/\\]acceptance[/\\]/,
+      listCommitFiles: () => commitFiles,
+    })
+    const unrelated = await rule(commit as any)
+    commitFiles = ['sdk/mysudo/src/jvmTest/kotlin/acceptance/SudosSpec.kt']
+    const acceptanceTest = await rule(commit as any)
+    commitFiles = ['specs']
+    const specsPointer = await rule(commit as any)
+    check(
+      'rule: only a commit recording specs/tests scans the dirty specs checkout',
+      unrelated.kind === 'pass' &&
+        acceptanceTest.kind === 'violation' &&
+        specsPointer.kind === 'violation',
+    )
+  } finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 8. Git inspection failure must retain full parity enforcement.
+{
+  const dir = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  Scenario: Uncovered\n    Given a\n    Then b\n',
+  })
+  const rule = enforceSpecTestParity({
+    specsDir: join(dir, 'specs'),
+    testRoots: [dir],
+    testFilePattern: /[/\\]acceptance[/\\]/,
+    listCommitFiles: () => { throw new Error('git unavailable') },
+  })
+  const res = await rule(commit as any)
+  check('rule: commit-file inspection failure enforces parity', res.kind === 'violation')
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// 9. `git commit -a` includes modified tracked specs in the pending set.
+{
+  const dir = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  @wip\n  Scenario: Promoted\n    Given a\n    Then b\n',
+  })
+  execFileSync('git', ['init', '-q'], { cwd: dir })
+  execFileSync('git', ['config', 'user.name', 'Probity Test'], { cwd: dir })
+  execFileSync('git', ['config', 'user.email', 'probity@example.invalid'], { cwd: dir })
+  execFileSync('git', ['add', '.'], { cwd: dir })
+  execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: dir })
+  const originalCwd = process.cwd()
+  process.chdir(dir)
+  try {
+    const root = process.cwd()
+    writeFileSync(
+      join(root, 'specs/sample.feature'),
+      'Feature: F\n\n  Scenario: Promoted\n    Given a\n    Then b\n',
+    )
+    const rule = enforceSpecTestParity({
+      specsDir: join(root, 'specs'),
+      testRoots: [root],
+      testFilePattern: /[/\\]acceptance[/\\]/,
+    })
+    const res = await rule({ kind: 'command', command: 'git commit -am x' } as any)
+    check('rule: git commit -a scans modified tracked specs', res.kind === 'violation')
+  } finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
