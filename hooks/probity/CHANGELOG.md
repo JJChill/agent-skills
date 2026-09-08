@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.3
+
+`enforceSpecTestParity` now inspects the pending Git commit before scanning
+specifications and acceptance tests. It runs only when that commit records the
+specs path (including a git-submodule pointer) or a path matching the configured
+acceptance-test pattern; Git inspection failures retain full enforcement.
+
+This restores the documented specs-first order for projects whose specs live in
+a separate repository: committing an `@wip` removal inside the specs checkout,
+or committing unrelated parent-repository work while that checkout is dirty, no
+longer scans an uncommitted submodule worktree that cannot yet contain its
+covering SDK test. The later parent commit that records the new specs pointer or
+acceptance test still enforces bidirectional parity. No config change is needed.
+
 ## 0.2.2
 
 Kotlin and KMP presets now retain up to 20 recent session events, each

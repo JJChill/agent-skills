@@ -275,7 +275,7 @@ If the project will use the glossary or spec-parity rules, seed the files they r
 - **Infrastructure import screen.** Extend the known-vendor regex with the project's actual frameworks, SDKs, and I/O libraries.
 - **Preset-specific paths.** Kotlin and Swift presets: `specsDir`, `testFilePattern`, module and package names. Optional `glossaryPath` and `seamHint` once a glossary and canonical ports exist.
 
-Brownfield codebase? The deterministic rules are delta-based (only what a write *introduces* blocks; existing call sites do not), and a spec suite that predates the parity gate gets a one-time baseline so existing gaps do not block every commit:
+Brownfield codebase? The deterministic rules are delta-based (only what a write *introduces* blocks; existing call sites do not), and a spec suite that predates the parity gate gets a one-time baseline so existing gaps do not block every specs/acceptance commit:
 
 ```bash
 npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline

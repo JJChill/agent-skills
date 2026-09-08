@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
@@ -219,6 +220,12 @@ type ScanOptions = {
    * tags are never baselined: they are actively wrong, not legacy.
    */
   baselinePath?: string
+  /**
+   * Files the pending commit will record, relative to the repository root.
+   * Defaults to Git's staged set plus tracked modifications for
+   * `git commit -a`; injectable for deterministic tests.
+   */
+  listCommitFiles?: (command: string) => string[]
 }
 
 /** Parses a baseline file into normalized scenario keys. Missing file → empty set. */
@@ -273,6 +280,35 @@ function formatList(lines: string[], max = 10): string {
   return shown.join('\n')
 }
 
+function defaultListCommitFiles(command: string): string[] {
+  const run = (args: string[]): string[] =>
+    execFileSync('git', args, { cwd: process.cwd(), encoding: 'utf8' })
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+  const files = run(['diff', '--cached', '--name-only'])
+  if (/\s-\w*a\w*\b/.test(command) || /--all\b/.test(command)) {
+    for (const file of run(['diff', '--name-only'])) {
+      if (!files.includes(file)) files.push(file)
+    }
+  }
+  return files
+}
+
+function isWithin(parent: string, child: string): boolean {
+  const path = relative(parent, child)
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
+}
+
+function pathsIntersect(left: string, right: string): boolean {
+  return isWithin(left, right) || isWithin(right, left)
+}
+
+function matches(pattern: RegExp, value: string): boolean {
+  pattern.lastIndex = 0
+  return pattern.test(value)
+}
+
 /**
  * Bidirectional parity gate on `git commit`: blocks when any
  * non-wip `## Scenario:` heading in `specsDir` has no acceptance
@@ -305,9 +341,14 @@ function formatList(lines: string[], max = 10): string {
  *   matching that scope's `filePattern`, on top of the base check.
  * @param options.defaultScopes — scope names required of untagged
  *   scenarios too (the project's standard driver set).
+ * @param options.listCommitFiles — optional staged-file lister for
+ *   tests. By default the gate reads Git's pending commit and runs only
+ *   when it records the specs path (including a submodule pointer) or
+ *   an acceptance-test path. Inspection failures preserve full enforcement.
  */
 export function enforceSpecTestParity(options: ScanOptions): Rule {
   const pattern = options.testFilePattern ?? DEFAULT_TEST_FILE_PATTERN
+  const listCommitFiles = options.listCommitFiles ?? defaultListCommitFiles
   const scopes = new Map(
     (options.driverScopes ?? []).map((scope) => [scope.name.toLowerCase(), scope]),
   )
@@ -315,6 +356,26 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
   return function enforceSpecTestParity(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
     if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    const cwd = process.cwd()
+    const specsDir = resolve(options.specsDir)
+    // Hook processes are anchored to the project root. Scope only when that
+    // relationship is known (or a test injects the lister); otherwise retain
+    // the historical fail-safe full scan.
+    if (options.listCommitFiles || isWithin(cwd, specsDir)) {
+      try {
+        const relevant = listCommitFiles(action.command).some((file) => {
+          const absolute = resolve(cwd, file)
+          return (
+            pathsIntersect(absolute, specsDir) ||
+            matches(pattern, file) ||
+            matches(pattern, absolute)
+          )
+        })
+        if (!relevant) return { kind: 'pass' }
+      } catch {
+        // Git unavailable or unreadable: preserve full enforcement.
+      }
+    }
     if (!existsSync(options.specsDir)) return { kind: 'pass' }
     // During the .feature.md -> .feature migration a spec is one extension
     // or the other; the same stem in both forms double-counts scenarios and
