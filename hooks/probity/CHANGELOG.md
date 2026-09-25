@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.2
+
+Fixes for Claude Code sub-agents and git worktrees.
+
+- **Sub-agent work is invisible to Probity (#40).** When a Claude Code
+  sub-agent calls a tool, the hook payload carries the parent session's
+  `transcript_path` plus an `agent_id`. The sub-agent's own tool calls
+  are recorded only in `<session>/subagents/agent-<agent_id>.jsonl`, so
+  every history-based rule judged sub-agent work against the parent's
+  history. The characterization marker could never be released, and the
+  TDD judge never saw a sub-agent's red runs. New bin `probity-claude`
+  points `transcript_path` at the sub-agent's transcript, then runs
+  Probity unchanged. **Action needed:** change the PreToolUse hook
+  command to `cd "$CLAUDE_PROJECT_DIR" && ./node_modules/.bin/probity-claude`.
+- **Large test output hid the proof (#40).** Claude Code keeps only a
+  2KB preview of a large tool output in the transcript and saves the
+  rest under `tool-results/`. The characterization removal check now
+  reads that saved output, so a long Gradle run's `FAILED` line counts.
+- **Worktrees blocked each other's commits (#39).** The mutation-probe
+  and characterization commit gates scanned every file under the root,
+  including linked worktrees Claude Code creates at
+  `.claude/worktrees/agent-<id>/`. They now skip any directory holding
+  a `.git` file (a linked worktree or submodule), and a commit made in
+  a worktree nested inside the root is checked against that worktree's
+  markers only. The target tree is read from `git -C <dir> commit` or
+  `cd <dir> && git commit`, else the hook's working directory.
+- Both gates now also trigger on `git -C <dir> commit` and
+  `git -c key=value commit`; before, only the literal `git commit`
+  was gated.
+
 ## 0.4.1
 
 More preset options, so a project with its own conventions can call a

@@ -136,6 +136,8 @@ Probity lives in the **consuming project** (the codebase you're building), not i
    /plugin install probity@probity
    ```
 
+   The plugin runs Probity's bare `probity` bin, which cannot see work done inside Claude Code sub-agents (see `probity-claude` below). If agents in this project use sub-agents, prefer the manual hook.
+
    Or manually in `.claude/settings.json`:
 
    ```json
@@ -145,13 +147,15 @@ Probity lives in the **consuming project** (the codebase you're building), not i
          {
            "matcher": "Bash|Write|Edit|NotebookEdit",
            "hooks": [
-             { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity --agent claude-code" }
+             { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity-claude" }
            ]
          }
        ]
      }
    }
    ```
+
+   Use the package's `probity-claude` bin rather than Probity's own `probity` bin. When a Claude Code sub-agent (the Agent tool, including `isolation: "worktree"` agents) calls a tool, the hook payload carries the *parent* session's `transcript_path` plus an `agent_id`, and the sub-agent's own tool calls are recorded only in `<session>/subagents/agent-<agent_id>.jsonl`. The bare bin therefore judges sub-agent writes against the parent's history: the TDD judge never sees the sub-agent's red runs, and a characterization marker can never be released. `probity-claude` points `transcript_path` at the sub-agent's transcript when there is one, then runs Probity unchanged (it adds `--agent claude-code` itself).
 
    Anchor the hook with `cd "$CLAUDE_PROJECT_DIR" &&`, never a bare relative `./node_modules/...`: hooks are not guaranteed to run with the repo root as their working directory (a session launched from a parent directory, a worktree, a `cd` elsewhere). A bare relative path then fails to resolve and the hook errors **non-blocking** — every rule silently stops enforcing while work continues. The `cd` also matters beyond binary resolution: Probity discovers `probity.config.ts` by searching upward from the working directory, so a hook run from the wrong cwd finds no config even with an absolute bin path. **Open Claude Code on the repository itself.** The hook lives in the repository's `.claude/settings.json`, and Probity finds `probity.config.ts` by searching upward from `$CLAUDE_PROJECT_DIR` — so a session opened on a parent folder that holds several repositories loads neither, and enforces nothing without any error. The agent-skills plugin's SessionStart notice (`hooks/probity-notice.sh`, the only hook the plugin registers) warns when that is the situation, and prints nothing otherwise: a `probity.config.*` in a repository one or two levels below the project, but none at its root. Prefer the direct bin path over `npx @nizos/probity`: the hook runs on **every** matched tool call, and npx's resolution overhead is ~0.6-1.6s per call vs ~0.2s for the bin (measured on a warm cache). A truly resident validator process would cut the remaining startup too, but that's engine work — worth an upstream issue, not something the templates can provide.
 

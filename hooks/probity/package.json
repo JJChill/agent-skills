@@ -1,6 +1,6 @@
 {
   "name": "@jjchill/probity-rules",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Versioned Probity rule presets and CLI tooling for the agent-skills catalog (test-driven-development, ports-and-adapters, acceptance-testing, spec-test parity, ubiquitous-language) — see hooks/PROBITY.md.",
   "license": "MIT",
   "repository": {
@@ -17,11 +17,13 @@
   },
   "bin": {
     "probity-scope-report": "dist/scripts/scope-report.js",
-    "probity-spec-parity": "scripts/spec-parity.mjs"
+    "probity-spec-parity": "scripts/spec-parity.mjs",
+    "probity-claude": "scripts/probity-claude.mjs"
   },
   "files": [
     "dist",
     "scripts/spec-parity.mjs",
+    "scripts/probity-claude.mjs",
     "kiro/kiro-agent.template.json",
     "kiro/kiro-transcript-to-claude.py",
     "kiro/probity-kiro-translate.py",

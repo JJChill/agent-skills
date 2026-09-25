@@ -210,3 +210,36 @@ test('a judge infrastructure failure on a test write gets no characterization no
   assert.match(result.reason ?? '', /NOT judged/)
   assert.doesNotMatch(result.reason ?? '', /Do not break production to manufacture a red/)
 })
+
+test('marker removal accepts a KMP jvmTest failure line and a persisted full output', async (t) => {
+  const rule = tddRule(kmpRuleEntries('/repo'), 'KMP')
+  const testPath = '/repo/sdk/core/src/commonTest/kotlin/PathIdTest.kt'
+  const kmpLine: SessionEvent = {
+    kind: 'command',
+    command: './gradlew :sdk:core:jvmTest',
+    output: 'PathIdTest[jvm] > rejects ids containing slashes[jvm] FAILED\n    AssertionError',
+  }
+  const direct = await rule(
+    { kind: 'write', path: testPath, content: RESOLVED_TEST },
+    context(MARKED_TEST, [kmpLine]).ctx,
+  )
+  assert.equal(direct.kind, 'pass', direct.reason)
+
+  // Claude Code keeps a 2KB preview in the transcript; the FAILED line
+  // is only in the saved full output.
+  const dir = mkdtempSync(join(tmpdir(), 'probity-persisted-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  mkdirSync(join(dir, 'tool-results'))
+  const saved = join(dir, 'tool-results', 'b1x2.txt')
+  writeFileSync(saved, `${'> Task :sdk:core:compileKotlinJvm\n'.repeat(200)}${kmpLine.output}\n`)
+  const preview: SessionEvent = {
+    kind: 'command',
+    command: './gradlew :sdk:core:jvmTest',
+    output: `<persisted-output>\nOutput too large (31.2KB). Full output saved to: ${saved}\n\nPreview (first 2KB):\n> Task :sdk:core:compileKotlinJvm\n...\n</persisted-output>`,
+  }
+  const viaSaved = await rule(
+    { kind: 'write', path: testPath, content: RESOLVED_TEST },
+    context(MARKED_TEST, [preview]).ctx,
+  )
+  assert.equal(viaSaved.kind, 'pass', viaSaved.reason)
+})
