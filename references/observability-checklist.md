@@ -45,6 +45,7 @@ Telemetry without a question is noise. Before instrumenting anything:
 - [ ] One wide, context-rich event per request per service hop (flags, tier, retries, durations, decisions) — high cardinality welcome in events; mid-flight lines reserved for errors and degradations
 - [ ] Every log line carries a correlation/request ID, generated or accepted at the system boundary
 - [ ] Correlation ID is propagated on every outbound call and async boundary (HTTP headers, queue metadata)
+- [ ] Any log stream written by more than one entry point (scheduler, replay endpoint, manual run) carries an entry-point field, set where the run starts and propagated alongside the correlation ID
 - [ ] Log levels are consistent: `error` = invariant broken, someone may act; `warn` = degraded but handled; `info` = significant business event; `debug` = off in production
 - [ ] No secrets, tokens, passwords, or unredacted PII in any log line (hard rule from `security-and-hardening`)
 - [ ] Fields are allowlisted — no whole request/response bodies, no auth headers

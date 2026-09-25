@@ -179,6 +179,8 @@ See [docs/opencode-setup.md](docs/opencode-setup.md).
 
 Use agent definitions from `agents/` as Copilot personas and skill content in `.github/copilot-instructions.md`. See [docs/copilot-setup.md](docs/copilot-setup.md).
 
+Using the standalone `copilot` CLI? Install it as a plugin — see [docs/copilot-cli-setup.md](docs/copilot-cli-setup.md).
+
 </details>
 
 <details>
@@ -486,51 +488,22 @@ Every skill follows a consistent anatomy:
 
 ## Project Structure
 
-```
-agent-skills/
-├── skills/                            # 31 skills (30 lifecycle + 1 meta)
-│   ├── interview-me/                  #   Define
-│   ├── idea-refine/                   #   Define
-│   ├── event-storming/                #   Define
-│   ├── user-stories/                  #   Define
-│   ├── story-mapping/                 #   Define
-│   ├── specification-by-example/      #   Define
-│   ├── spec-driven-development/       #   Define
-│   ├── ubiquitous-language/           #   Define
-│   ├── planning-and-task-breakdown/   #   Plan
-│   ├── incremental-implementation/    #   Build
-│   ├── context-engineering/           #   Build
-│   ├── source-driven-development/     #   Build
-│   ├── doubt-driven-development/      #   Build
-│   ├── frontend-ui-engineering/       #   Build
-│   ├── ios-development/               #   Build / Verify
-│   ├── test-driven-development/       #   Build
-│   ├── api-and-interface-design/      #   Build
-│   ├── ports-and-adapters/            #   Build
-│   ├── acceptance-testing/            #   Verify
-│   ├── browser-testing-with-devtools/ #   Verify
-│   ├── debugging-and-error-recovery/  #   Verify
-│   ├── code-review-and-quality/       #   Review
-│   ├── code-simplification/           #   Review
-│   ├── security-and-hardening/        #   Review
-│   ├── performance-optimization/      #   Review
-│   ├── git-workflow-and-versioning/   #   Ship
-│   ├── ci-cd-and-automation/          #   Ship
-│   ├── deprecation-and-migration/     #   Ship
-│   ├── documentation-and-adrs/        #   Ship
-│   ├── observability-and-instrumentation/ # Ship
-│   ├── shipping-and-launch/           #   Ship
-│   └── using-agent-skills/            #   Meta: how to use this pack
-├── agents/                            # 6 specialist personas
-├── references/                        # 7 supplementary checklists
-├── hooks/                             # Session lifecycle hooks
-│   └── probity/                       #   Probity enforcement, published as @jjchill/probity-rules: presets, rules, bins, Kiro shim (Part 2 of Quick Start)
-├── .claude/commands/                  # 9 slash commands (Claude Code)
-├── .gemini/commands/                  # 9 slash commands (Gemini CLI)
-├── commands/                          # 9 slash commands (Antigravity CLI)
-├── plugin.json                        # Antigravity plugin manifest
-└── docs/                              # Setup guides per tool
-```
+The portable core stays in shared directories. Host-specific paths are native discovery conventions, not branding aliases; renaming or merging them would break the tools that scan those exact locations.
+
+| Layer / consumer | Repository paths | Purpose |
+|---|---|---|
+| Shared workflow core | `skills/` (32 skills) | Portable `SKILL.md` workflows used by every integration |
+| Shared review material | `agents/` (7 personas), `references/` (7 checklists) | Specialist reviewers and pack-level checklists carried by whole-repo installs |
+| Claude Code adapter | `.claude/commands/` (9 commands), `.claude-plugin/`, `hooks/` | Slash-command wrappers, marketplace metadata, and lifecycle hooks |
+| Probity enforcement | `hooks/probity/`, `hooks/PROBITY.md` | Rule presets, rules, CLI bins, and Kiro shim, published as `@jjchill/probity-rules` (Part 2 of Quick Start) |
+| Gemini CLI adapter | `.gemini/commands/` (9 commands) | Gemini-native TOML command wrappers |
+| Antigravity CLI adapter | `commands/` (9 commands), `plugin.json` | Legacy TOML wrappers and the root plugin manifest; see the [known wrapper limitation](docs/antigravity-setup.md#lifecycle-workflows-and-command-compatibility) |
+| Codex adapter | `.codex-plugin/`, `.agents/plugins/` | Codex plugin metadata and marketplace registration; Codex consumes `skills/` directly |
+| GitHub Copilot CLI adapter | `plugin.json` | Root plugin metadata; Copilot CLI discovers `skills/` by convention and does not register the lifecycle wrappers |
+| Contributor tooling | `scripts/` (12 scripts), `evals/` (32 case files), `.github/workflows/` | Validation, routing evals, and CI |
+| Documentation | `docs/` | Universal guidance and per-tool setup guides |
+
+Tools without a checked-in adapter directory install or copy the shared `skills/` core into their own native location. The [Quick Start](#quick-start) links the setup guide for each supported host.
 
 ---
 
