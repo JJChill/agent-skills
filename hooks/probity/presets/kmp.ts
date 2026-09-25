@@ -36,13 +36,16 @@ import {
 } from '../rules/spec-test-parity.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 import {
+  enforceCharacterizationResolution,
   enforceProbeReversion,
   forbidNewAmbientEffects,
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
+  KOTLIN_TEST_SOURCE_PATTERN,
   MOCKING_LIBRARY_IMPORTS,
   requireGreenTestRun,
+  withCharacterizationTest,
   withKotlinFastPath,
   withMutationProbe,
   withTelemetryFastPath,
@@ -180,7 +183,12 @@ export function kmpRuleEntries(
     // lets a write marked `// probity: mutation-probe` (a deliberate
     // break proving a retrofitted test bites) through without a
     // red-before-green demand — enforceProbeReversion below blocks
-    // commits until the probe is reverted.
+    // commits until the probe is reverted. The characterization
+    // wrapper sanctions a test for behavior production already has
+    // (born green, so no red can precede it): a test-source write
+    // marked `// probity: characterization` passes, and
+    // enforceCharacterizationResolution below blocks commits until the
+    // marker comes off through a recorded red under a mutation probe.
     {
       files: [
         '**/src/*Main/kotlin/**',
@@ -193,8 +201,11 @@ export function kmpRuleEntries(
       // adapter-observability rule must not be judged as unasserted
       // behavior by the TDD gate.
       rules: [
-        withMutationProbe(
-          withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
+        withCharacterizationTest(
+          withMutationProbe(
+            withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
+          ),
+          { filePattern: KOTLIN_TEST_SOURCE_PATTERN },
         ),
       ],
     },
@@ -300,6 +311,12 @@ export function kmpRuleEntries(
     // while a `probity: mutation-probe` marker is still on disk —
     // reverting the mutation removes the marker with it.
     enforceProbeReversion({ roots: [root] }),
+
+    // The commit half of the characterization round-trip: no commit
+    // while a `probity: characterization` marker is still on disk —
+    // the marker only comes off once the transcript records the
+    // marked test failing under a mutation probe.
+    enforceCharacterizationResolution({ roots: [root] }),
 
     // Accepts test/test...Test, :desktop:jvmTest, allTests,
     // build, and check. The latest matching run must carry BUILD

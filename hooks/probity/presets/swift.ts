@@ -49,6 +49,7 @@ import {
   XCUITEST_MECHANICS,
 } from '../rules/swift.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
+import { withJudgeFailureDiagnostics } from '../rules/gates.js'
 
 // Acceptance test files live under AcceptanceTests/ (capital A) — the
 // parity scanners' default pattern expects a lowercase `acceptance/`
@@ -57,6 +58,11 @@ const ACCEPTANCE_TEST_FILES = /AcceptanceTests[/\\]/
 
 // Swift telemetry lines the fast-path recognizes as complete
 // single-line instrumentation (SudoLogging-style logger calls).
+const SWIFT_DETERMINISTIC_PATHS =
+  'Writes that never call the judge still go through: telemetry-only ' +
+  'lines, writes marked `// probity: mutation-probe`, and AcceptanceTests ' +
+  'writes marked `// probity: characterization`.'
+
 const SWIFT_TELEMETRY_LINES = [
   /^[\w.]*logger\.(?:event|info|debug|error|warning)\(.*\)$/i,
 ]
@@ -203,10 +209,15 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
         withInverseScenarioGuidance(
           withCharacterizationTest(
             withMutationProbe(
-              withTelemetryFastPath(enforceTdd(), {
-                patterns: SWIFT_TELEMETRY_LINES,
-                filePattern: /\.swift$/,
-              }),
+              withTelemetryFastPath(
+                withJudgeFailureDiagnostics(enforceTdd(), {
+                  deterministicPaths: SWIFT_DETERMINISTIC_PATHS,
+                }),
+                {
+                  patterns: SWIFT_TELEMETRY_LINES,
+                  filePattern: /\.swift$/,
+                },
+              ),
             ),
             { filePattern: /AcceptanceTests[/\\]/ },
           ),

@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.0
+
+Kotlin and KMP presets now wire the characterization round-trip the
+Swift preset already had (issue #34). A test that pins behavior
+production already has — for example a branch an independent mutation
+review found untested — is born green, so no red can precede it, and
+the TDD judge could block it with no honest way forward. Now:
+
+- a test-source write (`src/test`, or any `src/<name>Test` source set)
+  carrying `// probity: characterization` above the test passes without
+  the judge; the marker does nothing in production source;
+- the marker comes off only when the session transcript records that
+  test failing (typically under a `// probity: mutation-probe`), and the
+  new `enforceCharacterizationResolution` commit gate blocks `git commit`
+  while any marker is on disk;
+- `withCharacterizationTest` (all presets that use it) appends a note
+  naming the marker when it denies an unmarked test-layer write for
+  lacking a red, and resolves backticked Kotlin test names
+  (``fun `rejects blank ids`()``) in full for the removal proof.
+
+**Behavior change:** Kotlin/KMP commits are now blocked while a
+`probity: characterization` marker is on disk. No existing project
+carries the marker unless it opted in.
+
+The TDD judge in every preset reports a judge that returned no verdict
+as an infrastructure failure (issue #32). A spend-limit, quota, or auth
+notice used to surface as `could not parse verdict from validator
+output: …`, which reads as a rejection of the change. The write is
+still blocked (fail closed), but the deny text now says it was not
+judged, whether the provider reported itself unavailable, and which
+writes still pass deterministically. The wrapper is exported as
+`withJudgeFailureDiagnostics` from `rules/gates.ts`.
+
+`probity-scope-report` no longer flags test files under a core-purity
+rule as "adapter/DI/UI-looking" (issue #26). A test-wide
+`forbidContentPattern` (such as a no-mocking-library screen over every
+test source set) legitimately covers adapter tests; the old warning
+suggested excluding them, which would weaken the check. Production
+adapter paths are still flagged.
+
 ## 0.2.3
 
 `enforceSpecTestParity` now inspects the pending Git commit before scanning

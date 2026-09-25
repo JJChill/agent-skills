@@ -368,3 +368,83 @@ export function surfaceRemovedStringUsage(options: {
     }
   }
 }
+
+// Reasons Probity's verdict plumbing produces when the AI judge never
+// returned a verdict at all — the validator's raw output was not JSON,
+// had the wrong shape, or the SDK stream produced no result. None of
+// these is a code-policy judgment of the pending write.
+const JUDGE_FAILURE_REASON =
+  /^(?:could not parse verdict from validator output|validator returned unexpected shape|expected string result from validator|no result message received|enforceTdd: no AI agent available)/
+
+// Provider messages that mean "no service" rather than "bad output":
+// spend/credit limits, quota, rate limits, and auth failures.
+const PROVIDER_UNAVAILABLE =
+  /spend limit|usage[- ]credits|credit balance|out of credits|quota|rate[- ]limit|too many requests|overloaded|unauthori[sz]ed|authentication|invalid api key|\b(?:401|403|429|529)\b/i
+
+const JUDGE_OUTPUT_EXCERPT = 300
+
+/**
+ * Wraps an AI-validated rule so that a judge that returned no verdict
+ * — a billing/spend-limit notice, an auth error, empty or non-JSON
+ * output — is reported as an infrastructure failure instead of reading
+ * as a policy verdict on the write.
+ *
+ * Why: Probity fails closed when it cannot parse the judge's output,
+ * which is correct, but the deny text ("could not parse verdict from
+ * validator output: You've hit your org's monthly spend limit…") looks
+ * like a rejection of the change. Agents respond by rewording or
+ * splitting the write and retrying, which cannot help. The rewritten
+ * reason names the judge, says the write itself was not judged, and
+ * points at the fix (restore the provider) and at the deterministic
+ * paths that never call the judge.
+ *
+ * The verdict is unchanged — the write is still blocked. Only the
+ * reason text of a judge-failure violation is rewritten; genuine
+ * verdicts and passes pass through untouched. The wrapper keeps the
+ * wrapped rule's name, so traces and block reports still identify the
+ * rule that failed.
+ *
+ * @param rule — the AI-validated rule to wrap.
+ * @param options.deterministicPaths — sentence listing the writes this
+ *   rule stack passes without calling the judge (e.g. single-test
+ *   fast paths), appended to the deny text so an agent can keep
+ *   working while the provider is down.
+ */
+export function withJudgeFailureDiagnostics(
+  rule: Rule,
+  options: { deterministicPaths?: string } = {},
+): Rule {
+  const wrapped = async function judgeFailureDiagnostics(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    const result = await rule(action, ctx)
+    if (result.kind !== 'violation') return result
+    const reason = result.reason ?? ''
+    if (!JUDGE_FAILURE_REASON.test(reason)) return result
+    const output = reason.replace(JUDGE_FAILURE_REASON, '').replace(/^\s*:/, '').trim()
+    const excerpt =
+      output.length > JUDGE_OUTPUT_EXCERPT
+        ? `${output.slice(0, JUDGE_OUTPUT_EXCERPT)}…`
+        : output
+    const lines = [
+      `Probity's AI judge (${rule.name || 'rule'}) returned no verdict, so ` +
+        'this write was NOT judged — this is an infrastructure failure, not ' +
+        'a policy decision about your change. The write stays blocked ' +
+        '(fail closed). Rewording, splitting, or retrying the same write ' +
+        'will not help until the judge is back.',
+      PROVIDER_UNAVAILABLE.test(output)
+        ? 'The judge provider reports it is unavailable (spend limit, ' +
+          'quota, rate limit, or authentication). Restore service — e.g. ' +
+          'raise the limit (/usage-credits) or fix the credentials Probity ' +
+          'runs with — then retry.'
+        : 'Check the judge provider (auth, network, model availability), ' +
+          'then retry.',
+    ]
+    if (options.deterministicPaths) lines.push(options.deterministicPaths)
+    lines.push('Do not bypass the hook. Judge output: ' + (excerpt || '(empty)'))
+    return { ...result, reason: lines.join('\n\n') }
+  }
+  Object.defineProperty(wrapped, 'name', { value: rule.name || 'rule' })
+  return wrapped
+}

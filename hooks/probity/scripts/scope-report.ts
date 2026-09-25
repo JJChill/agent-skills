@@ -12,7 +12,7 @@
  * notices. This report surfaces both at setup time:
  *
  *   - DEAD SCOPE: a block whose globs match zero files
- *   - core-purity rules claiming adapter/DI/UI-looking paths
+ *   - core-purity rules claiming adapter/DI/UI-looking production paths
  *   - the acceptance-language rule claiming Robot/driver/DSL files
  *
  * Globs are resolved exactly as Probity resolves them — anchoring and
@@ -62,6 +62,14 @@ const SAMPLE_LIMIT = 6
 // review, not proof of misconfiguration.
 const CORE_RULES = /PortsBoundary|forbidNewAmbientEffects|forbidContentPattern/
 const ADAPTERISH_SEGMENT = /^(adapter|adapters|infra|infrastructure|ui|di)$/
+// Core purity is about production code. Test files are skipped by that
+// check: a test-wide screen (e.g. forbidContentPattern banning mocking
+// libraries) is meant to cover adapter tests too, and "exclude them"
+// would weaken it. Test source sets: src/test, src/<name>Test
+// (commonTest, androidTest, …), Tests/__tests__ dirs, Xcode *Tests
+// targets, and *Test/*Spec/*.test/*.spec files.
+const TEST_DIR_SEGMENT = /^(?:tests?|__tests__|specs?|[A-Za-z0-9]+Tests?)$/
+const TEST_FILE = /(?:Tests?|Spec)\.\w+$|\.(?:test|spec)\.\w+$/
 const LANGUAGE_RULES = /AcceptanceLanguage/
 const DRIVERISH_FILE = /(Robot|Driver|Dsl)\.\w+$|[/\\](drivers?|dsl)[/\\]/
 
@@ -162,9 +170,13 @@ for (const [index, entry] of config.rules.entries()) {
     )
   }
   if (CORE_RULES.test(ruleNames(entry))) {
-    const suspicious = matched.filter((file) =>
-      relative(root, file).split(/[/\\]/).some((segment) => ADAPTERISH_SEGMENT.test(segment)),
-    )
+    const suspicious = matched.filter((file) => {
+      const segments = relative(root, file).split(/[/\\]/)
+      const isTest =
+        TEST_FILE.test(segments[segments.length - 1]!) ||
+        segments.slice(0, -1).some((segment) => TEST_DIR_SEGMENT.test(segment))
+      return !isTest && segments.some((segment) => ADAPTERISH_SEGMENT.test(segment))
+    })
     if (suspicious.length > 0) {
       warnings.push(
         `${label} claims ${suspicious.length} adapter/DI/UI-looking file(s), e.g. ` +
