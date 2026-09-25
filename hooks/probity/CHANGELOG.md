@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0
+
+Preset options, so projects stop forking rule lists:
+
+- **KMP preset options (#19).** `kmpRuleEntries(root, options)` takes a
+  `KmpPresetOptions` object: `specsDir`, `specGlobs`, `glossaryPath`,
+  `coreGlobs`, `acceptanceTestGlobs`, `testRoots`, `testFilePattern`,
+  `testDeclarationPattern`, `baselinePath`, `driverScopes`,
+  `defaultScopes`. Each defaults to the previous hardcoded value, and
+  the old `kmpRuleEntries(root, { driverScopes, defaultScopes })` call
+  still works.
+- **Excluding spikes and build output (#21).** The JS, Kotlin, and KMP
+  presets take `excludeGlobs`, default `['spikes/**', '**/build/**']`,
+  appended as `!` negations to every files-scoped block. Pass `[]` to
+  turn it off. **Behavior change:** writes under `spikes/` or a `build/`
+  directory are no longer checked by these presets' rules.
+- **JS spec-to-test traceability (#18).** Setting `specsDir` on
+  `jsRuleEntries` wires `requireSpecBackedAcceptanceTest`,
+  `surfaceScenarioLinkBreakage`, `enforceSpecTestParity`, and (with
+  `glossaryPath`) `surfaceGlossaryTermBreakage`, as the KMP preset
+  does. Off by default.
+- **TypeScript test declarations (#12).** New `JS_TEST_DECLARATION`
+  matches vitest/jest/mocha `it(`/`test(` and their `.only`/`.skip`/
+  `.each(...)(` variants; the JS preset uses it by default.
+- New helper `withExcludeGlobs(entries, globs)` in `rules/scoping.ts`.
+
+`probity-scope-report --allow-empty <glob>` (repeatable) marks a block
+as expected to be empty, so a greenfield repository can run `--strict`
+in CI from its first commit (#20). A flag that matches no block's glob
+is a warning; a flag whose block now has files is noted.
+
 ## 0.3.0
 
 Kotlin and KMP presets now wire the characterization round-trip the
