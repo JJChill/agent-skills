@@ -94,6 +94,19 @@ export type KmpPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Files the acceptance Language Test applies to: the spec layer
+   *  and acceptance test cases, never drivers or DSL classes (default:
+   *  `specGlobs` plus `**\/acceptance/**` minus `*Robot.kt`, `*Dsl.kt`,
+   *  and `*Driver.kt`). */
+  acceptanceLanguageGlobs?: Globs
+  /** Names your canonical ambient-effect port(s) in the core
+   *  clock/randomness/env screen's deny text (default: function-typed
+   *  providers such as `nowEpochMillis: () -> Long`). */
+  seamHint?: string
+  /** Names your telemetry convention for the adapter-observability
+   *  judge — how a boundary event is recorded in this codebase
+   *  (default: a :foundation `Logger.event` or port-tap convention). */
+  conventionHint?: string
 }
 
 /**
@@ -171,6 +184,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
         }),
         forbidNewAmbientEffects({
           seamHint:
+            options.seamHint ??
             'This codebase injects function-typed providers (e.g. ' +
             'nowEpochMillis: () -> Long) with real defaults supplied ' +
             'only in platform adapters or DI modules',
@@ -289,6 +303,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
         withTelemetryFastPath(
           enforceAdapterObservability({
             conventionHint:
+              options.conventionHint ??
               'This codebase uses structured Logger.event(tag, event, ' +
               'level, fields) from :foundation (one greppable line: ' +
               'event=<name> k=v), and/or a recording port-tap decorator ' +
@@ -308,7 +323,13 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // and stay INCLUDED by design: they must read as pure domain
     // language.
     {
-      files: [...specGlobs, '**/acceptance/**', '!**/*Robot.kt', '!**/*Dsl.kt', '!**/*Driver.kt'],
+      files: options.acceptanceLanguageGlobs ?? [
+        ...specGlobs,
+        '**/acceptance/**',
+        '!**/*Robot.kt',
+        '!**/*Dsl.kt',
+        '!**/*Driver.kt',
+      ],
       // requireGlossaryEntry: true is the strict "glossary
       // conversation happens first" mode — turn it on once the
       // glossary has real coverage, not on day one. The fast-path

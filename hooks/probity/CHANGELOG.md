@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.1
+
+More preset options, so a project with its own conventions can call a
+preset instead of copying its rules:
+
+- KMP preset: `seamHint` (the core ambient-effect screen's pointer to
+  your clock/randomness port), `conventionHint` (your telemetry
+  convention, given to the adapter-observability judge), and
+  `acceptanceLanguageGlobs` (which files get the acceptance Language
+  Test, e.g. `*Spec.kt` only when driver/DSL files use other names).
+- Kotlin preset: `conventionHint`.
+
+Every default is unchanged.
+
 ## 0.4.0
 
 Preset options, so projects stop forking rule lists:
