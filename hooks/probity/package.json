@@ -44,7 +44,7 @@
     "picomatch": "^4.0.4"
   },
   "devDependencies": {
-    "@nizos/probity": "^1.10.0",
+    "@nizos/probity": "^1.10.1",
     "@types/node": "^22.0.0",
     "@types/picomatch": "^3.0.2",
     "tsx": "^4.19.0",
