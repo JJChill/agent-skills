@@ -482,6 +482,21 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
  */
 const DEFAULT_TEST_DECLARATION = /@Test\b|\bfunc\s+test\w*\s*\(/g
 
+/**
+ * Matches a vitest/jest/mocha test-case declaration: `it(`/`test(`
+ * and their `.only`/`.skip`/`.todo`/`.failing`/`.concurrent`
+ * modifiers, plus `.each(...)( `. A negative lookbehind requires a
+ * non-identifier character (or start of input) before `it`/`test`,
+ * so identifiers merely ending in those letters — `split(`,
+ * `submit(`, `logger.audit(`, `await wait(` — never match, and a
+ * required `(` (directly, or after a modifier) excludes `describe()`
+ * and unrelated identifiers like `items(...)`. Exported for use as
+ * `requireSpecBackedAcceptanceTest`'s `testDeclarationPattern` in the
+ * JS/TS preset (see `presets/js.ts`).
+ */
+export const JS_TEST_DECLARATION =
+  /(?<![\w$])(?:it|test)(?:\.(?:only|skip|todo|failing|concurrent)\b)?(?:\.each\s*\([^)]*\))?\s*\(/g
+
 function countTests(content: string, pattern: RegExp): number {
   return [...content.matchAll(pattern)].length
 }
@@ -518,6 +533,10 @@ function countTests(content: string, pattern: RegExp): number {
  *   enforcement, not a free pass).
  * @param options.testDeclarationPattern — what counts as a test-case
  *   declaration (default: Kotlin/Java `@Test` or Swift `func test…`).
+ *   For a JS/TS project pass the exported {@link JS_TEST_DECLARATION}
+ *   (vitest/jest/mocha `it(`/`test(` and their `.only`/`.skip`/
+ *   `.each(...)( `/`.concurrent` variants) — the JS preset does this
+ *   by default once its `specsDir` option is set (see `presets/js.ts`).
  */
 export function requireSpecBackedAcceptanceTest(options: {
   specsDir: string
