@@ -109,3 +109,12 @@ test('Kotlin TDD prompt retains a nearby red beyond the upstream ten-event defau
     assert.doesNotMatch(prompt, /FileStoreTest > loads value FAILED/, preset)
   })
 })
+
+test('Kotlin TDD judge lets a new red test in without a prior run of it', async () => {
+  await forEachCapturedPrompt([], (prompt, preset) => {
+    assert.match(prompt, /Adding a failing test is the red step itself/, preset)
+    assert.match(prompt, /passes without any prior run of that test/, preset)
+    assert.match(prompt, /applies only to the production write that follows it/, preset)
+    assert.match(prompt, /uncommitted production changes/, preset)
+  })
+})

@@ -261,8 +261,17 @@ function addedTestNode(
 
 type Insertion = { text: string; startByte: number; endByte: number }
 
-function singleInsertion(before: string, after: string): Insertion | null {
-  if (after.length <= before.length) return null
+/**
+ * Every placement of the one contiguous insertion that turns `before`
+ * into `after`, from the greedy (rightmost) placement leftwards. The
+ * placement is ambiguous whenever the inserted text ends like the text
+ * in front of it — inserting a test ABOVE an existing test shares the
+ * `@Test\n  fun ` header, so the greedy prefix swallows that header and
+ * the span starts mid-name (issue #43). Each placement yields the same
+ * file; callers pick the one that holds the added test whole.
+ */
+function insertionPlacements(before: string, after: string): Insertion[] {
+  if (after.length <= before.length) return []
   let prefix = 0
   while (prefix < before.length && before[prefix] === after[prefix]) {
     prefix += 1
@@ -276,14 +285,21 @@ function singleInsertion(before: string, after: string): Insertion | null {
     beforeSuffix -= 1
     afterSuffix -= 1
   }
-  if (beforeSuffix !== prefix) return null
-  const text = after.slice(prefix, afterSuffix)
-  const startByte = Buffer.byteLength(after.slice(0, prefix), 'utf8')
-  return {
-    text,
-    startByte,
-    endByte: startByte + Buffer.byteLength(text, 'utf8'),
+  if (beforeSuffix !== prefix) return []
+  const placements: Insertion[] = []
+  let start = prefix
+  let end = afterSuffix
+  for (;;) {
+    const text = after.slice(start, end)
+    const startByte = Buffer.byteLength(after.slice(0, start), 'utf8')
+    placements.push({ text, startByte, endByte: startByte + Buffer.byteLength(text, 'utf8') })
+    // Slide left while the character leaving the span's end equals the
+    // one entering at its start: the resulting file is unchanged.
+    if (start === 0 || after[start - 1] !== after[end - 1]) break
+    start -= 1
+    end -= 1
   }
+  return placements
 }
 
 function isRunnableTestNode(node: AstGrepNode): boolean {
@@ -320,14 +336,13 @@ function identifiersIn(tests: string[]): Set<string> {
 
 function safeExistingFileInsertion(
   napi: AstGrepModule,
-  before: string,
   after: string,
+  insertion: Insertion,
   addedTest: AstGrepNode,
   beforeTests: string[],
   patterns: unknown[],
 ): boolean {
-  const insertion = singleInsertion(before, after)
-  if (!insertion || !nodeIsInside(addedTest, insertion)) return false
+  if (!nodeIsInside(addedTest, insertion)) return false
   const addedText = addedTest.text()
   const addedAt = insertion.text.indexOf(addedText)
   if (addedAt !== -1) {
@@ -624,21 +639,31 @@ export function withKotlinFastPath(
       )
     }
     const beforeText = before.kind === 'present' ? before.content : ''
-    const insertion =
+    const placements =
       beforeText.length === 0
-        ? {
-            text: action.content,
-            startByte: 0,
-            endByte: Buffer.byteLength(action.content, 'utf8'),
-          }
-        : singleInsertion(beforeText, action.content)
-    if (!insertion) return rule(action, ctx)
+        ? [
+            {
+              text: action.content,
+              startByte: 0,
+              endByte: Buffer.byteLength(action.content, 'utf8'),
+            },
+          ]
+        : insertionPlacements(beforeText, action.content)
+    if (placements.length === 0) return rule(action, ctx)
 
     let fastPath = false
     try {
       const beforeTests = kotlinTestNodes(napi, beforeText, patterns)
       const afterTestNodes = findKotlinTestNodes(napi, action.content, patterns)
-      const addedTest = addedTestNode(beforeTests, afterTestNodes, insertion)
+      let insertion = placements[0]!
+      let addedTest: AstGrepNode | null = null
+      for (const placement of placements) {
+        addedTest = addedTestNode(beforeTests, afterTestNodes, placement)
+        if (addedTest) {
+          insertion = placement
+          break
+        }
+      }
       if (addedTest) {
         const unsafeInsertion =
           introducesDisablingControl(beforeText, action.content) ||
@@ -662,8 +687,8 @@ export function withKotlinFastPath(
             ? safeNewTestFile(napi, action.content, addedTest)
             : safeExistingFileInsertion(
                 napi,
-                beforeText,
                 action.content,
+                insertion,
                 addedTest,
                 beforeTests,
                 patterns,
