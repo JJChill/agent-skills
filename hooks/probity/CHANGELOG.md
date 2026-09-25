@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.3
+
+The Kotlin TDD judge no longer blocks adding a new red test (#43).
+
+- **Fast path missed tests inserted above another test.** The Kotlin
+  fast path passes a write that adds exactly one `@Test` without an AI
+  call. It located the inserted text with a greedy common prefix, so a
+  test inserted ABOVE an existing test (an Edit anchored on the next
+  test's header) shared the `@Test` / `fun` header text, the inserted
+  span started mid-header, and the write went to the judge. The fast
+  path now considers every equivalent placement of the insertion and
+  uses the one holding the new test whole. The file is the same in
+  every placement, so the existing safety checks are unchanged.
+- **The judge demanded a failing run before a test could exist.** When
+  a new test did reach the judge, it could apply "must be observed
+  failing first" to the test write itself. The Kotlin judge
+  instructions now state that adding a failing test is the red step and
+  needs no prior run, whether the behavior is missing or present but
+  wrong (including uncommitted production changes); the observed-red
+  requirement applies only to the production write that follows.
+  Checked against the live judge on a replica of the reported case: the
+  0.4.2 instructions denied 3 of 3 runs, the new ones allowed 3 of 3.
+
 ## 0.4.2
 
 Fixes for Claude Code sub-agents and git worktrees.

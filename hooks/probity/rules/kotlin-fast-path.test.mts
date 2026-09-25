@@ -815,3 +815,63 @@ class NewTest {
   assert.equal(result.kind, 'violation')
   assert.equal(delegate.calls(), 1)
 })
+
+// Issue #43: an Edit anchored on the NEXT test's header inserts the new
+// test above it. The greedy prefix/suffix diff then absorbs the shared
+// "@Test\n  fun `should " text, so the inserted span starts mid-header
+// and the new test never looked fully inserted.
+const twoTests = `import kotlin.test.Test
+
+class KeyStoreTest {
+  @Test
+  fun \`should store a key\`() {
+    check(true)
+  }
+
+  @Test
+  fun \`should load a stored key\`() {
+    check(true)
+  }
+}
+`
+
+test('one test inserted above an existing test with a shared header passes', async () => {
+  const inserted = twoTests.replace(
+    '  @Test\n  fun `should load a stored key`',
+    '  @Test\n  fun `should keep keys separate by key id`() {\n    check(false)\n  }\n\n  @Test\n  fun `should load a stored key`',
+  )
+  const delegate = delegateSpy()
+  const result = await withKotlinFastPath(delegate.rule)(
+    { kind: 'write', path: 'module/src/test/kotlin/KeyStoreTest.kt', content: inserted },
+    contextWith(twoTests),
+  )
+  assert.equal(delegate.calls(), 0)
+  assert.deepEqual(result, { kind: 'pass', notes: [{ kind: 'fast-path' }] })
+})
+
+test('one test inserted as the first test of a class passes', async () => {
+  const inserted = twoTests.replace(
+    'class KeyStoreTest {\n  @Test\n  fun `should store a key`',
+    'class KeyStoreTest {\n  @Test\n  fun `should reject an empty key`() {\n    check(false)\n  }\n\n  @Test\n  fun `should store a key`',
+  )
+  const delegate = delegateSpy()
+  const result = await withKotlinFastPath(delegate.rule)(
+    { kind: 'write', path: 'module/src/test/kotlin/KeyStoreTest.kt', content: inserted },
+    contextWith(twoTests),
+  )
+  assert.equal(delegate.calls(), 0)
+  assert.deepEqual(result, { kind: 'pass', notes: [{ kind: 'fast-path' }] })
+})
+
+test('an insertion that also edits the following test still delegates', async () => {
+  const inserted = twoTests.replace(
+    '  @Test\n  fun `should load a stored key`() {\n    check(true)',
+    '  @Test\n  fun `should keep keys separate`() {\n    check(false)\n  }\n\n  @Test\n  fun `should load a stored key`() {\n    check(1 == 1)',
+  )
+  const delegate = delegateSpy()
+  await withKotlinFastPath(delegate.rule)(
+    { kind: 'write', path: 'module/src/test/kotlin/KeyStoreTest.kt', content: inserted },
+    contextWith(twoTests),
+  )
+  assert.equal(delegate.calls(), 1)
+})
