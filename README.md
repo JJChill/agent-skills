@@ -309,13 +309,15 @@ Or add it to the project's `.claude/settings.json` so every teammate and every f
       {
         "matcher": "Bash|Write|Edit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity --agent claude-code" }
+          { "type": "command", "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity-claude" }
         ]
       }
     ]
   }
 }
 ```
+
+`probity-claude` (from `@jjchill/probity-rules`) wraps Probity so work done inside Claude Code sub-agents is judged against the sub-agent's own transcript; the bare `probity` bin, which the plugin runs, only sees the parent session's. See [hooks/PROBITY.md](hooks/PROBITY.md).
 
 Keep the `cd "$CLAUDE_PROJECT_DIR" &&` anchor. Hooks are not guaranteed to run from the repo root; a bare relative path then fails **non-blocking** and every rule silently stops enforcing. Codex and Copilot CLI wiring is in [Probity's setup guide](https://github.com/nizos/probity/blob/main/docs/setup.md) (`--agent codex` / `--agent github-copilot`); Kiro is in [docs/kiro-setup.md](docs/kiro-setup.md).
 

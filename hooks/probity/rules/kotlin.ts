@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join, relative } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
@@ -1018,7 +1019,12 @@ const PROBE_SKIP_DIRS = new Set([
 
 const DEFAULT_PROBE_FILE_PATTERN = /\.(?:kt|kts|java)$/
 
-function walkFiles(dir: string, out: string[] = []): string[] {
+function walkFiles(dir: string, out: string[] = [], top = true): string[] {
+  // A directory holding a `.git` FILE is another working tree — a
+  // linked `git worktree` (Claude Code puts sub-agent worktrees at
+  // .claude/worktrees/agent-<id>/) or a submodule. Its markers belong
+  // to that tree's commits, never to this one's.
+  if (!top && isFile(join(dir, '.git'))) return out
   let entries
   try {
     entries = readdirSync(dir, { withFileTypes: true })
@@ -1027,12 +1033,92 @@ function walkFiles(dir: string, out: string[] = []): string[] {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!PROBE_SKIP_DIRS.has(entry.name)) walkFiles(join(dir, entry.name), out)
+      if (!PROBE_SKIP_DIRS.has(entry.name)) walkFiles(join(dir, entry.name), out, false)
     } else {
       out.push(join(dir, entry.name))
     }
   }
   return out
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function canonical(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return resolve(path)
+  }
+}
+
+// `git commit`, including global options before the subcommand
+// (`git -C <dir> commit`, `git -c key=value commit`).
+const GIT_COMMIT = /\bgit(?:\s+-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit\b/
+
+// The directory a `git commit` command acts in: `git -C <dir>`, else a
+// leading `cd <dir> &&`, else the hook's own working directory.
+function commitDirectory(command: string): string {
+  const unquote = (value: string) => value.replace(/^(['"])(.*)\1$/, '$2')
+  const gitDashC = command.match(/\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)[^;&|]*\bcommit\b/)
+  const cd = command.match(/(?:^|&&|;)\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)[^]*\bgit\b[^;&|]*\bcommit\b/)
+  const target = gitDashC?.[1] ?? cd?.[1]
+  if (!target) return process.cwd()
+  const dir = unquote(target)
+  return isAbsolute(dir) ? dir : resolve(process.cwd(), dir)
+}
+
+function gitToplevel(dir: string): string | null {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Files under the scanned roots that carry `marker`, as paths relative
+ * to the tree scanned. When the commit targets a git working tree
+ * nested inside a root (a linked worktree), that tree is scanned in
+ * the root's place — so each worktree is gated by its own markers
+ * only, and sibling worktrees never block each other.
+ */
+function markedFiles(
+  roots: string[],
+  command: string,
+  filePattern: RegExp,
+  marker: RegExp,
+): string[] {
+  const commitDir = commitDirectory(command)
+  const top = existsSync(commitDir) ? gitToplevel(commitDir) : null
+  return roots.flatMap((root) => {
+    let scanned = root
+    if (top) {
+      const within = relative(canonical(root), canonical(top))
+      if (within !== '' && !within.startsWith('..') && !isAbsolute(within)) {
+        scanned = top
+      }
+    }
+    return walkFiles(scanned)
+      .filter((file) => filePattern.test(file))
+      .filter((file) => {
+        try {
+          return marker.test(readFileSync(file, 'utf8'))
+        } catch {
+          return false
+        }
+      })
+      .map((file) => relative(scanned, file).split(sep).join('/'))
+  })
 }
 
 /**
@@ -1205,20 +1291,13 @@ export function enforceProbeReversion(options: {
   const filePattern = options.filePattern ?? DEFAULT_PROBE_FILE_PATTERN
   return function enforceProbeReversion(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!/git commit/.test(action.command)) return { kind: 'pass' }
-    const outstanding = options.roots
-      .flatMap((root) =>
-        walkFiles(root)
-          .filter((file) => filePattern.test(file))
-          .filter((file) => {
-            try {
-              return MUTATION_PROBE_MARKER.test(readFileSync(file, 'utf8'))
-            } catch {
-              return false
-            }
-          })
-          .map((file) => relative(root, file)),
-      )
+    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    const outstanding = markedFiles(
+      options.roots,
+      action.command,
+      filePattern,
+      MUTATION_PROBE_MARKER,
+    )
     if (outstanding.length === 0) return { kind: 'pass' }
     return {
       kind: 'violation',
@@ -1294,6 +1373,24 @@ const CHARACTERIZATION_HINT =
   'Commits are blocked while the marker is on disk. Do not break ' +
   'production to manufacture a red.'
 
+// Claude Code keeps only a 2KB preview of a large tool output in the
+// transcript and saves the rest to <session>/tool-results/<id>.txt. A
+// full-module Gradle run with a failing test is usually that large, and
+// its FAILED line is rarely in the first 2KB.
+const PERSISTED_OUTPUT = /<persisted-output>[^]*?Full output saved to: (\S+[/\\]tool-results[/\\][^\s/\\]+\.txt)/
+
+/** A command's output, reading Claude Code's saved full output when the
+ *  transcript only kept a preview. */
+function fullCommandOutput(output: string): string {
+  const saved = output.match(PERSISTED_OUTPUT)?.[1]
+  if (!saved) return output
+  try {
+    return readFileSync(saved, 'utf8')
+  } catch {
+    return output
+  }
+}
+
 /**
  * Wraps a TDD rule to sanction the **characterization round-trip** —
  * the only honest way to add the FIRST test for behavior that predates
@@ -1363,16 +1460,13 @@ export function withCharacterizationTest(
         }
       }
       const history = (await ctx?.history?.()) ?? []
+      const outputs = history.flatMap((event) =>
+        event.kind === 'command' && 'output' in event && typeof event.output === 'string'
+          ? [fullCommandOutput(event.output)]
+          : [],
+      )
       const unproven = (removed as string[]).filter(
-        (name) =>
-          !history.some(
-            (event) =>
-              event.kind === 'command' &&
-              'output' in event &&
-              typeof event.output === 'string' &&
-              event.output.includes(name) &&
-              /fail/i.test(event.output),
-          ),
+        (name) => !outputs.some((output) => output.includes(name) && /fail/i.test(output)),
       )
       if (unproven.length > 0) {
         return {
@@ -1384,7 +1478,10 @@ export function withCharacterizationTest(
             'mutation-probe the production path it specifies ' +
             '(// probity: mutation-probe), run the suite, watch this ' +
             'test fail on its concluding assertion, revert the probe — ' +
-            'then remove the marker.',
+            'then remove the marker. Working in a Claude Code sub-agent? ' +
+            'The PreToolUse hook must run `probity-claude`, not the bare ' +
+            '`probity` bin: the bare bin reads the parent session\'s ' +
+            'transcript and cannot see a sub-agent\'s test runs.',
         }
       }
       return { kind: 'pass', notes: [{ kind: 'characterization-resolved' }] }
@@ -1433,18 +1530,12 @@ export function enforceCharacterizationResolution(options: {
     action: Action,
   ): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!/git commit/.test(action.command)) return { kind: 'pass' }
-    const outstanding = options.roots.flatMap((root) =>
-      walkFiles(root)
-        .filter((file) => filePattern.test(file))
-        .filter((file) => {
-          try {
-            return CHARACTERIZATION_MARKER.test(readFileSync(file, 'utf8'))
-          } catch {
-            return false
-          }
-        })
-        .map((file) => relative(root, file)),
+    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    const outstanding = markedFiles(
+      options.roots,
+      action.command,
+      filePattern,
+      CHARACTERIZATION_MARKER,
     )
     if (outstanding.length === 0) return { kind: 'pass' }
     return {

@@ -41,6 +41,8 @@ Read node_modules/@jjchill/probity-rules/CHANGELOG.md for the entries between th
 
 Propose the concrete edits to the user. Apply them only with explicit approval. Never overwrite or regenerate probity.config.ts wholesale — it holds this project's real globs, test commands, and layout, which the template cannot know.
 
+Also check the Claude Code hook command in `.claude/settings.json`. From 0.4.2, it should run `./node_modules/.bin/probity-claude` instead of `./node_modules/.bin/probity --agent claude-code`, so work done inside sub-agents is judged against the sub-agent's own transcript. Propose that edit with the config edits.
+
 ## 5. Refresh the Kiro shim
 
 If .kiro/hooks/probity-kiro.sh exists, this project also runs Kiro. Compare each file in node_modules/@jjchill/probity-rules/kiro/ against its copy in .kiro/hooks/ (sha256 both sides). Re-copy any that changed — these are vendored files nobody hand-edits — and chmod +x the scripts. Skip this step entirely if there's no .kiro/hooks/ directory.
