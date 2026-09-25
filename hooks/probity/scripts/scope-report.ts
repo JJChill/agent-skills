@@ -24,10 +24,21 @@
  *   npx probity-scope-report [--config probity.config.ts]
  *                             [--root .] [--strict]
  *
+ *   npx probity-scope-report --strict --allow-empty 'src/adapters/**'
+ *
  * --config defaults to probity.config.{ts,mts,js,mjs} found in
  * --root; --root defaults to the current working directory. --strict
  * exits 1 when any warning fires (for CI); otherwise warnings are
  * advisory and the exit code is 0.
+ *
+ * --allow-empty <glob> (repeatable) marks a block as expected to be
+ * empty for now: a block listing that exact glob in its `files` is
+ * reported as "empty (expected)" instead of DEAD SCOPE. This lets a
+ * greenfield repository run --strict in CI from the first commit —
+ * list the globs for layers that don't exist yet, and drop each flag
+ * once its first file lands (the report notes a flag that has gone
+ * stale). A flag naming no block's glob is a warning — a typo would
+ * otherwise silently allow nothing.
  *
  * The config is loaded via jiti — the same TypeScript loader Probity
  * itself uses — rather than a bare dynamic `import()` of a .ts file,
@@ -73,12 +84,22 @@ const TEST_FILE = /(?:Tests?|Spec)\.\w+$|\.(?:test|spec)\.\w+$/
 const LANGUAGE_RULES = /AcceptanceLanguage/
 const DRIVERISH_FILE = /(Robot|Driver|Dsl)\.\w+$|[/\\](drivers?|dsl)[/\\]/
 
-function parseArgs(argv: string[]): { config?: string; root?: string; strict: boolean } {
-  const out: { config?: string; root?: string; strict: boolean } = { strict: false }
+type Args = { config?: string; root?: string; strict: boolean; allowEmpty: string[] }
+
+function parseArgs(argv: string[]): Args {
+  const out: Args = { strict: false, allowEmpty: [] }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--config') out.config = argv[++i]
     else if (argv[i] === '--root') out.root = argv[++i]
     else if (argv[i] === '--strict') out.strict = true
+    else if (argv[i] === '--allow-empty') {
+      const glob = argv[++i]
+      if (!glob) {
+        console.error('--allow-empty needs a glob')
+        process.exit(2)
+      }
+      out.allowEmpty.push(glob)
+    }
     else {
       console.error(`Unknown argument: ${argv[i]}`)
       process.exit(2)
@@ -130,6 +151,7 @@ console.log(`Repo root: ${root} (${tree.length} files scanned)\n`)
 
 const warnings: string[] = []
 const claimed = new Set<string>()
+const allowEmptyUsed = new Set<string>()
 let flatRules = 0
 
 for (const [index, entry] of config.rules.entries()) {
@@ -158,12 +180,20 @@ for (const [index, entry] of config.rules.entries()) {
       : tree.filter(buildMatcher([anchorGlob(glob, configDir)])).length
     console.log(`  ${glob}${count === null ? '' : `  (${count})`}`)
   }
-  console.log(`  → ${matched.length} file(s)`)
+  const allowedEmpty = entry.files.filter((glob) => args.allowEmpty.includes(glob))
+  allowedEmpty.forEach((glob) => allowEmptyUsed.add(glob))
+  const allowNote =
+    allowedEmpty.length === 0
+      ? ''
+      : matched.length === 0
+        ? ' — empty (expected, --allow-empty)'
+        : ` — still marked --allow-empty ${allowedEmpty[0]}; drop the flag`
+  console.log(`  → ${matched.length} file(s)${allowNote}`)
   for (const file of matched.slice(0, SAMPLE_LIMIT)) console.log(`      ${relative(root, file)}`)
   if (matched.length > SAMPLE_LIMIT) console.log(`      …and ${matched.length - SAMPLE_LIMIT} more`)
   console.log('')
 
-  if (matched.length === 0) {
+  if (matched.length === 0 && allowedEmpty.length === 0) {
     warnings.push(
       `DEAD SCOPE: ${label} matches no files — these rules will never fire. ` +
         'Adjust the globs to your layout (this is the silent failure mode).',
@@ -196,6 +226,13 @@ for (const [index, entry] of config.rules.entries()) {
       )
     }
   }
+}
+
+for (const glob of args.allowEmpty.filter((glob) => !allowEmptyUsed.has(glob))) {
+  warnings.push(
+    `--allow-empty ${glob} matches no block's files glob exactly — check the ` +
+      'spelling against the globs printed above.',
+  )
 }
 
 if (flatRules > 0) {

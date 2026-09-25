@@ -109,3 +109,25 @@ export function anchorEntries(
     return { ...entry, files: [first!, ...rest] as const }
   })
 }
+
+/**
+ * Appends `!`-negations for `excludeGlobs` to every `{ files, rules }`
+ * block's `files` list, so a preset's exclusion option (e.g. keeping
+ * `spikes/**` or `**\/build/**` out of TDD/boundary scope) applies
+ * uniformly without hand-editing each block. Flat rules (command
+ * actions carry no `files` scope) pass through untouched, and an
+ * empty `excludeGlobs` list is a no-op — the "disable it" escape
+ * hatch a preset option exposes by accepting `[]`.
+ */
+export function withExcludeGlobs(
+  entries: readonly RuleEntry[],
+  excludeGlobs: readonly string[],
+): RuleEntry[] {
+  if (excludeGlobs.length === 0) return [...entries]
+  const negations = excludeGlobs.map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
+  return entries.map((entry) => {
+    if (!isRuleBlock(entry) || !entry.files) return entry
+    const [first, ...rest] = [...entry.files, ...negations]
+    return { ...entry, files: [first!, ...rest] as const }
+  })
+}

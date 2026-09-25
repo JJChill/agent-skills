@@ -265,6 +265,8 @@ it('marks overdue tasks when deadline has passed', () => {
 });
 ```
 
+`// Given` / `// When` / `// Then` is the same structure under BDD names; use whichever the codebase already uses.
+
 ### One Assertion Per Concept
 
 ```typescript
@@ -299,6 +301,8 @@ describe('TaskService', () => {
   it('test 3', ...);
 });
 ```
+
+If the project sets a naming convention (for example, every unit test name is a sentence starting with `should`, written in Kotlin as a backticked name like ``fun `should delete the key when the backend rejects the credential`()``), follow it. Acceptance tests keep their scenario titles. Record the convention in the project's agent instructions (e.g. `CLAUDE.md`) so every session applies it.
 
 ## Test Anti-Patterns to Avoid
 

@@ -16,7 +16,7 @@
  * package next to gradlew. The TDD fast-path parser ships as optional
  * dependencies of the rule package.
  */
-import { join } from 'node:path'
+import { join, relative, sep } from 'node:path'
 
 import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
@@ -28,6 +28,7 @@ import {
   enforceAcceptanceLanguage,
   withAcceptanceLanguageFastPath,
 } from '../rules/acceptance-language.js'
+import { withExcludeGlobs } from '../rules/scoping.js'
 import {
   enforceSpecTestParity,
   requireSpecBackedAcceptanceTest,
@@ -56,6 +57,46 @@ import {
 } from '../rules/ports-and-adapters.js'
 
 /**
+ * Options for {@link kmpRuleEntries}. A superset of the factory's
+ * original `{ driverScopes, defaultScopes }` second parameter, so
+ * existing callers passing that shape unchanged keep working. Every
+ * option defaults to the reference KMP layout's current hardcoded
+ * value — a consuming project overrides only what its layout needs.
+ */
+export type KmpPresetOptions = {
+  /** Absolute path to the specs directory. */
+  specsDir?: string
+  /** Spec files the traceability rules scan/scope to (Markdown
+   *  `*.feature.md` by default; add `**\/*.feature` for Gherkin). */
+  specGlobs?: Globs
+  /** Absolute path to the ubiquitous-language glossary. */
+  glossaryPath?: string
+  /** Core purity scope — domain/port/usecase/presentation packages in
+   *  commonMain. Adapter, DI, and Compose ui packages import vendors
+   *  by design and must NOT match here. */
+  coreGlobs?: Globs
+  /** Test-case files that must carry a spec-backed Covers: tag. */
+  acceptanceTestGlobs?: Globs
+  /** Absolute paths to scan for acceptance tests (Covers: tags). */
+  testRoots?: string[]
+  /** Which files count as acceptance tests when scanning for Covers:
+   *  tags (default: any file under an `acceptance/` directory). */
+  testFilePattern?: RegExp
+  /** What counts as a test-case declaration for the write-time gate
+   *  (default: Kotlin/Java `@Test` or Swift `func test…`). */
+  testDeclarationPattern?: RegExp
+  /** Per-scenario driver mapping; see {@link DriverScope}. */
+  driverScopes?: DriverScope[]
+  /** Scope names every scenario must satisfy even untagged. */
+  defaultScopes?: string[]
+  /** Incremental-adoption baseline path for the commit-time parity gate. */
+  baselinePath?: string
+  /** Globs excluded (as `!`-negations) from every files-scoped block —
+   *  spikes and build output by default. Pass `[]` to disable. */
+  excludeGlobs?: string[]
+}
+
+/**
  * The rule entries, as a factory over the project root. Probity only
  * reads the default export below; the factory exists so tooling can
  * instantiate the exact same blocks against a different root — the
@@ -68,26 +109,36 @@ import {
  * `loadConfig` anchors them against this file's directory at load
  * time, and the tooling replicates that via `rules/scoping.ts`.
  *
- * `parity` optionally switches on the per-scenario driver mapping
- * (`driverScopes`/`defaultScopes` on the commit-time parity gate) —
+ * `options.driverScopes`/`options.defaultScopes` optionally switch on
+ * the per-scenario driver mapping on the commit-time parity gate —
  * projects normally enable it by uncommenting the block in the
- * `enforceSpecTestParity` call below; the parameter exists so the
- * workflow eval can exercise the scope checks without changing the
+ * `enforceSpecTestParity` call below; the workflow eval passes them
+ * directly so it can exercise the scope checks without changing the
  * template's default-off posture.
  */
-export function kmpRuleEntries(
-  root: string,
-  parity?: { driverScopes?: DriverScope[]; defaultScopes?: string[] },
-): RuleEntry[] {
+export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): RuleEntry[] {
   // Ubiquitous-language glossary (copy GLOSSARY.template.md here).
   // The glossary-aware rules degrade gracefully while the file
   // doesn't exist yet — wiring it up front costs nothing.
-  const glossary = join(root, 'docs/GLOSSARY.md')
+  const glossary = options.glossaryPath ?? join(root, 'docs/GLOSSARY.md')
+  // The glossary-drift block's files scope must track a custom
+  // glossaryPath, not just the default location.
+  const glossaryGlob = relative(root, glossary).split(sep).join('/')
+
+  const specsDir = options.specsDir ?? join(root, 'docs/specs')
+  const specGlobs: Globs = options.specGlobs ?? ['docs/specs/**/*.feature.md']
+  const acceptanceTestGlobs: Globs = options.acceptanceTestGlobs ?? [
+    '**/acceptance/**/*Spec.kt',
+    '**/acceptance/**/*Test.kt',
+  ]
+  const testRoots = options.testRoots ?? [root]
+  const baselinePath = options.baselinePath ?? join(root, 'docs/specs/.parity-baseline')
+  const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
 
   // Core purity scope — the inside of the hexagon: domain, ports,
   // use cases, and MVI presentation in commonMain. Adapter, DI, and
   // Compose ui packages import vendors by design — excluded.
-  const CORE_GLOBS: Globs = [
+  const coreGlobs: Globs = options.coreGlobs ?? [
     '**/src/commonMain/**/domain/**',
     '**/src/commonMain/**/port/**',
     '**/src/commonMain/**/usecase/**',
@@ -100,13 +151,13 @@ export function kmpRuleEntries(
   // write). A write with a vendor import in core code must be
   // rejected by the free import screen, not after a TDD model call.
 
-  return [
+  const entries: RuleEntry[] = [
     // ── Deterministic wall ───────────────────────────────────────────
 
     // Core import/effect screens. The import screen also catches Koin
     // here: DI stays at the composition root, never in domain code.
     {
-      files: CORE_GLOBS,
+      files: coreGlobs,
       rules: [
         forbidContentPattern({
           match: KOTLIN_INFRASTRUCTURE_IMPORTS,
@@ -149,19 +200,24 @@ export function kmpRuleEntries(
     // list of affected tests, so the rename updates its Covers: tags
     // in the same change.
     {
-      files: ['docs/specs/**/*.feature.md'],
-      rules: [surfaceScenarioLinkBreakage({ testRoots: [root] })],
+      files: specGlobs,
+      rules: [
+        surfaceScenarioLinkBreakage({ testRoots, testFilePattern: options.testFilePattern }),
+      ],
     },
 
     // Spec-first, at write time: adding a new acceptance test case
     // requires a new Covers: tag resolving to a scenario that already
-    // exists in docs/specs — the feature file is written before the
+    // exists in specsDir — the feature file is written before the
     // test that claims it. Scoped to the test-case layer only
     // (*Spec.kt); drivers/DSL/scenario bodies add no @Test functions.
     {
-      files: ['**/acceptance/**/*Spec.kt', '**/acceptance/**/*Test.kt'],
+      files: acceptanceTestGlobs,
       rules: [
-        requireSpecBackedAcceptanceTest({ specsDir: join(root, 'docs/specs') }),
+        requireSpecBackedAcceptanceTest({
+          specsDir,
+          testDeclarationPattern: options.testDeclarationPattern,
+        }),
       ],
     },
 
@@ -169,7 +225,7 @@ export function kmpRuleEntries(
     // that specs, tests, or code still use blocks the glossary edit
     // with the list of users.
     {
-      files: ['docs/GLOSSARY.md'],
+      files: [glossaryGlob],
       rules: [surfaceGlossaryTermBreakage({ searchRoots: [root] })],
     },
 
@@ -214,7 +270,7 @@ export function kmpRuleEntries(
     // the import screen can't make — thin adapters, vendor types in
     // port signatures, glossary-conflicting names.
     {
-      files: CORE_GLOBS,
+      files: coreGlobs,
       rules: [
         enforcePortsBoundary({
           instructions: (defaults) => defaults + KOTLIN_BOUNDARY_ADDENDUM,
@@ -252,13 +308,7 @@ export function kmpRuleEntries(
     // and stay INCLUDED by design: they must read as pure domain
     // language.
     {
-      files: [
-        'docs/specs/**/*.feature.md',
-        '**/acceptance/**',
-        '!**/*Robot.kt',
-        '!**/*Dsl.kt',
-        '!**/*Driver.kt',
-      ],
+      files: [...specGlobs, '**/acceptance/**', '!**/*Robot.kt', '!**/*Dsl.kt', '!**/*Driver.kt'],
       // requireGlossaryEntry: true is the strict "glossary
       // conversation happens first" mode — turn it on once the
       // glossary has real coverage, not on day one. The fast-path
@@ -274,7 +324,7 @@ export function kmpRuleEntries(
 
     // ── Ship gates ───────────────────────────────────────────────────
     // Definition of done, made mechanical: every non-wip scenario in
-    // docs/specs is claimed by an acceptance test (Covers: tag), and
+    // specsDir is claimed by an acceptance test (Covers: tag), and
     // every tag resolves to a real scenario. Mark in-progress specs
     // `## Scenario (wip):`. CI mirror for human commits:
     // scripts/spec-parity.mjs.
@@ -293,18 +343,21 @@ export function kmpRuleEntries(
     // path matches that scope. Tags are floors, not ceilings; with
     // shared scenario bodies (*Scenarios.kt) the extra covering test
     // is a thin spec class calling the existing body. CALIBRATE THE
-    // PATTERNS TO YOUR LAYOUT before uncommenting — a pattern matching
-    // zero files makes every tagged scenario fail, loudly.
+    // PATTERNS TO YOUR LAYOUT before setting `driverScopes` — a
+    // pattern matching zero files makes every tagged scenario fail,
+    // loudly. Example:
+    //   driverScopes: [
+    //     { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
+    //     { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
+    //   ],
+    //   defaultScopes: ['view-model'],
     enforceSpecTestParity({
-      specsDir: join(root, 'docs/specs'),
-      testRoots: [root],
-      baselinePath: join(root, 'docs/specs/.parity-baseline'),
-      // driverScopes: [
-      //   { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
-      //   { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
-      // ],
-      // defaultScopes: ['view-model'],
-      ...parity,
+      specsDir,
+      testRoots,
+      baselinePath,
+      testFilePattern: options.testFilePattern,
+      driverScopes: options.driverScopes,
+      defaultScopes: options.defaultScopes,
     }),
 
     // The commit half of the mutation-probe round-trip: no commit
@@ -323,4 +376,6 @@ export function kmpRuleEntries(
     // SUCCESSFUL or a trustworthy Kiro zero status.
     requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ]
+
+  return withExcludeGlobs(entries, excludeGlobs)
 }

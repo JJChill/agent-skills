@@ -44,6 +44,7 @@ import {
 } from '../rules/ports-and-adapters.js'
 import { requireSpecBackedAcceptanceTest } from '../rules/spec-test-parity.js'
 import type { Globs } from '../rules/scoping.js'
+import { withExcludeGlobs } from '../rules/scoping.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 
 export type KotlinPresetOptions = {
@@ -73,6 +74,9 @@ export type KotlinPresetOptions = {
   adapterGlobs?: Globs
   /** The real Gradle test task your commit gate should look for. */
   commitCommand?: RegExp
+  /** Globs excluded (as `!`-negations) from every files-scoped block —
+   *  spikes and build output by default. Pass `[]` to disable. */
+  excludeGlobs?: string[]
 }
 
 /**
@@ -115,8 +119,9 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     '**/src/main/**/adapters/**',
     '**/src/main/**/data/**',
   ]
+  const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
 
-  return [
+  const entries: RuleEntry[] = [
     // ── Deterministic wall ───────────────────────────────────────────
 
     // Core import/effect screens.
@@ -255,4 +260,6 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // must carry BUILD SUCCESSFUL or a trustworthy Kiro zero status.
     requireGreenTestRun({ command: options.commitCommand ?? GRADLE_TEST_COMMAND }),
   ]
+
+  return withExcludeGlobs(entries, excludeGlobs)
 }
