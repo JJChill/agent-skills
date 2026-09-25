@@ -190,6 +190,15 @@ const KOTLIN_TEST_PATTERNS: unknown[] = [
 const KOTLIN_TEST_FILE_PATTERN =
   /(?:^|\/)src\/(?:test|[A-Za-z0-9]+Test)\/(?:java|kotlin)\//
 
+/**
+ * Any Kotlin/Android test source set — classic `src/test`, and every
+ * `src/<name>Test` set (androidTest, sharedTest, commonTest, jvmTest,
+ * androidUnitTest, …). The boundary the Kotlin presets give
+ * {@link withCharacterizationTest}: the marker only works in test code.
+ */
+export const KOTLIN_TEST_SOURCE_PATTERN =
+  /(?:^|[/\\])src[/\\](?:test|[A-Za-z0-9]+Test)[/\\]/
+
 let astGrep: AstGrepModule | null | undefined
 
 function loadKotlinAstGrep(): AstGrepModule | null {
@@ -1234,7 +1243,10 @@ export function enforceProbeReversion(options: {
  */
 export const CHARACTERIZATION_MARKER = /probity:\s*characterization\b/
 
-const FUNCTION_NAME = /(?:func|fun)\s+`?([A-Za-z_]\w*)/
+// Kotlin test names are often backticked sentences
+// (fun `rejects blank ids`()); capture the whole name so the removal
+// proof looks for that test, not its first word.
+const FUNCTION_NAME = /(?:func|fun)\s+(?:`([^`]+)`|([A-Za-z_]\w*))/
 
 /** Test names whose characterization markers this write removes,
  *  paired with `null` when a marker can't be tied to a function. */
@@ -1250,7 +1262,7 @@ function removedMarkerTests(
       for (let scan = index; scan < Math.min(index + 6, lines.length); scan++) {
         const match = lines[scan]!.match(FUNCTION_NAME)
         if (match) {
-          found.push(match[1]!)
+          found.push((match[1] ?? match[2])!)
           return
         }
       }
@@ -1261,6 +1273,26 @@ function removedMarkerTests(
   const remaining = new Set(names(after).filter(Boolean))
   return names(before).filter((name) => name === null || !remaining.has(name))
 }
+
+// A test-layer denial that asks for a red the test can never have —
+// the behavior already exists, so the test is born green. Broader than
+// MISSING_RED_REASON: judges phrase this as "must be observed failing
+// first" or "treats this as new behavior".
+const CHARACTERIZATION_CANDIDATE_REASON = new RegExp(
+  `${MISSING_RED_REASON.source}|observed? (?:it |the test |to )?fail|fail(?:ing|s)? first|red first|new (?:unimplemented )?behaviou?r|existing behaviou?r|already (?:implemented|exists|passes|satisf)`,
+  'i',
+)
+
+const CHARACTERIZATION_HINT =
+  'Note: if this test pins behavior production ALREADY has (a ' +
+  'characterization or regression test — e.g. covering a branch a ' +
+  'mutation review found untested), no honest red can precede it. Put ' +
+  '`// probity: characterization` in a comment directly above the test ' +
+  'function and retry: the write passes, then prove the test bites — ' +
+  'mutation-probe the production path (`// probity: mutation-probe`), ' +
+  'run the test and watch it fail, revert the probe, remove the marker. ' +
+  'Commits are blocked while the marker is on disk. Do not break ' +
+  'production to manufacture a red.'
 
 /**
  * Wraps a TDD rule to sanction the **characterization round-trip** —
@@ -1291,6 +1323,11 @@ function removedMarkerTests(
  * production write can't borrow the marker. Same inherent limit as
  * every transcript gate: reds observed in another terminal or CI are
  * invisible — run the probe in-session.
+ *
+ * Discoverability: when the wrapped rule denies an unmarked test-layer
+ * write for lacking a red, the deny text gains a note naming the
+ * marker, so an agent pinning existing behavior learns the sanctioned
+ * route at the point it is blocked instead of breaking production.
  *
  * @param rule — the TDD rule to wrap (fast-paths/probe wrappers
  *   included as usual).
@@ -1355,7 +1392,17 @@ export function withCharacterizationTest(
     if (markerRemains) {
       return { kind: 'pass', notes: [{ kind: 'characterization' }] }
     }
-    return rule(action, ctx)
+    const result = await rule(action, ctx)
+    if (
+      result.kind === 'violation' &&
+      CHARACTERIZATION_CANDIDATE_REASON.test(result.reason ?? '')
+    ) {
+      return {
+        ...result,
+        reason: `${result.reason}\n\n${CHARACTERIZATION_HINT}`,
+      }
+    }
+    return result
   }
   Object.defineProperty(wrapped, 'name', {
     value: `characterizationTest(${rule.name || 'rule'})`,

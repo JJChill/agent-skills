@@ -1,5 +1,13 @@
 import { enforceTdd, type Rule } from '@nizos/probity'
 
+import { withJudgeFailureDiagnostics } from '../rules/gates.js'
+
+const KOTLIN_DETERMINISTIC_PATHS =
+  'Writes that never call the judge still go through: a test-source write ' +
+  'adding exactly one @Test function (Kotlin fast path), telemetry-only ' +
+  'lines, writes marked `// probity: mutation-probe`, and test-source ' +
+  'writes marked `// probity: characterization`.'
+
 const KOTLIN_TDD_ADDENDUM = `## Kotlin/JVM TDD clarification
 
 - Kotlin-specific exception to the generic placeholder guidance: when a targeted, relevant Kotlin test executes a \`TODO()\` placeholder and reports \`kotlin.NotImplementedError\`, that runtime failure is a clean red. Do not require a second run that reaches an assertion before replacing the placeholder. The implementation remains bounded by the assertions present in the relevant test source visible in the recent session.
@@ -10,12 +18,17 @@ const KOTLIN_TDD_ADDENDUM = `## Kotlin/JVM TDD clarification
 /**
  * Kotlin sessions commonly include Gradle output plus several source reads between
  * red and green. Twenty events preserves that nearby red; clipping each event at
- * 6,000 characters keeps the additional context bounded.
+ * 6,000 characters keeps the additional context bounded. A judge that
+ * returns no verdict (spend limit, auth failure) is reported as an
+ * infrastructure failure rather than a TDD rejection.
  */
 export function enforceKotlinTdd(): Rule {
-  return enforceTdd({
-    instructions: (defaults) => `${defaults}\n\n${KOTLIN_TDD_ADDENDUM}`,
-    maxEvents: 20,
-    maxContentChars: 6_000,
-  })
+  return withJudgeFailureDiagnostics(
+    enforceTdd({
+      instructions: (defaults) => `${defaults}\n\n${KOTLIN_TDD_ADDENDUM}`,
+      maxEvents: 20,
+      maxContentChars: 6_000,
+    }),
+    { deterministicPaths: KOTLIN_DETERMINISTIC_PATHS },
+  )
 }

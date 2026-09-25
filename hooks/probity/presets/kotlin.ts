@@ -24,13 +24,16 @@ import {
   withAcceptanceLanguageFastPath,
 } from '../rules/acceptance-language.js'
 import {
+  enforceCharacterizationResolution,
   enforceProbeReversion,
   forbidNewAmbientEffects,
   forbidStaticMocks,
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
+  KOTLIN_TEST_SOURCE_PATTERN,
   requireGreenTestRun,
+  withCharacterizationTest,
   withKotlinFastPath,
   withMutationProbe,
   withTelemetryFastPath,
@@ -179,13 +182,20 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // allowed) passes without an AI call. Its parser ships as optional
     // dependencies; unavailable parser support delegates to
     // enforceKotlinTdd with an explicit diagnostic and a bounded history.
+    // The characterization wrapper sanctions a test for behavior
+    // production already has (born green): a test-source write marked
+    // `// probity: characterization` passes, and the commit gate below
+    // holds the marker until a mutation probe shows that test failing.
     {
       files: tddGlobs,
       // Telemetry-only additions pass deterministically — see the
       // KMP preset's note on the TDD/observability tension.
       rules: [
-        withMutationProbe(
-          withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
+        withCharacterizationTest(
+          withMutationProbe(
+            withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
+          ),
+          { filePattern: KOTLIN_TEST_SOURCE_PATTERN },
         ),
       ],
     },
@@ -232,6 +242,12 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // while a `probity: mutation-probe` marker is still on disk —
     // reverting the mutation removes the marker with it.
     enforceProbeReversion({ roots: [root] }),
+
+    // The commit half of the characterization round-trip: no commit
+    // while a `probity: characterization` marker is still on disk —
+    // the marker only comes off once the transcript records the
+    // marked test failing under a mutation probe.
+    enforceCharacterizationResolution({ roots: [root] }),
 
     // No commit on an unverified tree. The default accepts test/
     // test...Test, allTests, jvmTest, build, and check; a custom
