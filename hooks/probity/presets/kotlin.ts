@@ -60,6 +60,11 @@ export type KotlinPresetOptions = {
   infrastructureImports?: RegExp
   /** Point at the project's canonical ambient-effect port(s). */
   seamHint?: string
+  /** Names your telemetry convention for the adapter-observability
+   *  judge — how a boundary event is recorded in this codebase
+   *  (default: the judge's generic structured-event/port-tap/span
+   *  guidance). */
+  conventionHint?: string
   /** Test source sets where static/object/constructor mocking is
    *  forbidden — ports are the only test seam. */
   staticMockGlobs?: Globs
@@ -224,7 +229,11 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // packages. Delta-based — legacy paths migrate incrementally.
     {
       files: adapterGlobs,
-      rules: [withTelemetryFastPath(enforceAdapterObservability())],
+      rules: [
+        withTelemetryFastPath(
+          enforceAdapterObservability({ conventionHint: options.conventionHint }),
+        ),
+      ],
     },
 
     // Outer loop: acceptance-testing. The Language Test on the spec

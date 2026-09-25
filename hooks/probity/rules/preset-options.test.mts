@@ -257,3 +257,93 @@ test('jsRuleEntries: a build/ write is excluded from the TDD block by default, i
     true,
   )
 })
+
+// ── seamHint / conventionHint ─────────────────────────────────────────
+
+/** Runs the adapter-observability judge and returns the prompt it built. */
+async function observabilityPrompt(entries: RuleEntry[], path: string): Promise<string> {
+  const found = entries.find(
+    (entry): entry is RuleBlock =>
+      isRuleBlock(entry) &&
+      entry.rules.some((rule) => rule.name.includes('enforceAdapterObservability')),
+  )
+  assert.ok(found, 'preset should wire enforceAdapterObservability')
+  const rule = found.rules.find((r) => r.name.includes('enforceAdapterObservability'))!
+  let prompt = ''
+  const ctx: RuleContext = {
+    readFile: async () => ({ kind: 'present', content: 'class HttpGateway' }),
+    rawHistory: async () => [],
+    history: async () => [],
+    agent: {
+      reason: async (value) => {
+        prompt = value
+        return { kind: 'pass', reason: '' }
+      },
+    },
+  }
+  await rule(
+    {
+      kind: 'write',
+      path,
+      content: 'class HttpGateway { suspend fun fetch() = client.get("/sudos") }',
+    },
+    ctx,
+  )
+  return prompt
+}
+
+test('kmpRuleEntries: conventionHint replaces the default telemetry convention', async () => {
+  const path = '/repo/sdk/core/src/commonMain/kotlin/adapter/HttpGateway.kt'
+  const custom = await observabilityPrompt(
+    kmpRuleEntries('/repo', { conventionHint: 'Record through the Telemetry port.' }),
+    path,
+  )
+  assert.match(custom, /Record through the Telemetry port\./)
+  assert.doesNotMatch(custom, /Logger\.event/)
+  assert.match(await observabilityPrompt(kmpRuleEntries('/repo'), path), /Logger\.event/)
+})
+
+test('kotlinRuleEntries: conventionHint reaches the adapter-observability judge', async () => {
+  const prompt = await observabilityPrompt(
+    kotlinRuleEntries('/repo', { conventionHint: 'Record through the Telemetry port.' }),
+    '/repo/app/src/main/kotlin/data/HttpGateway.kt',
+  )
+  assert.match(prompt, /Record through the Telemetry port\./)
+})
+
+test('kmpRuleEntries: seamHint replaces the default ambient-effect hint', async () => {
+  const found = findRule(
+    kmpRuleEntries('/repo', { seamHint: 'Inject the Clock port from core/port.' }),
+    'forbidNewAmbientEffects',
+  )
+  assert.ok(found, 'KMP preset should wire forbidNewAmbientEffects')
+  const result = await found.rule(
+    {
+      kind: 'write',
+      path: '/repo/sdk/core/src/commonMain/kotlin/domain/Expiry.kt',
+      content: 'fun now() = Clock.System.now()\nval t = System.currentTimeMillis()',
+    },
+    { readFile: async () => ({ kind: 'absent' }) },
+  )
+  assert.equal(result.kind, 'violation')
+  assert.match(result.reason ?? '', /Inject the Clock port from core\/port\./)
+})
+
+test('kmpRuleEntries: acceptanceLanguageGlobs narrows the Language Test scope', () => {
+  const block = (entries: RuleEntry[]) =>
+    entries.find(
+      (entry): entry is RuleBlock =>
+        isRuleBlock(entry) &&
+        entry.rules.some((rule) => rule.name.includes('enforceAcceptanceLanguage')),
+    )!
+  const claims = (entries: RuleEntry[], path: string) =>
+    buildMatcher(block(entries).files.map((glob) => anchorGlob(glob, '/repo')))(path)
+  const dsl = '/repo/sdk/src/jvmTest/kotlin/acceptance/dsl/Developer.kt'
+  const spec = '/repo/sdk/src/jvmTest/kotlin/acceptance/RegistrationSpec.kt'
+  assert.equal(claims(kmpRuleEntries('/repo'), dsl), true, 'default claims every acceptance file')
+  const narrowed = kmpRuleEntries('/repo', {
+    acceptanceLanguageGlobs: ['specs/**/*.feature', '**/acceptance/**/*Spec.kt'],
+  })
+  assert.equal(claims(narrowed, dsl), false)
+  assert.equal(claims(narrowed, spec), true)
+})
