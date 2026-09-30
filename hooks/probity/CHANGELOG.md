@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.7
+
+A judge answer that is not valid JSON is no longer reported as an
+outage (#52), in every preset.
+
+- **What went wrong.** The judge sometimes writes its verdict as broken
+  JSON: an unescaped `"` or a line break inside `reason`, or an answer
+  cut off mid-string. Probity then reports "could not parse verdict",
+  and `withJudgeFailureDiagnostics` rewrote that as "returned no
+  verdict … an infrastructure failure … retrying … will not help". In
+  #52 the judge had in fact denied the write for over-implementation.
+  The agent was told the judge was down, and that retrying was
+  pointless.
+- **Now:** the wrapper tells the two causes apart.
+  - The provider reports it is unavailable (spend limit, quota, rate
+    limit, auth), or no AI agent is configured: unchanged. No retry;
+    the message still says retrying will not help until the judge is
+    back.
+  - The judge answered, but not as a valid verdict: it is asked once
+    more, and a well-formed second verdict stands. If the second answer
+    is still malformed but reads as a deny, the block is reported as
+    the policy decision it is, with the judge's reason quoted in full.
+    Anything else stays blocked, with the judge's output in full, and
+    the message says retrying the same write may succeed.
+- Agents already retry a blocked write, so the automatic retry changes
+  what the agent is told, not how many chances the write gets.
+- Tested with scripted verdicts run through Probity's own parser: an
+  unescaped quote, a raw line break, a cut-off answer, a malformed
+  pass, and prose. The raw output of the #52 answer was not recorded,
+  so this is not a replay of it. `hooks/PROBITY.md` now points at the
+  `--debug <path>` hook option for capturing such output.
+
 ## 0.4.6
 
 A TDD judge deny that ends in a bare "Pass." is now judged again (#50).
