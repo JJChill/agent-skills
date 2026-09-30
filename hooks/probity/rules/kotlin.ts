@@ -469,6 +469,21 @@ function changesExistingTestContainer(
 
 type Declaration = { name: string; scope: string }
 
+// Syntax whose declarations are local: visible only inside that body,
+// so they cannot change what another test's code refers to (#45).
+const LOCAL_SCOPE_KINDS = new Set([
+  'function_body',
+  'lambda_literal',
+  'anonymous_initializer',
+  'getter',
+  'setter',
+  'anonymous_function',
+])
+
+function isLocalDeclaration(node: AstGrepNode): boolean {
+  return node.ancestors().some((ancestor) => LOCAL_SCOPE_KINDS.has(ancestor.kind()))
+}
+
 function declarations(napi: AstGrepModule, code: string): Declaration[] {
   const root = napi.parse('kotlin', code).root()
   const found: Declaration[] = []
@@ -479,6 +494,7 @@ function declarations(napi: AstGrepModule, code: string): Declaration[] {
     'object_declaration',
   ]) {
     for (const node of root.findAll({ rule: { kind } })) {
+      if (isLocalDeclaration(node)) continue
       const name = nodeName(node)
       if (name) found.push({ name, scope: enclosingScope(node) })
     }

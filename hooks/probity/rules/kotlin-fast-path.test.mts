@@ -863,6 +863,43 @@ test('one test inserted as the first test of a class passes', async () => {
   assert.deepEqual(result, { kind: 'pass', notes: [{ kind: 'fast-path' }] })
 })
 
+// Issue #45: each test in a file declares the same locals (`val cli`,
+// `val composition`). The shadowing screen counted the new test's
+// locals as class-scope declarations named like identifiers the
+// existing tests use, so a one-test write went to the AI judge.
+const localsTests = `import kotlin.test.Test
+
+class StoreTest {
+  @Test
+  fun \`should store a key\`() {
+    val store = Store()
+    store.put("k")
+    check(store.has("k"))
+  }
+
+  @Test
+  fun \`should load a stored key\`() {
+    val store = Store()
+    val (key, _) = store.put("k")
+    check(store.load(key) != null)
+  }
+}
+`
+
+test('a new test reusing the local names of existing tests passes', async () => {
+  const inserted = localsTests.replace(
+    '  @Test\n  fun `should load a stored key`',
+    '  @Test\n  fun `should forget a removed key`() {\n    val store = Store()\n    val (key, _) = store.put("k")\n    store.remove(key)\n    check(!store.has(key))\n  }\n\n  @Test\n  fun `should load a stored key`',
+  )
+  const delegate = delegateSpy()
+  const result = await withKotlinFastPath(delegate.rule)(
+    { kind: 'write', path: 'module/src/test/kotlin/StoreTest.kt', content: inserted },
+    contextWith(localsTests),
+  )
+  assert.equal(delegate.calls(), 0)
+  assert.deepEqual(result, { kind: 'pass', notes: [{ kind: 'fast-path' }] })
+})
+
 test('an insertion that also edits the following test still delegates', async () => {
   const inserted = twoTests.replace(
     '  @Test\n  fun `should load a stored key`() {\n    check(true)',

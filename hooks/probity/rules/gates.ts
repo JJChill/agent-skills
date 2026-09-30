@@ -369,6 +369,55 @@ export function surfaceRemovedStringUsage(options: {
   }
 }
 
+// A deny reason whose last sentence concludes the write is allowed,
+// e.g. "... adds only ONE new test. This is permitted." Negated forms
+// ("is not permitted") and qualified ones ("permitted, but ...") in an
+// earlier clause do not match.
+const PERMITTED_CONCLUSION =
+  /\b(?:is|are) (?:permitted|allowed|acceptable|valid)\.?\s*$|\bshould (?:pass|be allowed)\.?\s*$|\bno violation\.?\s*$/i
+
+/**
+ * Wraps an AI-validated rule so that a deny whose own reason concludes
+ * the write is permitted is judged once more.
+ *
+ * Why (issue #45): Probity's judge answers `{"kind", "reason"}` in that
+ * order, with thinking disabled, so it picks `kind` before it reasons.
+ * Now and then the reasoning in `reason` reaches the opposite
+ * conclusion. One block ended "... adds only ONE new test. This is
+ * permitted." and still denied; the identical retry passed.
+ *
+ * Only a deny whose last sentence says the write is permitted is
+ * retried, once, with the same inputs. The second verdict stands,
+ * deny or pass. Every other verdict passes through untouched. Wrap
+ * the judge rule directly, inside any wrapper that appends notes to
+ * `reason`, so the last sentence tested is the judge's own. A
+ * conclusion followed by a closing quote or bracket does not match.
+ *
+ * Asking the judge to reason before `kind` was tried instead and
+ * rejected: on a live replica it let a production write with no
+ * recorded failing test through 5 of 8 times, against 0 of 8 without.
+ *
+ * @param rule — the AI-validated rule to wrap.
+ */
+export function withContradictionRetry(rule: Rule): Rule {
+  const wrapped = async function contradictionRetry(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    const result = await rule(action, ctx)
+    if (result.kind !== 'violation') return result
+    if (!PERMITTED_CONCLUSION.test(lastSentence(result.reason ?? ''))) return result
+    return rule(action, ctx)
+  }
+  Object.defineProperty(wrapped, 'name', { value: rule.name || 'rule' })
+  return wrapped
+}
+
+function lastSentence(text: string): string {
+  const sentences = text.trim().split(/(?<=[.!?])\s+/)
+  return sentences[sentences.length - 1] ?? ''
+}
+
 // Reasons Probity's verdict plumbing produces when the AI judge never
 // returned a verdict at all — the validator's raw output was not JSON,
 // had the wrong shape, or the SDK stream produced no result. None of
