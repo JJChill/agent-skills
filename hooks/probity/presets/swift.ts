@@ -49,7 +49,10 @@ import {
   XCUITEST_MECHANICS,
 } from '../rules/swift.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
-import { withJudgeFailureDiagnostics } from '../rules/gates.js'
+import {
+  withJudgeFailureDiagnostics,
+  withContradictionRetry,
+} from '../rules/gates.js'
 
 // Acceptance test files live under AcceptanceTests/ (capital A) — the
 // parity scanners' default pattern expects a lowercase `acceptance/`
@@ -210,7 +213,7 @@ export function swiftRuleEntries(root: string): RuleEntry[] {
           withCharacterizationTest(
             withMutationProbe(
               withTelemetryFastPath(
-                withJudgeFailureDiagnostics(enforceTdd(), {
+                withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()), {
                   deterministicPaths: SWIFT_DETERMINISTIC_PATHS,
                 }),
                 {

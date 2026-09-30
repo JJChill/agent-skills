@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.4.4
+
+Fixes for a one-test Kotlin write that reached the AI judge and was
+denied by a reason that said it was permitted (#45), and for
+extracting a shared helper under green (#46).
+
+- **Kotlin fast path: a new test may reuse other tests' local names
+  (#45).** The fast path passes a write adding exactly one `@Test`
+  without an AI call. Its shadowing screen, which stops a write from
+  redefining something existing tests call, counted every `val`
+  inside the new test's body as a class-level declaration. Tests in
+  one file routinely declare the same locals (`val cli`,
+  `val composition`), so the #45 write went to the judge. Declarations
+  inside a function body, lambda, initializer or accessor are now
+  skipped: they are visible only there. Replayed on the recorded #45
+  write and the file as committed just before it: 0.4.3 called the
+  judge, 0.4.4 passes with no judge call.
+- **A deny that concludes "permitted" is judged again (#45), in every
+  preset.** Probity's judge answers `{"kind", "reason"}` in that
+  order, with thinking disabled, so it picks `kind` before it
+  reasons. The #45 block ended "... adds only ONE new test (the delete
+  test). This is permitted." and still denied; the identical retry
+  passed. New wrapper `withContradictionRetry` (in `rules/gates.ts`)
+  re-runs the judge once when a deny's last sentence says the write is
+  permitted, allowed, or should pass. The second verdict stands, deny
+  or pass. Every other verdict is untouched. The JS, Swift, Kotlin and
+  KMP presets all use it. Tested against the recorded #45 reason with
+  scripted verdicts; the contradiction did not recur in 6 live runs,
+  so the retry is not measured live.
+  Asking the judge to reason before choosing `kind` was tried and
+  rejected: it let a production write with no recorded failing test
+  through 5 of 8 times, against 0 of 8 without it.
+- **Moving tested logic into a shared helper is minimum green (#46),
+  Kotlin and KMP judge.** When a second use case's failing test needs
+  logic that production code already has, moving that logic into a
+  helper (and a small result type) is no longer over-implementation.
+  The helper may keep every branch the existing logic has. This
+  applies only when the same logic appears in the current file or in
+  a production file read or edited in the recent session. A helper
+  whose logic appears nowhere else still needs its own red. Live
+  judge on a replica: 0.4.3 allowed 0 of 6, 0.4.4 allowed 8 of 8.
+  Three negative controls stayed denied 8 of 8: the same helper with
+  no sign of the logic in the session, moved logic plus one new
+  branch, and a production write whose test was sent but never run.
+- **Parallel dependent edits (#46): documentation only.** Each write
+  is judged against the file on disk, before its siblings land, and
+  the judge cannot tell a parallel sibling from a finished write.
+  Telling it that a session action with no output yet is an in-flight
+  sibling was tried and dropped. Where the sibling is visible, 0.4.3
+  already allowed the call-site edit (6 of 6), and the instruction let
+  a production write through when its test had only been sent and
+  never run (6 of 6 allowed; 0.4.3 denied 6 of 6). `hooks/PROBITY.md`
+  now says to send dependent edits one after another, and to extract a
+  helper in place in the file that holds the logic before calling it
+  from elsewhere.
+
 ## 0.4.3
 
 The Kotlin TDD judge no longer blocks adding a new red test (#43).

@@ -25,6 +25,7 @@ import {
   JS_AMBIENT_EFFECT_PATTERNS,
   requireGreenTestRun,
   withJudgeFailureDiagnostics,
+  withContradictionRetry,
 } from '../rules/gates.js'
 import {
   enforcePortsBoundary,
@@ -228,7 +229,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   // screen, never after a model call.
   entries.push({
     files: tddGlobs,
-    rules: [withJudgeFailureDiagnostics(enforceTdd())],
+    rules: [withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()))],
   })
 
   // ── Outer loop: acceptance-testing ──────────────────────────────

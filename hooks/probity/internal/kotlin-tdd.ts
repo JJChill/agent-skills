@@ -1,6 +1,9 @@
 import { enforceTdd, type Rule } from '@nizos/probity'
 
-import { withJudgeFailureDiagnostics } from '../rules/gates.js'
+import {
+  withJudgeFailureDiagnostics,
+  withContradictionRetry,
+} from '../rules/gates.js'
 
 const KOTLIN_DETERMINISTIC_PATHS =
   'Writes that never call the judge still go through: a test-source write ' +
@@ -14,6 +17,7 @@ const KOTLIN_TDD_ADDENDUM = `## Kotlin/JVM TDD clarification
 - Kotlin-specific exception to the generic placeholder guidance: when a targeted, relevant Kotlin test executes a \`TODO()\` placeholder and reports \`kotlin.NotImplementedError\`, that runtime failure is a clean red. Do not require a second run that reaches an assertion before replacing the placeholder. The implementation remains bounded by the assertions present in the relevant test source visible in the recent session.
 - A compile, unresolved-import, or signature failure is not a clean red. It authorizes only placeholder, signature, or scaffolding work needed to make the test runnable; it does not authorize implementing the asserted behavior.
 - One observed failing test may require one cohesive green write across multiple methods or branches when every changed method and branch is required by assertions present in that same relevant test source. No artificial test rerun is required between parts of that one atomic write. If the relevant assertions are not visible in the recent session, the red authorizes placeholder or scaffolding work only; do not infer that it authorizes production behavior.
+- Moving existing, tested logic is not new behavior. Suppose a green write moves logic that production code already has into a shared helper, including any small result type the helper needs, so that the code path an observed failing test needs can call it. That is the minimum green for that test, not over-implementation, as long as the same logic appears in the current file content or in a production file read or edited in the recent session. The behavior already exists and is covered; only its location changes. The helper keeps every branch the existing logic has, and the result cases for them, even when the new failing test asserts only one of them: those branches are moved, not added, and the first caller's tests cover them. Do not require the helper to be trimmed to what the new test asserts, and do not require the logic to be duplicated in the second caller instead. A helper holding logic that appears nowhere else in the session is still new behavior and needs its own red.
 - Git staging and git-index state are irrelevant. Judge only the recent session evidence, current file content, and pending action; do not require a test or production file to be staged.`
 
 /**
@@ -25,11 +29,13 @@ const KOTLIN_TDD_ADDENDUM = `## Kotlin/JVM TDD clarification
  */
 export function enforceKotlinTdd(): Rule {
   return withJudgeFailureDiagnostics(
-    enforceTdd({
-      instructions: (defaults) => `${defaults}\n\n${KOTLIN_TDD_ADDENDUM}`,
-      maxEvents: 20,
-      maxContentChars: 6_000,
-    }),
+    withContradictionRetry(
+      enforceTdd({
+        instructions: (defaults) => `${defaults}\n\n${KOTLIN_TDD_ADDENDUM}`,
+        maxEvents: 20,
+        maxContentChars: 6_000,
+      }),
+    ),
     { deterministicPaths: KOTLIN_DETERMINISTIC_PATHS },
   )
 }
