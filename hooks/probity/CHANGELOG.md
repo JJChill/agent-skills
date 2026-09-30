@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.5
+
+The Kotlin and KMP TDD judge no longer blocks a behavior-preserving
+extraction under green (#48).
+
+- **Moving tested logic into a helper is allowed as a refactor, not
+  only as green.** The 0.4.4 instruction for #46 described the move
+  only as a green step for a failing test. The judge then read it as
+  the sole way an extraction could pass, and required a fresh red for
+  a plain refactor. Removing duplicated logic from two use cases was
+  blocked with every test green: "the move-existing-logic allowance
+  requires ... a failing test needing this call path". The
+  instruction now names both phases. In green, the move serves a
+  failing test. In refactor, no failing test is needed when the most
+  recent relevant test or build run passed and none is outstanding.
+  It also says a move includes rewiring a caller to the helper, and
+  renaming the helper, its parameters or its result type. A helper
+  with logic that appears nowhere in the session, or a move that adds
+  a branch, still needs its own red.
+  Live judge on a replica of the recorded #48 session (green build,
+  both copies grepped, no failing test): adding the helper was allowed
+  2 of 6 times on 0.4.4 and 8 of 8 on 0.4.5. Rewiring a caller passed
+  on both. Controls stayed denied 8 of 8 on 0.4.5: a helper with new
+  logic under green, moved logic plus a new branch, and the three
+  0.4.4 controls.
+
 ## 0.4.4
 
 Fixes for a one-test Kotlin write that reached the AI judge and was
