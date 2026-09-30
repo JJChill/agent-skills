@@ -40,15 +40,16 @@ test('spend-limit output reads as an infrastructure failure, still blocked', asy
   assert.doesNotMatch(result.reason ?? '', /could not parse verdict/)
 })
 
-test('other unparsable output gets the generic provider check', async () => {
+test('other unparsable output says a retry may help, not that the judge is down', async () => {
   const result = await withJudgeFailureDiagnostics(
     fixed({
       kind: 'violation',
       reason: 'could not parse verdict from validator output: I think this is fine',
     }),
   )(write)
-  assert.match(result.reason ?? '', /Check the judge provider/)
-  assert.doesNotMatch(result.reason ?? '', /usage-credits/)
+  assert.match(result.reason ?? '', /not in the expected format/)
+  assert.match(result.reason ?? '', /check the judge provider/)
+  assert.doesNotMatch(result.reason ?? '', /usage-credits|will not help/)
 })
 
 test('shape errors keep where the shape broke', async () => {

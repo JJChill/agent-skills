@@ -441,26 +441,78 @@ const PROVIDER_UNAVAILABLE =
 
 const JUDGE_OUTPUT_EXCERPT = 300
 
+// Failures a second judge call can fix: output that was not a valid
+// verdict, or an SDK stream that ended without one. Not retried: a
+// missing AI agent (configuration) and a provider that reports it is
+// unavailable (spend limit, quota, rate limit, auth) — see
+// PROVIDER_UNAVAILABLE.
+const TRANSIENT_JUDGE_FAILURE =
+  /^(?:could not parse verdict from validator output|validator returned unexpected shape|expected string result from validator|no result message received)/
+
+const UNPARSED_OUTPUT = /^could not parse verdict from validator output:\s*/
+
+function judgeOutput(reason: string): string {
+  return reason.replace(JUDGE_FAILURE_REASON, '').replace(/^\s*:/, '').trim()
+}
+
+function isTransientFailure(reason: string): boolean {
+  return TRANSIENT_JUDGE_FAILURE.test(reason) && !PROVIDER_UNAVAILABLE.test(judgeOutput(reason))
+}
+
+/**
+ * The reason of a deny the judge wrote as broken JSON (an unescaped
+ * quote or line break in `reason`, or an answer cut off mid-string),
+ * or null when the output does not read as a deny. Anchors on the last
+ * `"kind"`, as Probity's own parser takes the verdict from the end.
+ */
+function salvagedDenyReason(failureReason: string): string | null {
+  if (!UNPARSED_OUTPUT.test(failureReason)) return null
+  const output = failureReason.replace(UNPARSED_OUTPUT, '')
+  const kinds = [...output.matchAll(/"kind"\s*:\s*"(pass|violation)"/g)]
+  const last = kinds.at(-1)
+  if (!last || last[1] !== 'violation') return null
+  const rest = output.slice(last.index! + last[0].length)
+  const field = /"reason"\s*:\s*"/.exec(rest)
+  if (!field) return null
+  const text = rest
+    .slice(field.index + field[0].length)
+    .replace(/"\s*\}\s*(?:```)?\s*$/, '')
+    .replace(/\\n/g, '\n')
+    .replace(/\\"/g, '"')
+    .trim()
+  return text || null
+}
+
 /**
  * Wraps an AI-validated rule so that a judge that returned no verdict
- * — a billing/spend-limit notice, an auth error, empty or non-JSON
- * output — is reported as an infrastructure failure instead of reading
- * as a policy verdict on the write.
+ * is handled by cause, instead of reading as a policy verdict on the
+ * write.
  *
  * Why: Probity fails closed when it cannot parse the judge's output,
  * which is correct, but the deny text ("could not parse verdict from
- * validator output: You've hit your org's monthly spend limit…") looks
- * like a rejection of the change. Agents respond by rewording or
- * splitting the write and retrying, which cannot help. The rewritten
- * reason names the judge, says the write itself was not judged, and
- * points at the fix (restore the provider) and at the deterministic
- * paths that never call the judge.
+ * validator output: …") looks like a rejection of the change. There
+ * are two different causes, and they need opposite advice:
  *
- * The verdict is unchanged — the write is still blocked. Only the
- * reason text of a judge-failure violation is rewritten; genuine
- * verdicts and passes pass through untouched. The wrapper keeps the
- * wrapped rule's name, so traces and block reports still identify the
- * rule that failed.
+ * - The provider is unavailable (spend limit, quota, rate limit, auth)
+ *   or no AI agent is configured. No retry is made; the reason says
+ *   the write was not judged and that retrying will not help until
+ *   the judge is back.
+ * - The judge answered, but not as a valid verdict (issue #52): an
+ *   unescaped quote or line break inside `reason`, an answer cut off
+ *   mid-string, or prose. The judge is asked once more and a
+ *   well-formed second verdict stands. If the second answer is still
+ *   malformed but reads as a deny, it is reported as the policy block
+ *   it is, with the judge's reason quoted in full. Anything else stays
+ *   blocked, and the reason says retrying the same write may succeed.
+ *
+ * Agents already retry a blocked write, so the automatic retry changes
+ * what the agent is told, not how many chances the write gets. Inside
+ * the presets' `withContradictionRetry`, the worst case is three judge
+ * calls, and only when both anomalies occur.
+ *
+ * Genuine verdicts and passes pass through untouched. The wrapper keeps
+ * the wrapped rule's name, so traces and block reports still identify
+ * the rule that failed.
  *
  * @param rule — the AI-validated rule to wrap.
  * @param options.deterministicPaths — sentence listing the writes this
@@ -472,21 +524,51 @@ export function withJudgeFailureDiagnostics(
   rule: Rule,
   options: { deterministicPaths?: string } = {},
 ): Rule {
+  const judge = rule.name || 'rule'
   const wrapped = async function judgeFailureDiagnostics(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
-    const result = await rule(action, ctx)
+    let result = await rule(action, ctx)
+    if (result.kind === 'violation' && isTransientFailure(result.reason ?? '')) {
+      result = await rule(action, ctx)
+    }
     if (result.kind !== 'violation') return result
     const reason = result.reason ?? ''
     if (!JUDGE_FAILURE_REASON.test(reason)) return result
-    const output = reason.replace(JUDGE_FAILURE_REASON, '').replace(/^\s*:/, '').trim()
+    const output = judgeOutput(reason)
     const excerpt =
       output.length > JUDGE_OUTPUT_EXCERPT
         ? `${output.slice(0, JUDGE_OUTPUT_EXCERPT)}…`
         : output
+
+    if (isTransientFailure(reason)) {
+      const denied = salvagedDenyReason(reason)
+      if (denied) {
+        return {
+          ...result,
+          reason:
+            `Probity's AI judge (${judge}) denied this write. Its answer was ` +
+            'not valid JSON, so its reason is quoted as written:\n\n' +
+            denied,
+        }
+      }
+      const lines = [
+        `Probity's AI judge (${judge}) answered twice, but not in the ` +
+          'expected format, so this write was not judged and stays blocked ' +
+          '(fail closed). This is usually a one-off formatting slip: ' +
+          'retrying the same write may succeed. If it keeps happening, ' +
+          'check the judge provider (network, model availability).',
+      ]
+      if (options.deterministicPaths) lines.push(options.deterministicPaths)
+      // In full (Probity caps it at 4,000 characters): the judge did
+      // answer, and its text is the evidence for an issue report.
+      lines.push('Do not bypass the hook. Judge output: ' + (output || '(empty)'))
+      return { ...result, reason: lines.join('\n\n') }
+    }
+
     const lines = [
-      `Probity's AI judge (${rule.name || 'rule'}) returned no verdict, so ` +
+      `Probity's AI judge (${judge}) returned no verdict, so ` +
         'this write was NOT judged — this is an infrastructure failure, not ' +
         'a policy decision about your change. The write stays blocked ' +
         '(fail closed). Rewording, splitting, or retrying the same write ' +
@@ -503,6 +585,6 @@ export function withJudgeFailureDiagnostics(
     lines.push('Do not bypass the hook. Judge output: ' + (excerpt || '(empty)'))
     return { ...result, reason: lines.join('\n\n') }
   }
-  Object.defineProperty(wrapped, 'name', { value: rule.name || 'rule' })
+  Object.defineProperty(wrapped, 'name', { value: judge })
   return wrapped
 }
