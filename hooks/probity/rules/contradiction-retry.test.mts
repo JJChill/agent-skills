@@ -59,10 +59,42 @@ test('the second verdict stands when it denies again', async () => {
   assert.equal(calls(), 2)
 })
 
+// Issue #50, the judge's reason as recorded: it ends in a bare "Pass.".
+const BARE_PASS =
+  'The green write for the reset test also introduces DEFAULT_GREETING, ' +
+  'but that constant is not defined anywhere in the pending file (the ' +
+  'companion object still only has VOICEMAIL_MEDIA_TYPE), so this alone ' +
+  'is a transient reference — allowed. However, the reset implementation ' +
+  'reuses pointGreeting, and the observed failing test asserts a PUT with ' +
+  'greeting=/greeting/default and Default result, which this satisfies ' +
+  'minimally. The real issue: the pending write points at DEFAULT_GREETING ' +
+  '= "/greeting/default" via a constant not present in the file, which is ' +
+  'fine transiently. Reconsidering: this is a minimal green satisfying the ' +
+  'single failing reset test by delegating to the existing pointGreeting ' +
+  'move. It is not over-implementation. Pass.'
+
+for (const reason of [
+  BARE_PASS,
+  'Re-examining the diff, it adds one test. Verdict: pass.',
+  'The helper only moves existing logic. So, allowed.',
+  'Reconsidering: the write only moves covered logic, so it is not a violation.',
+  'On reflection the extra branch is required by the assertion; this is not over-implementation.',
+]) {
+  test(`a deny concluding it passes is retried: ${reason.slice(-40)}`, async () => {
+    const { rule, calls } = sequence({ kind: 'violation', reason }, { kind: 'pass' })
+    const result = await withContradictionRetry(rule)(write)
+    assert.equal(result.kind, 'pass')
+    assert.equal(calls(), 2)
+  })
+}
+
 for (const reason of [
   'This write adds two new tests. This is not permitted.',
   'Over-implementation: the NotSent branch is not required by the failing test.',
   'Adding a test is permitted, but this production write has no observed red.',
+  'The green adds an unasserted branch even though the tests pass.',
+  'The tests pass. The NotSent branch is still over-implementation.',
+  'This does not pass.',
 ]) {
   test(`a consistent deny is not retried: ${reason.slice(0, 40)}`, async () => {
     const { rule, calls } = sequence({ kind: 'violation', reason })

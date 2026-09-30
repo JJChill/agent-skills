@@ -369,12 +369,21 @@ export function surfaceRemovedStringUsage(options: {
   }
 }
 
-// A deny reason whose last sentence concludes the write is allowed,
-// e.g. "... adds only ONE new test. This is permitted." Negated forms
-// ("is not permitted") and qualified ones ("permitted, but ...") in an
-// earlier clause do not match.
-const PERMITTED_CONCLUSION =
-  /\b(?:is|are) (?:permitted|allowed|acceptable|valid)\.?\s*$|\bshould (?:pass|be allowed)\.?\s*$|\bno violation\.?\s*$/i
+// A deny reason whose last sentence concludes the write is allowed:
+// "... This is permitted." (#45), a bare verdict word such as "Pass."
+// or "Verdict: pass." (#50), or "... is not over-implementation."
+// Negated forms ("is not permitted", "does not pass"), qualified ones
+// ("permitted, but ...") and "the tests pass" do not match.
+const PERMITTED_CONCLUSION = new RegExp(
+  [
+    String.raw`\b(?:is|are) (?:permitted|allowed|acceptable|valid)\.?\s*$`,
+    String.raw`\bshould (?:pass|be allowed)\.?\s*$`,
+    String.raw`\bno violation\.?\s*$`,
+    String.raw`^(?:so,?\s+|verdict:\s*|therefore,?\s+)?(?:pass(?:es|ed)?|allow(?:ed)?|permitted)\.?\s*$`,
+    String.raw`\b(?:is|are) not (?:a violation|over-implementation|under-implementation)\.?\s*$`,
+  ].join('|'),
+  'i',
+)
 
 /**
  * Wraps an AI-validated rule so that a deny whose own reason concludes

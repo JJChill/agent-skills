@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.6
+
+A TDD judge deny that ends in a bare "Pass." is now judged again (#50).
+
+- `withContradictionRetry` (0.4.4, all presets) re-runs the judge once
+  when a deny's last sentence concludes the write is allowed. It only
+  recognised phrases like "This is permitted." and "should pass". A
+  recorded deny ended "Reconsidering: ... It is not
+  over-implementation. Pass." and was not retried; the identical write
+  passed on the agent's own retry. The pattern now also matches a bare
+  verdict word ("Pass.", "Allowed.", optionally after "So," or
+  "Verdict:") and a closing "is not over-implementation" or "is not a
+  violation". It still ignores "does not pass", "is not permitted",
+  and sentences like "the tests pass". The second verdict still
+  stands, deny or pass. Tested with scripted verdicts, including the
+  recorded #50 reason.
+
 ## 0.4.5
 
 The Kotlin and KMP TDD judge no longer blocks a behavior-preserving
