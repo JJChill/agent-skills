@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
@@ -153,7 +153,12 @@ export function extractCoversRefs(testFile: string, content: string): CoversRef[
   return refs
 }
 
-function walk(dir: string, out: string[] = []): string[] {
+function walk(dir: string, out: string[] = [], top = true): string[] {
+  // A directory holding a `.git` FILE is another working tree — a
+  // linked `git worktree` (Claude Code puts sub-agent worktrees at
+  // .claude/worktrees/<name>/) or a submodule. Its Covers tags claim
+  // scenarios for that checkout, never for this one (issue #55).
+  if (!top && isFile(join(dir, '.git'))) return out
   let entries
   try {
     entries = readdirSync(dir, { withFileTypes: true })
@@ -162,12 +167,20 @@ function walk(dir: string, out: string[] = []): string[] {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name), out)
+      if (!SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name), out, false)
     } else {
       out.push(join(dir, entry.name))
     }
   }
   return out
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 const DEFAULT_TEST_FILE_PATTERN = /[/\\]acceptance[/\\]/

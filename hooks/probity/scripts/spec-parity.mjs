@@ -51,7 +51,7 @@
  * spec can convert one file at a time with parity green throughout. The
  * same stem in both extensions at once is rejected (unfinished rename).
  */
-import { readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import process from 'node:process'
 
@@ -129,7 +129,12 @@ function normalizeTitle(title) {
 const specStem = (name) => basename(name).replace(/\.feature(?:\.md)?$/i, '')
 const key = (specFile, title) => `${specStem(specFile)} :: ${normalizeTitle(title)}`
 
-function walk(dir, out = []) {
+function walk(dir, out = [], top = true) {
+  // A directory holding a `.git` FILE is another working tree — a linked
+  // `git worktree` (Claude Code puts them at .claude/worktrees/<name>/) or
+  // a submodule. Its Covers tags claim scenarios for that checkout, never
+  // for this one (issue #55).
+  if (!top && isFile(join(dir, '.git'))) return out
   let entries
   try {
     entries = readdirSync(dir, { withFileTypes: true })
@@ -138,12 +143,20 @@ function walk(dir, out = []) {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name), out)
+      if (!SKIP_DIRS.has(entry.name)) walk(join(dir, entry.name), out, false)
     } else {
       out.push(join(dir, entry.name))
     }
   }
   return out
+}
+
+function isFile(path) {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
 }
 
 const splitScopeList = (raw) =>

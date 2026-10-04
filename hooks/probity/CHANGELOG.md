@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.8
+
+Spec↔test parity no longer counts Covers tags from other checkouts
+nested inside the project (#55).
+
+- **What went wrong.** The `probity-spec-parity` CLI and the
+  `enforceSpecTestParity` and `surfaceScenarioLinkBreakage` rules
+  walked every directory under the test roots. That included linked git worktrees Claude Code
+  creates at `.claude/worktrees/<name>/`, which are full checkouts with
+  their own `// Covers:` tags. In #55 a parity run reported 510 Covers
+  tags for 257 scenarios, about twice the real number. A scenario
+  claimed only by a test in the nested worktree counted as covered in
+  the main checkout, so the gate could pass with no test for it there.
+- **Now:** the scan skips any directory below a root that holds a
+  `.git` file (a linked worktree or submodule), as the marker gates
+  have since 0.4.2 (#39). A root that is itself a linked worktree is
+  still scanned.
+- Not changed: a commit made inside a nested worktree is still gated
+  against the hook's own checkout, not the worktree's (the marker
+  gates retarget; the parity gate does not).
+
 ## 0.4.7
 
 A judge answer that is not valid JSON is no longer reported as an

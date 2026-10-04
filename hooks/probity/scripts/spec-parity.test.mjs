@@ -144,5 +144,46 @@ const coversTag = (ext) =>
   rmSync(d, { recursive: true, force: true })
 }
 
+// 10. Issue #55: a linked git worktree nested in the scanned root (Claude
+// Code puts them at .claude/worktrees/<name>/, marked by a `.git` FILE)
+// is another checkout. Its Covers tags must not count for this one.
+{
+  const nested = '.claude/worktrees/other'
+  const d = workspace({
+    'specs/sample.feature.md': MD_SPEC,
+    [`${nested}/.git`]: 'gitdir: /elsewhere/.git/worktrees/other\n',
+    [`${nested}/${coversMd}`]: coversTag('feature.md'),
+  })
+  const { code, out } = run(d)
+  check('scenario covered only in a nested worktree -> orphan (exit 1)', code === 1 && /no covering acceptance test/i.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 11. Issue #55: with the tag in both trees, only this tree's tag counts.
+{
+  const nested = '.claude/worktrees/other'
+  const d = workspace({
+    'specs/sample.feature.md': MD_SPEC,
+    [coversMd]: coversTag('feature.md'),
+    [`${nested}/.git`]: 'gitdir: /elsewhere/.git/worktrees/other\n',
+    [`${nested}/${coversMd}`]: coversTag('feature.md'),
+  })
+  const { code, out } = run(d)
+  check('nested worktree tags not counted (1 Covers tag resolved)', code === 0 && /, 1 Covers tag\(s\) resolved/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 12. Issue #55: a --tests root that is itself a linked worktree is still scanned.
+{
+  const d = workspace({
+    'specs/sample.feature.md': MD_SPEC,
+    '.git': 'gitdir: /elsewhere/.git/worktrees/this\n',
+    [coversMd]: coversTag('feature.md'),
+  })
+  const { code } = run(d)
+  check('scanned root that is a linked worktree -> still scanned (exit 0)', code === 0)
+  rmSync(d, { recursive: true, force: true })
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)
