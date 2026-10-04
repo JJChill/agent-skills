@@ -17,6 +17,10 @@
       {
         "prompt": "Review this diff before I merge it. It adds paging to the orders endpoint.",
         "top_k": 3
+      },
+      {
+        "prompt": "Review the changes on this branch to sdk/anonyome before I merge.",
+        "top_k": 3
       }
     ],
     "negative": [

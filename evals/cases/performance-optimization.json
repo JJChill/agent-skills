@@ -21,6 +21,10 @@
       {
         "prompt": "Core Web Vitals are failing, improve our LCP",
         "top_k": 3
+      },
+      {
+        "prompt": "The CLI takes several seconds to list 200 Sudos at runtime. Find out why.",
+        "top_k": 3
       }
     ],
     "negative": [
@@ -31,6 +35,10 @@
       {
         "prompt": "Design the public interface for the billing module",
         "owner": "api-and-interface-design"
+      },
+      {
+        "prompt": "The CLI crashes when listing Sudos that have no avatar. Find out why.",
+        "owner": "debugging-and-error-recovery"
       }
     ]
   },
