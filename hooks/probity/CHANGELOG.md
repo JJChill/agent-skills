@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.10
+
+The spec↔test parity gate now checks the worktree a commit is made in
+(#57).
+
+- **What went wrong.** `enforceSpecTestParity` always checked the
+  hook's own checkout, the project root. Claude Code puts
+  `isolation: "worktree"` sub-agents in linked worktrees inside the
+  project (`.claude/worktrees/<name>/`). A commit made there was
+  checked against the main checkout's staged files, which usually
+  touch no specs or acceptance tests, so the gate passed without
+  looking. A sub-agent could commit a new scenario with no covering
+  test. The gate also missed `git -C <dir> commit` entirely: it only
+  fired on the literal text `git commit`.
+- **Now:** like the marker gates (#39), the gate reads the commit's
+  directory from `git -C <dir> commit` or `cd <dir> && git commit`.
+  When that is a git working tree nested inside the project, the gate
+  checks that tree. `specsDir`, `testRoots` and `baselinePath` under
+  the project root are mapped to the same paths inside it, and the
+  staged-file listing runs there. A scenario left uncovered in the main
+  checkout no longer blocks a worktree's commit, and the reverse.
+- The gate now fires on `git -C <dir> commit` and
+  `git -c key=value commit` as well.
+- `listCommitFiles` (the test hook option) now also receives the root
+  of the tree being committed as a second argument. One-argument
+  functions keep working.
+- Internal: the commit-target helpers the marker gates used moved to
+  `rules/commit-target.ts`, shared by both rules.
+
 ## 0.4.9
 
 Long sessions no longer lock every commit once the session transcript

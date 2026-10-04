@@ -1,7 +1,6 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { join, relative, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
@@ -12,6 +11,7 @@ import {
   transcriptLimitViolation,
   type NamedPattern,
 } from './gates.js'
+import { GIT_COMMIT, nestedCommitTree } from './commit-target.js'
 
 /**
  * Kotlin/JVM/Android preset for the ports-and-adapters rules. The
@@ -1091,42 +1091,6 @@ function isFile(path: string): boolean {
   }
 }
 
-function canonical(path: string): string {
-  try {
-    return realpathSync(path)
-  } catch {
-    return resolve(path)
-  }
-}
-
-// `git commit`, including global options before the subcommand
-// (`git -C <dir> commit`, `git -c key=value commit`).
-const GIT_COMMIT = /\bgit(?:\s+-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit\b/
-
-// The directory a `git commit` command acts in: `git -C <dir>`, else a
-// leading `cd <dir> &&`, else the hook's own working directory.
-function commitDirectory(command: string): string {
-  const unquote = (value: string) => value.replace(/^(['"])(.*)\1$/, '$2')
-  const gitDashC = command.match(/\bgit\s+-C\s+("[^"]+"|'[^']+'|\S+)[^;&|]*\bcommit\b/)
-  const cd = command.match(/(?:^|&&|;)\s*cd\s+("[^"]+"|'[^']+'|[^\s;&|]+)\s*(?:&&|;)[^]*\bgit\b[^;&|]*\bcommit\b/)
-  const target = gitDashC?.[1] ?? cd?.[1]
-  if (!target) return process.cwd()
-  const dir = unquote(target)
-  return isAbsolute(dir) ? dir : resolve(process.cwd(), dir)
-}
-
-function gitToplevel(dir: string): string | null {
-  try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-  } catch {
-    return null
-  }
-}
-
 /**
  * Files under the scanned roots that carry `marker`, as paths relative
  * to the tree scanned. When the commit targets a git working tree
@@ -1140,16 +1104,8 @@ function markedFiles(
   filePattern: RegExp,
   marker: RegExp,
 ): string[] {
-  const commitDir = commitDirectory(command)
-  const top = existsSync(commitDir) ? gitToplevel(commitDir) : null
   return roots.flatMap((root) => {
-    let scanned = root
-    if (top) {
-      const within = relative(canonical(root), canonical(top))
-      if (within !== '' && !within.startsWith('..') && !isAbsolute(within)) {
-        scanned = top
-      }
-    }
+    const scanned = nestedCommitTree(command, root) ?? root
     return walkFiles(scanned)
       .filter((file) => filePattern.test(file))
       .filter((file) => {
