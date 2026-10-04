@@ -171,5 +171,34 @@ const commit = { kind: 'command', command: 'git commit -m x' } as const
   }
 }
 
+// 10. Issue #55: Covers tags in a linked git worktree nested inside the
+// test root (.claude/worktrees/<name>/, marked by a `.git` FILE) belong
+// to that checkout and must not cover this one's scenarios.
+{
+  const nested = '.claude/worktrees/other'
+  const dir = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  Scenario: Plain\n    Given a\n    Then b\n',
+    [`${nested}/.git`]: 'gitdir: /elsewhere/.git/worktrees/other\n',
+    [`${nested}/tests/T.swift`]: '// Covers: sample.feature :: Scenario: Plain\nfunc testPlain(){}\n',
+  })
+  const rule = enforceSpecTestParity({ specsDir: join(dir, 'specs'), testRoots: [dir], testFilePattern: /tests/ })
+  const res = await rule(commit as any)
+  check('rule: scenario covered only in a nested worktree -> violation', res.kind === 'violation' && /Plain/.test((res as any).reason))
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// 11. Issue #55: a test root that is itself a linked worktree is still scanned.
+{
+  const dir = workspace({
+    '.git': 'gitdir: /elsewhere/.git/worktrees/this\n',
+    'specs/sample.feature': 'Feature: F\n\n  Scenario: Plain\n    Given a\n    Then b\n',
+    'tests/T.swift': '// Covers: sample.feature :: Scenario: Plain\nfunc testPlain(){}\n',
+  })
+  const rule = enforceSpecTestParity({ specsDir: join(dir, 'specs'), testRoots: [dir], testFilePattern: /tests/ })
+  const res = await rule(commit as any)
+  check('rule: test root that is a linked worktree -> still scanned (pass)', res.kind === 'pass')
+  rmSync(dir, { recursive: true, force: true })
+}
+
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)
