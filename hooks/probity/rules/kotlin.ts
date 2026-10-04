@@ -9,6 +9,7 @@ import {
   introducedPatterns,
   requireGreenTestRun as requireGreenTestRunGeneric,
   transcriptLimitViolation,
+  type GreenRunOptions,
   type NamedPattern,
 } from './gates.js'
 import { GIT_COMMIT, nestedCommitTree } from './commit-target.js'
@@ -918,6 +919,30 @@ function kotlinDefaultExtraFailure(output: string): boolean {
   if (isMalformedKiroEnvelope(output)) return true
   const exitStatus = parseKiroExitStatus(output)
   return exitStatus !== null && exitStatus !== KIRO_ZERO_EXIT_STATUS
+}
+
+/** Production Kotlin source sets: `src/main/` and `src/<target>Main/` (commonMain, jvmMain, ...). */
+export const KOTLIN_PRODUCTION_SOURCE_PATTERN =
+  /(?:^|[/\\])src[/\\](?:main|[A-Za-z0-9]+Main)[/\\]/
+
+/**
+ * The green-run options the Kotlin commit gate uses (task policy, banners,
+ * Kiro exit status), for `withExtractionUnderGreen`. A custom `command`
+ * keeps the banners but drops the Gradle-specific predicates, as
+ * `requireGreenTestRun` does.
+ */
+export function kotlinGreenRunOptions(command: RegExp = GRADLE_TEST_COMMAND): GreenRunOptions {
+  const isDefault = command === GRADLE_TEST_COMMAND
+  return {
+    command,
+    commandPredicate: isDefault ? isKotlinDefaultGradleCommand : undefined,
+    successPattern: DEFAULT_SUCCESS_PATTERN,
+    extraSuccessPredicate: isDefault ? kotlinDefaultExtraSuccess : undefined,
+    failurePattern: DEFAULT_FAILURE_PATTERN,
+    extraFailurePredicate: isDefault
+      ? (_command, output) => kotlinDefaultExtraFailure(output)
+      : undefined,
+  }
 }
 
 const DEFAULT_GRADLE_GREEN_REASON =

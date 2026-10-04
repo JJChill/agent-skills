@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.4.14
+
+Extracting existing code into a new file under green now passes in the
+Kotlin and KMP presets (#70).
+
+- **What went wrong.** In #70, after a green `./gradlew build`, moving a
+  547-line JVM composition function into `commonMain` behind an
+  interface was blocked twice as "net-new logic": the new
+  `ClientComposition.kt` ("a parallel new common-source entry point")
+  and the new `JvmPlatformAdapters.kt` implementing the interface. The
+  Kotlin TDD judge sees each session event clipped to 6,000 characters,
+  head and tail. The 26,934-character source file it was moved from was
+  mostly invisible, and the original still on disk read as duplication.
+- **Now:** a new wrapper, `withExtractionUnderGreen` (in `gates.ts`,
+  exported), sits around the Kotlin TDD judge. When a write creates a
+  new production file and the latest matching build or test run in the
+  session was green, it gives a separate judge the full, current
+  on-disk content of the production files the session read or edited
+  (up to 120,000 characters, most-related first) and asks whether every
+  behavior in the new file is already there. A yes passes the write
+  with an `extraction-under-green` trace note. Anything else, including
+  a judge error, falls through to the TDD judge, so the wrapper only
+  adds passes.
+- **Measured** by replaying the two real #70 writes with the session's
+  own transcript cut just before each one (3 runs each).
+  `JvmPlatformAdapters.kt` went from blocked 3/3 to allowed 3/3, all
+  through the new path. `ClientComposition.kt` was allowed 3/3 both
+  before and after; the real session's denial did not reproduce.
+  Controls: the same writes with one new behavior spliced in were
+  rejected by the extraction judge 6/6 and decided by the TDD judge as
+  before.
+- **Applies to** new production files only (`src/main/` and
+  `src/<target>Main/`). Edits to existing files are unchanged. The cost
+  is one extra AI call for a qualifying write, two when the extraction
+  judge declines.
+- New exports: `withExtractionUnderGreen`, `GreenRunOptions`, and in the
+  Kotlin rules `kotlinGreenRunOptions()` and
+  `KOTLIN_PRODUCTION_SOURCE_PATTERN`. `requireGreenTestRun` now shares
+  its green check with the wrapper; its behavior is unchanged.
+
 ## 0.4.13
 
 The adapter-observability judge no longer demands telemetry on calls
