@@ -29,6 +29,7 @@ function setup(opts: {
   history?: SessionEvent[]
   disk?: Record<string, string>
   verdict?: 'pass' | 'violation'
+  reason?: string
   target?: string
 } = {}) {
   const prompts: string[] = []
@@ -45,7 +46,7 @@ function setup(opts: {
     agent: {
       reason: async (prompt: string) => {
         prompts.push(prompt)
-        return { kind: opts.verdict ?? 'pass', reason: 'every function appears in ClientJvm.kt' }
+        return { kind: opts.verdict ?? 'pass', reason: opts.reason ?? 'every function appears in ClientJvm.kt' }
       },
     },
   } as unknown as RuleContext
@@ -75,8 +76,8 @@ test('a new production file under green is judged against the full on-disk sourc
   assert.ok(s.prompts[0]!.includes('fun composeClient()'))
 })
 
-test('when the extraction judge finds new logic, the TDD judge decides', async () => {
-  const s = setup({ verdict: 'violation' })
+test('when the extraction judge is unsure, the TDD judge decides', async () => {
+  const s = setup({ verdict: 'violation', reason: 'Could not match the retry loop to a shown source.\nFinding: unsure' })
   const result = await s.rule(s.action, s.ctx)
   assert.equal(s.prompts.length, 1)
   assert.equal(s.wrapped(), 1)
@@ -115,4 +116,27 @@ test('a green run after an earlier red still counts as green', async () => {
   const s = setup({ history: [red, read(SOURCE), green] })
   const result = await s.rule(s.action, s.ctx)
   assert.equal(result.kind, 'pass')
+})
+
+// The gap #71's replay found: a move with one new behavior spliced in was
+// recognized by the extraction judge, then let through by the TDD judge,
+// which can't see the full source either. Under green there is no failing
+// test to justify new behavior, so a confident "Finding: new behavior" blocks.
+test('new behavior the extraction judge names is blocked, not handed to the TDD judge', async () => {
+  const s = setup({ verdict: 'violation', reason: 'Most of it is moved. composeClient now rejects an http:// legacyServiceUrl; no source checks the scheme.\nFinding: new behavior' })
+  const result = await s.rule(s.action, s.ctx)
+  assert.equal(s.wrapped(), 0)
+  assert.equal(result.kind, 'violation')
+  const reason = result.kind === 'violation' ? result.reason : ''
+  assert.match(reason, /rejects an http:\/\/ legacyServiceUrl/)
+  assert.match(reason, /failing test/)
+  assert.doesNotMatch(reason, /Finding:/)
+})
+
+test('the extraction prompt asks for a final Finding line', async () => {
+  const s = setup()
+  await s.rule(s.action, s.ctx)
+  for (const finding of ['move', 'new behavior', 'unsure']) {
+    assert.ok(s.prompts[0]!.includes(`"Finding: ${finding}"`), finding)
+  }
 })

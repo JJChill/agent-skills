@@ -325,9 +325,13 @@ function isGreenRun(event: SessionEvent, options: GreenRunOptions): boolean {
 const EXTRACTION_RESPONSE_SPEC = `## Response format
 
 Respond with a single JSON object of exactly this shape:
-{"reason":"<your analysis>","kind":"pass"|"violation"}
+{"reason":"<your analysis> Finding: <move|new behavior|unsure>","kind":"pass"|"violation"}
 Write reason FIRST and set kind to the conclusion your reason reached —
-the two must agree. Return JSON only. No prose, no code fences.`
+the two must agree. The reason MUST end with the finding label, exactly
+one of "Finding: move" (kind pass), "Finding: new behavior" or
+"Finding: unsure" (kind violation). For example:
+{"reason":"Everything maps to createClient in Client.kt except a new scheme check: it throws on an http:// URL, which no shown source does. Finding: new behavior","kind":"violation"}
+Return JSON only. No prose, no code fences.`
 
 const EXTRACTION_INSTRUCTIONS = `## Role
 
@@ -363,8 +367,24 @@ Part of a move, never new behavior:
 Violation: anything in the pending file that no shown source performs,
 however small — a new branch or condition, a changed default or
 constant, an extra parameter that changes behavior, a new external
-call, new error handling, new logging or telemetry. Name it. When
-unsure whether something is present in the sources, it is a violation.`
+call, new error handling, new logging or telemetry.
+
+The finding (the reason's last words, see Response format):
+  - "Finding: move" — every behavior is in the shown sources (kind pass).
+  - "Finding: new behavior" — the pending file produces an outcome a
+    caller could observe that no shown source produces: a new rejection
+    or validation, a new external call or side effect, a changed literal
+    value or default, a new feature. Name it and where it is. Use this
+    only when you are certain (kind violation). A different route to an
+    outcome the sources already have is NOT new behavior: the same
+    cleanup and the same exception reached through try/catch instead of
+    a null check, logic moved into a caller or an implementation, a
+    loop rewritten as a collection call. If the other half of such a
+    restructuring is not shown, the finding is unsure.
+  - "Finding: unsure" — you could not match something, for example it
+    calls or replaces code with a type whose source is not shown (a
+    clock, a helper, a constant defined elsewhere). A substitution you
+    cannot verify is unsure, not new behavior (kind violation).`
 
 function mentionedPaths(history: readonly SessionEvent[]): string[] {
   const paths: string[] = []
@@ -401,9 +421,12 @@ const identifiers = (text: string): Set<string> =>
  * green. It gives a separate judge the current on-disk content, in
  * full, of the production files the session read or edited, and asks
  * whether every behavior in the new file is already there. A pass is
- * returned with an `extraction-under-green` note. Anything else,
- * including a judge error, falls through to the wrapped rule, so this
- * can only add passes.
+ * returned with an `extraction-under-green` note. When the judge names
+ * specific new behavior ("Finding: new behavior"), the write is blocked: the
+ * last run was green, so no failing test justifies it, and the wrapped
+ * TDD judge cannot see the full sources to catch it. A "Finding:
+ * unsure" answer, any other answer, or a judge error falls through to the
+ * wrapped rule.
  *
  * Sources come from disk (`ctx.readFile`), never from transcript text:
  * whatever is in a production file has already been through the gates.
@@ -478,6 +501,23 @@ export function withExtractionUnderGreen(
           kind: 'pass',
           reason: verdict.reason,
           notes: [{ kind: 'extraction-under-green' }],
+        }
+      }
+      // A move with new behavior spliced in: the last run is green, so no
+      // failing test justifies it. Block here rather than leave it to the
+      // TDD judge, which can't see the full sources either.
+      const reason = (verdict.reason ?? '').trim()
+      const findings = [...reason.matchAll(/Finding:\s*(move|new behavior|unsure)/gi)]
+      const last = findings[findings.length - 1]
+      const found = last?.[1]?.toLowerCase() === 'new behavior' ? last : undefined
+      if (found) {
+        return {
+          kind: 'violation',
+          reason:
+            'This new file moves existing code under green, but also adds ' +
+            `behavior the sources it came from do not have: ${reason.slice(0, found.index).trim()}\n` +
+            'Move the code as it is in this write, then add that behavior in ' +
+            'its own red-green step: a failing test for it first.',
         }
       }
     } catch {
