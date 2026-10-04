@@ -9,6 +9,7 @@ import {
   forbidNewAmbientEffects as forbidNewAmbientEffectsGeneric,
   introducedPatterns,
   requireGreenTestRun as requireGreenTestRunGeneric,
+  transcriptLimitViolation,
   type NamedPattern,
 } from './gates.js'
 
@@ -1500,7 +1501,12 @@ export function withCharacterizationTest(
             'together with the proof in hand.',
         }
       }
-      const history = (await ctx?.history?.()) ?? []
+      let history
+      try {
+        history = (await ctx?.history?.()) ?? []
+      } catch (error) {
+        return transcriptLimitViolation(error)
+      }
       const outputs = history.flatMap((event) =>
         event.kind === 'command' && 'output' in event && typeof event.output === 'string'
           ? [fullCommandOutput(event.output)]

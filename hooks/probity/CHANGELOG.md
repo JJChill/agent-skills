@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.9
+
+Long sessions no longer lock every commit once the session transcript
+passes 100 MiB (#54).
+
+- **What went wrong.** Probity refuses to read a transcript larger than
+  100 MiB. Every rule that reads session history (the commit-on-green
+  gate, the TDD judge, characterization-marker release) then failed
+  with `rule error: file at <path> exceeds 104857600 bytes`, on every
+  call, until the session was restarted and its context lost. Other
+  commands whose text contains `git commit`, such as a
+  `gh issue create` whose body quotes it, were blocked the same way.
+- **Now:** `probity-claude` checks the transcript's size before running
+  Probity. When it is over the limit, the wrapper copies its newest
+  32 MiB (whole lines only) to a private temp file, points Probity at
+  that copy, and deletes it when Probity exits. The gates only need
+  recent events: the last test run, the red before a green. A red or a
+  test run older than that window is no longer visible; rerun it.
+- When a rule still hits the limit (a project running Probity's bare
+  `probity` bin, or a Kiro session), it now denies with the cause and
+  the fix (use `probity-claude`, or start a new session) instead of an
+  opaque rule error. This covers `requireGreenTestRun`,
+  `withCharacterizationTest`, and every TDD judge wrapped by
+  `withJudgeFailureDiagnostics`. Any other failure to read history
+  still blocks as a rule error.
+- New export: `transcriptLimitViolation(error)` turns that error into
+  the deny above and rethrows anything else, for custom rules that
+  read `ctx.history()`.
+- Cost: once a transcript is over the limit, every hook call the
+  wrapper handles reads and writes that 32 MiB copy, whether or not a
+  rule reads history (tens of milliseconds on an SSD).
+- Consumers on the bare bin should switch the hook to `probity-claude`
+  (see PROBITY.md); no config change is needed.
+
 ## 0.4.8
 
 Spec↔test parity no longer counts Covers tags from other checkouts
