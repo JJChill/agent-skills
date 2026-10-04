@@ -52,7 +52,6 @@ Use the native plugin skills directly while that importer limitation applies:
 | Intended wrapper | Direct Antigravity invocation | Notes |
 |------------------|-------------------------------|-------|
 | `/spec` | `/agent-skills:spec-driven-development` | Writes a structured spec before code |
-| `/constraints` | `/agent-skills:constraint-driven-development` | Defines and enforces the project's quality bar |
 | `/planning` | `/agent-skills:planning-and-task-breakdown` | Antigravity's built-in `/planning` command is a separate plan-mode control |
 | `/build` | `/agent-skills:incremental-implementation` | Also invoke `/agent-skills:test-driven-development`; wrapper-only `/build auto` orchestration is unavailable |
 | `/test` | `/agent-skills:test-driven-development` | Runs the red-green-refactor workflow |

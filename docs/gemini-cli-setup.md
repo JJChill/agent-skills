@@ -107,12 +107,11 @@ This is useful when you want to ensure a specific workflow is followed without w
 
 ## Slash Commands
 
-The repo ships 9 slash commands under `.gemini/commands/`: 8 lifecycle commands plus the `/webperf` specialist audit. Gemini CLI auto-discovers them when you run from the project root.
+The repo ships 9 slash commands under `.gemini/commands/`: 7 lifecycle commands, the `/webperf` specialist audit, and `/probity-update` for projects that use the Probity enforcement layer. Gemini CLI auto-discovers them when you run from the project root.
 
 | Command | What it does |
 |---------|--------------|
 | `/spec` | Write a structured spec before writing code |
-| `/constraints` | Define and enforce the project's quality bar |
 | `/planning` | Break work into small, verifiable tasks |
 | `/build` | Implement the next task incrementally |
 | `/test` | Run TDD workflow — red, green, refactor |
@@ -120,6 +119,7 @@ The repo ships 9 slash commands under `.gemini/commands/`: 8 lifecycle commands 
 | `/code-simplify` | Reduce complexity without changing behavior |
 | `/ship` | Pre-launch checklist via parallel persona fan-out |
 | `/webperf` | Audit browser-facing apps for Core Web Vitals and performance issues |
+| `/probity-update` | Update the Probity enforcement layer: package upgrade, config migration, Kiro shim refresh, scope verification |
 
 Each command invokes the corresponding skill automatically — no manual skill loading required.
 
