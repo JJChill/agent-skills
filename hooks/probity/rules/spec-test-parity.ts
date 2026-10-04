@@ -4,6 +4,8 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
+import { canonical, GIT_COMMIT, gitToplevel, isWithin, nestedCommitTree } from './commit-target.js'
+
 /**
  * Spec↔test traceability for the `acceptance-testing` workflow:
  * every `## Scenario:` in a `*.feature.md` spec is claimed by an
@@ -234,11 +236,12 @@ type ScanOptions = {
    */
   baselinePath?: string
   /**
-   * Files the pending commit will record, relative to the repository root.
-   * Defaults to Git's staged set plus tracked modifications for
+   * Files the pending commit will record, relative to the root of the
+   * working tree being committed (`cwd`: the project, or a worktree nested
+   * in it). Defaults to Git's staged set plus tracked modifications for
    * `git commit -a`; injectable for deterministic tests.
    */
-  listCommitFiles?: (command: string) => string[]
+  listCommitFiles?: (command: string, cwd: string) => string[]
 }
 
 /** Parses a baseline file into normalized scenario keys. Missing file → empty set. */
@@ -293,9 +296,9 @@ function formatList(lines: string[], max = 10): string {
   return shown.join('\n')
 }
 
-function defaultListCommitFiles(command: string): string[] {
+function defaultListCommitFiles(command: string, cwd = process.cwd()): string[] {
   const run = (args: string[]): string[] =>
-    execFileSync('git', args, { cwd: process.cwd(), encoding: 'utf8' })
+    execFileSync('git', args, { cwd, encoding: 'utf8' })
       .split('\n')
       .map((line) => line.trim())
       .filter(Boolean)
@@ -306,11 +309,6 @@ function defaultListCommitFiles(command: string): string[] {
     }
   }
   return files
-}
-
-function isWithin(parent: string, child: string): boolean {
-  const path = relative(parent, child)
-  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
 }
 
 function pathsIntersect(left: string, right: string): boolean {
@@ -368,16 +366,31 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
   const defaultScopes = (options.defaultScopes ?? []).map((name) => name.toLowerCase())
   return function enforceSpecTestParity(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
     const cwd = process.cwd()
-    const specsDir = resolve(options.specsDir)
+    // A commit made inside a git working tree nested in the project (a
+    // linked worktree at .claude/worktrees/<name>) is checked against that
+    // tree: its staged files, its specs, its tests (issue #57). Configured
+    // paths under the project root map to the same place in that tree.
+    const base = gitToplevel(cwd) ?? cwd
+    const tree = nestedCommitTree(action.command, base)
+    const inTree = (path: string): string => {
+      const absolute = canonical(path)
+      return tree && isWithin(canonical(base), absolute)
+        ? join(tree, relative(canonical(base), absolute))
+        : absolute
+    }
+    const treeRoot = tree ?? cwd
+    const specsDir = inTree(options.specsDir)
+    const testRoots = options.testRoots.map(inTree)
+    const baselinePath = options.baselinePath && inTree(options.baselinePath)
     // Hook processes are anchored to the project root. Scope only when that
     // relationship is known (or a test injects the lister); otherwise retain
     // the historical fail-safe full scan.
-    if (options.listCommitFiles || isWithin(cwd, specsDir)) {
+    if (options.listCommitFiles || isWithin(treeRoot, specsDir)) {
       try {
-        const relevant = listCommitFiles(action.command).some((file) => {
-          const absolute = resolve(cwd, file)
+        const relevant = listCommitFiles(action.command, treeRoot).some((file) => {
+          const absolute = resolve(treeRoot, file)
           return (
             pathsIntersect(absolute, specsDir) ||
             matches(pattern, file) ||
@@ -389,11 +402,11 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         // Git unavailable or unreadable: preserve full enforcement.
       }
     }
-    if (!existsSync(options.specsDir)) return { kind: 'pass' }
+    if (!existsSync(specsDir)) return { kind: 'pass' }
     // During the .feature.md -> .feature migration a spec is one extension
     // or the other; the same stem in both forms double-counts scenarios and
     // masks a half-finished rename.
-    const specFiles = findSpecFiles(options.specsDir)
+    const specFiles = findSpecFiles(specsDir)
     const byStem = new Map<string, string>()
     for (const file of specFiles) {
       const stem = specStem(file)
@@ -412,8 +425,8 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const scenarios = specFiles.flatMap((file) =>
       extractScenarios(file, readFileSync(file, 'utf8')),
     )
-    const refs = scanCoversRefs(options.testRoots, pattern)
-    const baseline = readBaseline(options.baselinePath)
+    const refs = scanCoversRefs(testRoots, pattern)
+    const baseline = readBaseline(baselinePath)
     const claimed = new Set(refs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
     const orphaned = scenarios.filter(
