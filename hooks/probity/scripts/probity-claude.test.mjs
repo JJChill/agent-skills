@@ -5,13 +5,13 @@
 // work.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { rewritePayload, subagentTranscript } from './probity-claude.mjs'
+import { PROBITY_MAX_TRANSCRIPT_BYTES, preparePayload, subagentTranscript, transcriptTail } from './probity-claude.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WRAPPER = join(HERE, 'probity-claude.mjs')
@@ -52,12 +52,12 @@ test('payloads without an agent, or with no agent transcript on disk, are left a
   assert.equal(subagentTranscript({ transcript_path: parent, agent_id: 'missing' }), null)
   assert.equal(subagentTranscript({ transcript_path: parent, agent_id: '../../etc' }), null)
   const raw = JSON.stringify({ transcript_path: parent, tool_name: 'Bash' })
-  assert.equal(rewritePayload(raw), raw)
-  assert.equal(rewritePayload('not json'), 'not json')
+  assert.equal(preparePayload(raw).input, raw)
+  assert.equal(preparePayload('not json').input, 'not json')
 })
 
-test('end to end: Probity rules see the sub-agent history through the wrapper', (t) => {
-  const { dir, parent } = session(t)
+/** A project dir whose Probity config denies with every command it sees in history. */
+function historyProject(dir) {
   const project = join(dir, 'project')
   mkdirSync(project)
   symlinkSync(join(HERE, '..', 'node_modules'), join(project, 'node_modules'), 'dir')
@@ -68,25 +68,99 @@ test('end to end: Probity rules see the sub-agent history through the wrapper', 
       return { kind: 'violation', reason: 'seen: ' + commands.map((e) => e.command + ' => ' + e.output).join(' | ') }
     }] }\n`,
   )
-  const run = (payload) => {
-    const res = spawnSync(process.execPath, [WRAPPER], {
+  return project
+}
+
+function runWrapper(project, payload) {
+  const res = spawnSync(process.execPath, [WRAPPER], {
+    cwd: project,
+    input: JSON.stringify({
+      session_id: 'session-1',
       cwd: project,
-      input: JSON.stringify({
-        session_id: 'session-1',
-        cwd: project,
-        hook_event_name: 'PreToolUse',
-        tool_name: 'Bash',
-        tool_input: { command: 'git commit -m x' },
-        ...payload,
-      }),
-      encoding: 'utf8',
-    })
-    assert.equal(res.status, 0, res.stderr)
-    return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason
-  }
-  const fromParent = run({ transcript_path: parent })
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'git commit -m x' },
+      ...payload,
+    }),
+    encoding: 'utf8',
+  })
+  assert.equal(res.status, 0, res.stderr)
+  return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason
+}
+
+test('end to end: Probity rules see the sub-agent history through the wrapper', (t) => {
+  const { dir, parent } = session(t)
+  const project = historyProject(dir)
+  const fromParent = runWrapper(project, { transcript_path: parent })
   assert.match(fromParent, /echo parent-run/)
-  const fromAgent = run({ transcript_path: parent, agent_id: 'a1b2' })
+  const fromAgent = runWrapper(project, { transcript_path: parent, agent_id: 'a1b2' })
   assert.match(fromAgent, /gradlew :sdk:anonyome:jvmTest => .*rejects expired tokens\[jvm\] FAILED/)
   assert.doesNotMatch(fromAgent, /parent-run/)
+})
+
+// Issue #54: Probity refuses a transcript over 100 MiB, and every
+// history-based rule then fails closed with "rule error: ... exceeds
+// 104857600 bytes" until the session is restarted. The wrapper hands
+// Probity the most recent part of an oversized transcript instead.
+
+function tempDir(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'probity-tail-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+
+test('transcriptTail leaves a transcript at or under the limit alone', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  writeFileSync(path, 'a'.repeat(99) + '\n')
+  assert.equal(transcriptTail(path, { maxBytes: 100, tailBytes: 40 }), null)
+})
+
+test('transcriptTail copies the newest whole lines of an oversized transcript to a private file', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  const lines = Array.from({ length: 20 }, (_, i) => JSON.stringify({ n: i }))
+  writeFileSync(path, lines.join('\n') + '\n')
+  const tail = transcriptTail(path, { maxBytes: 50, tailBytes: 40 })
+  t.after(() => tail && rmSync(dirname(tail), { recursive: true, force: true }))
+  assert.ok(tail, 'expected a tail file')
+  assert.ok(tail.endsWith('.jsonl'))
+  const kept = readFileSync(tail, 'utf8')
+  assert.ok(kept.length <= 40, `tail is ${kept.length} bytes`)
+  assert.ok(kept.endsWith(lines.at(-1) + '\n'), 'keeps the newest line')
+  for (const line of kept.trim().split('\n')) assert.doesNotThrow(() => JSON.parse(line), `partial line kept: ${line}`)
+  assert.equal(statSync(tail).mode & 0o777, 0o600)
+})
+
+test('transcriptTail leaves a symlinked transcript for Probity to refuse', (t) => {
+  const dir = tempDir(t)
+  const real = join(dir, 'real.jsonl')
+  writeFileSync(real, 'x'.repeat(200) + '\n')
+  const link = join(dir, 'link.jsonl')
+  symlinkSync(real, link)
+  assert.equal(transcriptTail(link, { maxBytes: 100, tailBytes: 40 }), null)
+})
+
+test('preparePayload points an oversized transcript at its tail, and cleanup removes it', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  writeFileSync(path, bashCall('toolu_old', 'echo old', 'old') + '\n' + bashCall('toolu_new', 'echo new', 'new') + '\n')
+  const { input, cleanup } = preparePayload(JSON.stringify({ transcript_path: path }), { maxBytes: 100, tailBytes: 400 })
+  const tail = JSON.parse(input).transcript_path
+  assert.notEqual(tail, path)
+  assert.match(readFileSync(tail, 'utf8'), /echo new/)
+  cleanup()
+  assert.equal(existsSync(tail), false)
+})
+
+test('end to end: an over-limit transcript still yields the recent history, not a rule error', (t) => {
+  const { dir, parent } = session(t)
+  const project = historyProject(dir)
+  // Push the parent transcript past Probity's cap with blank lines (which
+  // Probity skips), then record the run a commit gate would look for.
+  appendFileSync(parent, Buffer.alloc(PROBITY_MAX_TRANSCRIPT_BYTES + 1024, '\n'))
+  appendFileSync(parent, bashCall('toolu_build', './gradlew build', 'BUILD SUCCESSFUL in 9s') + '\n')
+  const reason = runWrapper(project, { transcript_path: parent })
+  assert.doesNotMatch(reason, /rule error|exceeds/)
+  assert.match(reason, /gradlew build => BUILD SUCCESSFUL/)
 })

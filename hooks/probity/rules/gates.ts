@@ -129,6 +129,36 @@ function defaultListCommitFiles(command: string): string[] {
   return files
 }
 
+// Probity's transcript reader refuses files over 100 MiB and throws
+// "file at <path> exceeds <n> bytes" from ctx.history() (issue #54).
+const TRANSCRIPT_TOO_LARGE = /^file at (.+) exceeds (\d+) bytes$/
+
+/**
+ * Turns Probity's "transcript too large" error into a deny that names
+ * the cause and the fix; rethrows any other error, so the engine still
+ * fails closed on it. Without this, the engine reports the oversized
+ * transcript as an opaque `rule error` on every history-based rule
+ * until the session is restarted (issue #54). `probity-claude` avoids
+ * the limit by handing Probity the transcript's newest part.
+ */
+export function transcriptLimitViolation(error: unknown): RuleResult {
+  const match =
+    error instanceof Error ? error.message.match(TRANSCRIPT_TOO_LARGE) : null
+  if (!match) throw error
+  const limitMiB = Math.round(Number(match[2]) / (1024 * 1024))
+  return {
+    kind: 'violation',
+    reason:
+      `Probity could not read this session's transcript (${match[1]}): ` +
+      `it is larger than Probity's ${limitMiB} MiB limit, so this check ` +
+      'cannot see the session history and stays blocked (fail closed). ' +
+      'This is not a judgement of your change. Fix: run the hook through ' +
+      "@jjchill/probity-rules' probity-claude bin (0.4.9 or later), which " +
+      'reads only the newest part of a long transcript, or start a new ' +
+      'session. Do not bypass the hook.',
+  }
+}
+
 /**
  * Commit-on-green, strictly: Probity's `requireCommand` checks only
  * that a matching test invocation was *recorded* after the last write
@@ -208,7 +238,12 @@ export function requireGreenTestRun(options: {
         return { kind: 'pass' }
       }
     }
-    const history = (await ctx?.history?.()) ?? []
+    let history
+    try {
+      history = (await ctx?.history?.()) ?? []
+    } catch (error) {
+      return transcriptLimitViolation(error)
+    }
     const lastWrite = history.reduce(
       (last, event, index) => (event.kind === 'write' ? index : last),
       -1,
@@ -529,9 +564,14 @@ export function withJudgeFailureDiagnostics(
     action: Action,
     ctx?: RuleContext,
   ): Promise<RuleResult> {
-    let result = await rule(action, ctx)
-    if (result.kind === 'violation' && isTransientFailure(result.reason ?? '')) {
+    let result
+    try {
       result = await rule(action, ctx)
+      if (result.kind === 'violation' && isTransientFailure(result.reason ?? '')) {
+        result = await rule(action, ctx)
+      }
+    } catch (error) {
+      return transcriptLimitViolation(error)
     }
     if (result.kind !== 'violation') return result
     const reason = result.reason ?? ''
