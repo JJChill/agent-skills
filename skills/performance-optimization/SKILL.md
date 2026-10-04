@@ -1,6 +1,6 @@
 ---
 name: performance-optimization
-description: Optimizes application performance across frontend, backend, queries, and databases. Use when performance requirements exist, when you suspect performance regressions, when Core Web Vitals or load times need improvement, when N+1 query patterns need fixing, or when profiling reveals bottlenecks.
+description: Optimizes application performance across frontend, backend, queries, and databases. Use when something is slow at runtime (a command, request, page, query, or screen takes seconds) and you need to find out why, even when the cause looks obvious from the code. Use when performance requirements exist, when you suspect performance regressions, when Core Web Vitals or load times need improvement, when N+1 query patterns need fixing, or when profiling reveals bottlenecks.
 ---
 
 # Performance Optimization
