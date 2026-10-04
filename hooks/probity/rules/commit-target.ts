@@ -11,8 +11,9 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
  */
 
 // `git commit`, including global options before the subcommand
-// (`git -C <dir> commit`, `git -c key=value commit`).
-export const GIT_COMMIT = /\bgit(?:\s+-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit\b/
+// (`git -C <dir> commit`, `git -c key=value commit`), but not plumbing
+// that merely starts with the word (`git commit-tree`, `git commit-graph`).
+export const GIT_COMMIT = /\bgit(?:\s+-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit(?![\w-])/
 
 export function canonical(path: string): string {
   try {
