@@ -4,6 +4,8 @@ import { join } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
+import { GIT_COMMIT, gitToplevel, nestedCommitTree } from './commit-target.js'
+
 /**
  * Language-neutral gate rules. These accumulated in the Kotlin preset
  * (`kotlin.ts`) because that's where the real-project trials happened,
@@ -109,14 +111,15 @@ export function forbidNewAmbientEffects(options: {
 }
 
 /**
- * Files the pending commit will record, repo-relative. Reads the
+ * Files the pending commit will record, relative to the root of the
+ * tree being committed (`cwd`). Reads the
  * staged set (`git diff --cached --name-only`); for a `git commit`
  * with `-a`/`-am`/`--all` it also folds in modified-but-unstaged
  * tracked files. Throws if git is unavailable — callers fail safe.
  */
-function defaultListCommitFiles(command: string): string[] {
+function defaultListCommitFiles(command: string, cwd = process.cwd()): string[] {
   const run = (args: string[]): string[] =>
-    execFileSync('git', args, { cwd: process.cwd(), encoding: 'utf8' })
+    execFileSync('git', args, { cwd, encoding: 'utf8' })
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
@@ -172,8 +175,8 @@ export function transcriptLimitViolation(error: unknown): RuleResult {
  * wrapper script is invisible — rerun the suite in-session, and keep
  * the CI mirror for human commits.
  *
- * Applies to: command actions matching `git commit`. Deterministic —
- * no AI call.
+ * Applies to: `git commit` commands, including `git -C <dir> commit`
+ * and `git -c key=value commit`. Deterministic — no AI call.
  *
  * @param options.command — regex matching a test invocation.
  * @param options.commandPredicate — optional additive filter over the
@@ -202,7 +205,8 @@ export function transcriptLimitViolation(error: unknown): RuleResult {
  *   not session history); any listing error falls through to
  *   enforcing (fail safe).
  * @param options.listCommitFiles — injectable staged-file lister
- *   (defaults to reading git's staged set); present for testing.
+ *   (defaults to reading git's staged set); present for testing. Its
+ *   second argument is the root of the tree being committed.
  * @param options.reason — appended to either deny path to name the
  *   suite, accepted forms, and any setup it needs.
  */
@@ -214,7 +218,7 @@ export function requireGreenTestRun(options: {
   failurePattern: RegExp
   extraFailurePredicate?: (command: string, output: string) => boolean
   enforceForPaths?: RegExp
-  listCommitFiles?: (command: string) => string[]
+  listCommitFiles?: (command: string, cwd: string) => string[]
   reason?: string
 }): Rule {
   const listCommitFiles = options.listCommitFiles ?? defaultListCommitFiles
@@ -223,14 +227,19 @@ export function requireGreenTestRun(options: {
     ctx?: RuleContext,
   ): Promise<RuleResult> {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!/git commit/.test(action.command)) return { kind: 'pass' }
+    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
     // Scope the gate to commits that stage code the suite validates.
     // On any error listing files, fall through and enforce (fail safe).
     if (options.enforceForPaths) {
       const pattern = options.enforceForPaths
+      // A commit inside a git tree nested in the project (a linked
+      // worktree at .claude/worktrees/<name>) is scoped by that tree's
+      // staged files, not the project's (issue #63).
+      const cwd = process.cwd()
+      const tree = nestedCommitTree(action.command, gitToplevel(cwd) ?? cwd) ?? cwd
       let files: string[] | undefined
       try {
-        files = listCommitFiles(action.command)
+        files = listCommitFiles(action.command, tree)
       } catch {
         files = undefined
       }

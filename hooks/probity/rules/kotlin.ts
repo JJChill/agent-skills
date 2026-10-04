@@ -950,7 +950,7 @@ export function requireGreenTestRun(options: {
   successPattern?: RegExp
   failurePattern?: RegExp
   enforceForPaths?: RegExp
-  listCommitFiles?: (command: string) => string[]
+  listCommitFiles?: (command: string, cwd: string) => string[]
   reason?: string
 }): Rule {
   const isDefaultGradleCommand = options.command === GRADLE_TEST_COMMAND

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.11
+
+The commit-on-green gate now catches every form of `git commit`, and
+scopes a worktree's commit by that worktree's staged files (#63).
+
+- **What went wrong.** `requireGreenTestRun` recognized a commit only
+  by the literal text `git commit`. `git -C <dir> commit` and
+  `git -c key=value commit` never matched, so a commit written either
+  way skipped the "tests must be green" check entirely. Agents often
+  write `git -C <path> commit` to avoid a `cd`. With `enforceForPaths`
+  set, the gate also listed staged files in the hook's checkout. A
+  commit made inside a linked worktree nested in the project
+  (`.claude/worktrees/<name>/`) was scoped by the main checkout's
+  staged files, usually none, and passed as "no code touched".
+- **Now:** the gate matches commits with the shared `GIT_COMMIT`
+  pattern the marker and parity gates use. With `enforceForPaths`, it
+  lists the staged files of the tree the commit is made in. The
+  transcript check (a green run after the last write) is per session,
+  so it is unchanged.
+- `GIT_COMMIT` no longer matches plumbing commands that only start
+  with the word, such as `git commit-tree` and `git commit-graph`. This
+  applies to every commit gate.
+- `listCommitFiles` (the test hook option) now also receives the root
+  of the tree being committed as a second argument, in
+  `requireGreenTestRun` and the Kotlin wrapper. One-argument functions
+  keep working.
+
 ## 0.4.10
 
 The spec↔test parity gate now checks the worktree a commit is made in
