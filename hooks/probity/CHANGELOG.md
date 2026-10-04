@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.12
+
+`probity-claude` now runs Probity in the worktree a session is working
+in, so rules judge that tree's specs and files (#66).
+
+- **What went wrong.** The documented hook is
+  `cd "$CLAUDE_PROJECT_DIR" && ./node_modules/.bin/probity-claude`.
+  After a session moves into a worktree (`EnterWorktree`, or an
+  `isolation: "worktree"` sub-agent), `CLAUDE_PROJECT_DIR` still names
+  the main checkout. Probity finds `probity.config.ts` by searching
+  upward from its working directory, so it loaded the main checkout's
+  config, and `ROOT`, `specsDir` and `glossaryPath` all pointed there.
+  In #66 the spec-first rule blocked an acceptance test whose
+  `Covers:` scenario existed only in the worktree's `specs/`
+  submodule, and named the main checkout's `specs/features`.
+- **Now:** the wrapper finds the git worktree the action targets: the
+  edited file's location, or for a command its `git -C <dir>` or
+  leading `cd <dir> &&`, else the session's `cwd`. When that worktree
+  is nested inside the project and has its own `probity.config.*`, the
+  wrapper starts Probity there. Its config's imports resolve from the
+  project's `node_modules` (one level up the folder tree), so the
+  worktree needs no install. Work in the main checkout, worktrees
+  without a Probity config, and paths outside the project run as before.
+- A relative `--debug <path>` is anchored to the project directory, so
+  the debug log stays in one place.
+- Only hooks that run `probity-claude` get this. A worktree outside the
+  project folder still runs against the project.
+- Consumers: no config change. The worktree's own `probity.config.ts`
+  (from its branch) is the one that runs.
+
 ## 0.4.11
 
 The commit-on-green gate now catches every form of `git commit`, and
