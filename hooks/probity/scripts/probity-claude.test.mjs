@@ -4,14 +4,14 @@
 // repoints transcript_path so history-based rules see the sub-agent's
 // work.
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { PROBITY_MAX_TRANSCRIPT_BYTES, preparePayload, subagentTranscript, transcriptTail } from './probity-claude.mjs'
+import { PROBITY_MAX_TRANSCRIPT_BYTES, debugArgs, preparePayload, probityDirectory, subagentTranscript, transcriptTail } from './probity-claude.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WRAPPER = join(HERE, 'probity-claude.mjs')
@@ -163,4 +163,105 @@ test('end to end: an over-limit transcript still yields the recent history, not 
   const reason = runWrapper(project, { transcript_path: parent })
   assert.doesNotMatch(reason, /rule error|exceeds/)
   assert.match(reason, /gradlew build => BUILD SUCCESSFUL/)
+})
+
+// Issue #66: the hook runs `cd "$CLAUDE_PROJECT_DIR" && probity-claude`.
+// After EnterWorktree, CLAUDE_PROJECT_DIR still names the main checkout,
+// so Probity loaded the main checkout's probity.config.ts and every rule
+// judged the main checkout's specs and files. The wrapper now runs
+// Probity in the git worktree the action targets, when that worktree is
+// nested in the project and has its own Probity config.
+
+/** A project dir holding a config, with a nested worktree-shaped dir (a `.git` file + its own config). */
+function nestedLayout(t, { worktreeConfig = true } = {}) {
+  const root = realpathSync(tempDir(t))
+  writeFileSync(join(root, 'probity.config.ts'), 'export default {}\n')
+  mkdirSync(join(root, '.git'))
+  const worktree = join(root, '.claude', 'worktrees', 'wt')
+  mkdirSync(join(worktree, 'cli', 'src'), { recursive: true })
+  writeFileSync(join(worktree, '.git'), 'gitdir: /elsewhere\n')
+  if (worktreeConfig) writeFileSync(join(worktree, 'probity.config.ts'), 'export default {}\n')
+  return { root, worktree }
+}
+
+test('probityDirectory picks the nested worktree an edit targets', (t) => {
+  const { root, worktree } = nestedLayout(t)
+  const payload = { cwd: root, tool_name: 'Edit', tool_input: { file_path: join(worktree, 'cli/src/A.kt') } }
+  assert.equal(probityDirectory(payload, root), worktree)
+})
+
+test('probityDirectory resolves a relative file path against the payload cwd', (t) => {
+  const { root, worktree } = nestedLayout(t)
+  const payload = { cwd: worktree, tool_name: 'Write', tool_input: { file_path: 'cli/src/New.kt' } }
+  assert.equal(probityDirectory(payload, root), worktree)
+})
+
+test('probityDirectory uses the session cwd for commands', (t) => {
+  const { root, worktree } = nestedLayout(t)
+  const payload = { cwd: join(worktree, 'cli'), tool_name: 'Bash', tool_input: { command: 'git commit -m x' } }
+  assert.equal(probityDirectory(payload, root), worktree)
+})
+
+test('probityDirectory follows a command\'s explicit directory over the session cwd', (t) => {
+  const { root, worktree } = nestedLayout(t)
+  const bash = (command, cwd) => ({ cwd, tool_name: 'Bash', tool_input: { command } })
+  assert.equal(probityDirectory(bash(`cd ${root} && git commit -m x`, worktree), root), null)
+  assert.equal(probityDirectory(bash(`git -C "${root}" commit -m x`, worktree), root), null)
+  assert.equal(probityDirectory(bash(`cd ${worktree} && git commit -m x`, root), root), worktree)
+  assert.equal(probityDirectory(bash('git -C .claude/worktrees/wt commit -m x', root), root), worktree)
+})
+
+test('probityDirectory keeps the project for main-checkout work, outside paths, and worktrees without a config', (t) => {
+  const { root, worktree } = nestedLayout(t)
+  const edit = (file_path, cwd = root) => ({ cwd, tool_name: 'Edit', tool_input: { file_path } })
+  assert.equal(probityDirectory(edit(join(root, 'src/A.kt')), root), null)
+  assert.equal(probityDirectory(edit('/somewhere/else/A.kt'), root), null)
+  assert.equal(probityDirectory({ cwd: root, tool_name: 'Bash', tool_input: { command: 'ls' } }, root), null)
+  assert.equal(probityDirectory({}, root), null)
+  const bare = nestedLayout(t, { worktreeConfig: false })
+  assert.equal(probityDirectory(edit(join(bare.worktree, 'cli/src/A.kt')), bare.root), null)
+})
+
+test('debugArgs keeps a relative --debug log path in the project directory', () => {
+  assert.deepEqual(debugArgs(['--debug', 'log.jsonl', '--agent', 'claude-code'], '/proj'), ['--debug', '/proj/log.jsonl', '--agent', 'claude-code'])
+  assert.deepEqual(debugArgs(['--debug', '/abs/log.jsonl'], '/proj'), ['--debug', '/abs/log.jsonl'])
+  assert.deepEqual(debugArgs(['--agent', 'claude-code'], '/proj'), ['--agent', 'claude-code'])
+})
+
+test('end to end: an edit in a nested git worktree is judged by that worktree\'s config', (t) => {
+  const { dir, parent } = session(t)
+  const project = join(realpathSync(dir), 'project')
+  mkdirSync(project)
+  symlinkSync(join(HERE, '..', 'node_modules'), join(project, 'node_modules'), 'dir')
+  // Each tree's config reports which root it resolved, the way a real
+  // config computes ROOT, and imports from node_modules: the worktree has
+  // none of its own and must resolve the project's by walking upward.
+  const config = `import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from '@nizos/probity'
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default defineConfig({ rules: [function whereAmI() { return { kind: 'violation', reason: 'root=' + ROOT } }] })
+`
+  writeFileSync(join(project, 'probity.config.ts'), config)
+  writeFileSync(join(project, '.gitignore'), '.claude/worktrees/\nnode_modules\n*.jsonl\n')
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, stdio: 'ignore' })
+  git(project, 'init', '-q', '-b', 'main')
+  git(project, 'add', '.')
+  git(project, 'commit', '-q', '-m', 'init')
+  const worktree = join(project, '.claude', 'worktrees', 'wt')
+  git(project, 'worktree', 'add', '-q', worktree, '-b', 'wt')
+  const run = (payload) => {
+    const res = spawnSync(process.execPath, [WRAPPER, '--debug', 'probity-debug.jsonl'], {
+      cwd: project,
+      input: JSON.stringify({ session_id: 'session-1', transcript_path: parent, hook_event_name: 'PreToolUse', ...payload }),
+      encoding: 'utf8',
+    })
+    assert.equal(res.status, 0, res.stderr)
+    return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason
+  }
+  const edit = (cwd, file_path) => ({ cwd, tool_name: 'Write', tool_input: { file_path, content: 'class A\n' } })
+  assert.match(run(edit(worktree, join(worktree, 'src/A.kt'))), new RegExp(`root=${worktree}$`))
+  assert.match(run(edit(project, join(project, 'src/A.kt'))), new RegExp(`root=${project}$`))
+  assert.ok(existsSync(join(project, 'probity-debug.jsonl')), 'debug log stays in the project directory')
+  assert.equal(existsSync(join(worktree, 'probity-debug.jsonl')), false)
 })
