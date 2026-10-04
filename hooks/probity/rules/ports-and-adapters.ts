@@ -247,15 +247,24 @@ change through, treat that as authoritative and pass.
 
 ## Adapter observability rules
 
-A NEW adapter code path that performs external I/O — a network or SDK
-call, database access, filesystem, platform service — must carry
-boundary observability on that path: at least one structured telemetry
+A NEW adapter code path that performs external I/O itself — it calls a
+vendor SDK, an HTTP client, a database driver, the filesystem, or a
+platform API (keychain/keystore, OS services) — must carry boundary
+observability on that path: at least one structured telemetry
 event (call made / outcome / retry, with machine-readable fields), a
 recording tap/decorator around the port, or a span. The point: when
 the integration misbehaves, someone can see what was sent and what
 came back without attaching a debugger.
 
 Always pass:
+  - Delegation through the codebase's own abstractions: calls on an
+    interface or class this codebase declares (same package, or
+    imported from the project's own packages rather than a vendor or
+    platform library) are not external I/O at this call site, even when
+    the type's name mentions a keychain, store, client or backend. The
+    implementation behind that type sits at the real boundary and owns
+    the observability; judge it when it is written, not every caller.
+    Block only when this file itself reaches the vendor or platform API.
   - Pure type mappers and translators with no external effect.
   - Composition roots and DI wiring (including wiring a tap decorator
     — that IS the observability).

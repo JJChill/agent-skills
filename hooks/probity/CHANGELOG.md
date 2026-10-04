@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.13
+
+The adapter-observability judge no longer demands telemetry on calls
+through the codebase's own interfaces (#68). Applies to every preset that
+wires `enforceAdapterObservability` (Kotlin, KMP, Swift).
+
+- **What went wrong.** In #68, `AccountKeySecrets`, an internal class
+  under `adapter/`, called `SecretBackend`, an interface declared in
+  the same module. Its implementations (`FileSecretBackend`,
+  `KeychainSecretBackend`) are the real boundary and already emit
+  events. The judge read `secrets.get/create/delete` as "external I/O
+  through the keychain/keystore adapter" and demanded an event. The TDD
+  judge then rejected that event as over-implementation, because the
+  red test didn't assert it. Each write was blocked by one rule or the
+  other, until every test of the internal helper asserted telemetry.
+- **Now:** the judge's instructions say a new path needs observability
+  when the file itself calls a vendor SDK, HTTP client, database
+  driver, the filesystem, or a platform API. Calls on an interface or
+  class the codebase declares (same package, or imported from the
+  project's own packages) are delegation: the implementation behind it
+  owns the boundary and is judged when it is written.
+- **Measured** by replaying #68's writes through the real rule and judge
+  (3 runs each): adopting a legacy key and adding `delete` through
+  `SecretBackend` went from 0/3 to 3/3 pass. Two controls stayed
+  blocked 3/3: a `FileSecretBackend` method calling `java.nio.file`
+  directly, and a new Ktor HTTP adapter, both without events.
+- Not changed: an adapter that does call the platform still needs its
+  event asserted in the failing test first, as the block message says.
+
 ## 0.4.12
 
 `probity-claude` now runs Probity in the worktree a session is working

@@ -347,3 +347,30 @@ test('kmpRuleEntries: acceptanceLanguageGlobs narrows the Language Test scope', 
   assert.equal(claims(narrowed, dsl), false)
   assert.equal(claims(narrowed, spec), true)
 })
+
+// Issue #68: the observability judge treated calls through SecretBackend,
+// an interface declared in the same module, as external I/O, and demanded
+// an event the TDD judge then rejected as untested. The judge is told that
+// delegating through the codebase's own types is not external I/O at the
+// call site. (Replayed against the real judge: the two #68 writes went from
+// 0/3 to 3/3 pass; direct java.nio and HTTP-client writes stayed blocked.)
+test('the adapter-observability prompt passes delegation through the codebase\'s own types', async () => {
+  const { enforceAdapterObservability } = await import('./ports-and-adapters.ts')
+  let prompt = ''
+  const rule = enforceAdapterObservability()
+  await rule(
+    { kind: 'write', path: '/repo/src/jvmMain/kotlin/app/adapter/AccountKeySecrets.kt', content: 'class AccountKeySecrets' },
+    {
+      readFile: async () => ({ kind: 'absent' }),
+      agent: {
+        reason: async (value: string) => {
+          prompt = value
+          return { kind: 'pass', reason: '' }
+        },
+      },
+    } as unknown as RuleContext,
+  )
+  assert.match(prompt, /performs external I\/O itself/)
+  assert.match(prompt, /Delegation through the codebase's own abstractions/)
+  assert.match(prompt, /Block only when this file itself reaches the vendor or platform API/)
+})
