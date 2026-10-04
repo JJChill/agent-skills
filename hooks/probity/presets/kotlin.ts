@@ -18,6 +18,7 @@ import { join } from 'node:path'
 import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
 import { enforceKotlinTdd } from '../internal/kotlin-tdd.js'
+import { withExtractionUnderGreen } from '../rules/gates.js'
 
 import {
   enforceAcceptanceLanguage,
@@ -31,7 +32,9 @@ import {
   GRADLE_TEST_COMMAND,
   KOTLIN_BOUNDARY_ADDENDUM,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
+  KOTLIN_PRODUCTION_SOURCE_PATTERN,
   KOTLIN_TEST_SOURCE_PATTERN,
+  kotlinGreenRunOptions,
   requireGreenTestRun,
   withCharacterizationTest,
   withKotlinFastPath,
@@ -203,7 +206,15 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
       rules: [
         withCharacterizationTest(
           withMutationProbe(
-            withTelemetryFastPath(withKotlinFastPath(enforceKotlinTdd())),
+            withTelemetryFastPath(
+              withKotlinFastPath(
+                withExtractionUnderGreen(enforceKotlinTdd(), {
+                  ...kotlinGreenRunOptions(options.commitCommand ?? GRADLE_TEST_COMMAND),
+                  productionPattern: KOTLIN_PRODUCTION_SOURCE_PATTERN,
+                  testPattern: KOTLIN_TEST_SOURCE_PATTERN,
+                }),
+              ),
+            ),
           ),
           { filePattern: KOTLIN_TEST_SOURCE_PATTERN },
         ),

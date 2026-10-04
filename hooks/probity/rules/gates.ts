@@ -274,16 +274,7 @@ export function requireGreenTestRun(options: {
       }
     }
     const lastRun = runs[runs.length - 1]!
-    const output = 'output' in lastRun ? (lastRun.output ?? '') : ''
-    const lastRunCommand = lastRun.kind === 'command' ? lastRun.command : ''
-    const isRed =
-      options.failurePattern.test(output) ||
-      (options.extraFailurePredicate?.(lastRunCommand, output) ?? false)
-    const isGreen =
-      !isRed &&
-      (options.successPattern.test(output) ||
-        (options.extraSuccessPredicate?.(lastRunCommand, output) ?? false))
-    if (!isGreen) {
+    if (!isGreenRun(lastRun, options)) {
       return {
         kind: 'violation',
         reason:
@@ -294,6 +285,248 @@ export function requireGreenTestRun(options: {
     }
     return { kind: 'pass' }
   }
+}
+
+// Probity doesn't export its canonical event type; derive it from the context.
+type SessionEvent = Awaited<ReturnType<NonNullable<RuleContext['history']>>>[number]
+
+/** How a test or build run is recognized and judged green, shared by the gates below. */
+export type GreenRunOptions = {
+  command: RegExp
+  commandPredicate?: (command: string) => boolean
+  successPattern: RegExp
+  extraSuccessPredicate?: (command: string, output: string) => boolean
+  failurePattern: RegExp
+  extraFailurePredicate?: (command: string, output: string) => boolean
+}
+
+function isMatchingRun(event: SessionEvent, options: GreenRunOptions): boolean {
+  return (
+    event.kind === 'command' &&
+    options.command.test(event.command) &&
+    (!options.commandPredicate || options.commandPredicate(event.command))
+  )
+}
+
+/** A matching run is green when no failure signal shows and a success signal does. */
+function isGreenRun(event: SessionEvent, options: GreenRunOptions): boolean {
+  const output = 'output' in event ? (event.output ?? '') : ''
+  const command = event.kind === 'command' ? event.command : ''
+  const isRed =
+    options.failurePattern.test(output) ||
+    (options.extraFailurePredicate?.(command, output) ?? false)
+  return (
+    !isRed &&
+    (options.successPattern.test(output) ||
+      (options.extraSuccessPredicate?.(command, output) ?? false))
+  )
+}
+
+const EXTRACTION_RESPONSE_SPEC = `## Response format
+
+Respond with a single JSON object of exactly this shape:
+{"reason":"<your analysis> Finding: <move|new behavior|unsure>","kind":"pass"|"violation"}
+Write reason FIRST and set kind to the conclusion your reason reached —
+the two must agree. The reason MUST end with the finding label, exactly
+one of "Finding: move" (kind pass), "Finding: new behavior" or
+"Finding: unsure" (kind violation). For example:
+{"reason":"Everything maps to createClient in Client.kt except a new scheme check: it throws on an http:// URL, which no shown source does. Finding: new behavior","kind":"violation"}
+Return JSON only. No prose, no code fences.`
+
+const EXTRACTION_INSTRUCTIONS = `## Role
+
+You check one narrow claim for a TDD gate: that a NEW production file
+is a refactor, moving logic the codebase already has, and adds no new
+behavior. The session's most recent build or test run passed, so the
+moved logic is already tested where it lives now.
+
+## Inputs
+
+1. "Existing production sources" — the current on-disk content of
+   production files the session read or edited, in full.
+2. "Pending new file" — the path and full content about to be written.
+
+## Rules
+
+Pass only if every behavior in the pending file is already performed by
+the existing sources shown: each function body, branch, condition,
+default value, constant, error path and external call corresponds to
+code in those sources, verbatim or re-expressed one for one (renamed,
+reordered, split into smaller functions, moved into a class or object,
+parameters gathered into a type).
+
+Part of a move, never new behavior:
+  - The original code still being in the source file. Mid-refactor the
+    logic exists twice until a later write removes the old copy; a
+    "parallel" entry point that duplicates shown code is a move.
+  - An interface, abstract class or data type that only declares or
+    carries operations and values the shown sources already have
+    (extracting an interface and its implementation is one refactor).
+  - Imports, package declarations, visibility changes, comments.
+
+Violation: anything in the pending file that no shown source performs,
+however small — a new branch or condition, a changed default or
+constant, an extra parameter that changes behavior, a new external
+call, new error handling, new logging or telemetry.
+
+The finding (the reason's last words, see Response format):
+  - "Finding: move" — every behavior is in the shown sources (kind pass).
+  - "Finding: new behavior" — the pending file produces an outcome a
+    caller could observe that no shown source produces: a new rejection
+    or validation, a new external call or side effect, a changed literal
+    value or default, a new feature. Name it and where it is. Use this
+    only when you are certain (kind violation). A different route to an
+    outcome the sources already have is NOT new behavior: the same
+    cleanup and the same exception reached through try/catch instead of
+    a null check, logic moved into a caller or an implementation, a
+    loop rewritten as a collection call. If the other half of such a
+    restructuring is not shown, the finding is unsure.
+  - "Finding: unsure" — you could not match something, for example it
+    calls or replaces code with a type whose source is not shown (a
+    clock, a helper, a constant defined elsewhere). A substitution you
+    cannot verify is unsure, not new behavior (kind violation).`
+
+function mentionedPaths(history: readonly SessionEvent[]): string[] {
+  const paths: string[] = []
+  for (const event of history) {
+    const path =
+      event.kind === 'write'
+        ? event.path
+        : event.kind === 'other' &&
+            typeof event.input === 'object' &&
+            event.input !== null &&
+            typeof (event.input as { file_path?: unknown }).file_path === 'string'
+          ? (event.input as { file_path: string }).file_path
+          : undefined
+    if (path && !paths.includes(path)) paths.push(path)
+  }
+  return paths
+}
+
+const identifiers = (text: string): Set<string> =>
+  new Set(text.match(/[A-Za-z_][A-Za-z0-9_]{3,}/g) ?? [])
+
+/**
+ * Lets a TDD rule's writes through when they move existing, tested code
+ * into a NEW production file under green (issue #70): extract a
+ * function into another source set, or an interface plus the class that
+ * implements it.
+ *
+ * The TDD judge cannot verify such a move on its own. It sees the
+ * session's events clipped (Kotlin preset: 6,000 characters, head and
+ * tail), so most of a large source file it was moved from is missing,
+ * and the original still on disk reads as a parallel new entry point.
+ * This wrapper runs only when the write creates a new production file
+ * and the most recent matching build or test run in the session was
+ * green. It gives a separate judge the current on-disk content, in
+ * full, of the production files the session read or edited, and asks
+ * whether every behavior in the new file is already there. A pass is
+ * returned with an `extraction-under-green` note. When the judge names
+ * specific new behavior ("Finding: new behavior"), the write is blocked: the
+ * last run was green, so no failing test justifies it, and the wrapped
+ * TDD judge cannot see the full sources to catch it. A "Finding:
+ * unsure" answer, any other answer, or a judge error falls through to the
+ * wrapped rule.
+ *
+ * Sources come from disk (`ctx.readFile`), never from transcript text:
+ * whatever is in a production file has already been through the gates.
+ *
+ * @param rule — the TDD rule stack to wrap.
+ * @param options — the green-run options `requireGreenTestRun` takes,
+ *   plus `productionPattern` and `testPattern` (which paths are
+ *   production sources and which are tests) and `maxSourceChars`
+ *   (total source text given to the judge, default 120,000; files
+ *   sharing the most identifiers with the new file come first).
+ */
+export function withExtractionUnderGreen(
+  rule: Rule,
+  options: GreenRunOptions & {
+    productionPattern: RegExp
+    testPattern: RegExp
+    maxSourceChars?: number
+  },
+): Rule {
+  const isProduction = (path: string) =>
+    options.productionPattern.test(path) && !options.testPattern.test(path)
+  const budget = options.maxSourceChars ?? 120_000
+  const wrapped = async function extractionUnderGreen(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || !isProduction(action.path)) return rule(action, ctx)
+    if (!ctx?.agent || !ctx.readFile || !ctx.history) return rule(action, ctx)
+    const before = await ctx.readFile(action.path)
+    if (before.kind !== 'absent') return rule(action, ctx)
+    let history: readonly SessionEvent[]
+    try {
+      history = await ctx.history()
+    } catch {
+      // e.g. an over-limit transcript: the wrapped rule reports it.
+      return rule(action, ctx)
+    }
+    const runs = history.filter((event) => isMatchingRun(event, options))
+    const lastRun = runs[runs.length - 1]
+    if (!lastRun || !isGreenRun(lastRun, options)) return rule(action, ctx)
+
+    const wanted = identifiers(action.content)
+    const sources: { path: string; content: string; overlap: number }[] = []
+    for (const path of mentionedPaths(history)) {
+      if (path === action.path || !isProduction(path)) continue
+      const file = await ctx.readFile(path)
+      if (file.kind !== 'present') continue
+      const overlap = [...identifiers(file.content)].filter((id) => wanted.has(id)).length
+      sources.push({ path, content: file.content, overlap })
+    }
+    sources.sort((a, b) => b.overlap - a.overlap)
+    const shown: string[] = []
+    let used = 0
+    for (const source of sources) {
+      if (source.overlap === 0 || used + source.content.length > budget) continue
+      shown.push(`### ${source.path}\n\n${source.content}`)
+      used += source.content.length
+    }
+    if (shown.length === 0) return rule(action, ctx)
+
+    try {
+      const verdict = await ctx.agent.reason(
+        [
+          EXTRACTION_INSTRUCTIONS,
+          `## Existing production sources\n\n${shown.join('\n\n')}`,
+          `## Pending new file\n\nFile: ${action.path}\n\n${action.content}`,
+          EXTRACTION_RESPONSE_SPEC,
+        ].join('\n\n'),
+      )
+      if (verdict.kind === 'pass') {
+        return {
+          kind: 'pass',
+          reason: verdict.reason,
+          notes: [{ kind: 'extraction-under-green' }],
+        }
+      }
+      // A move with new behavior spliced in: the last run is green, so no
+      // failing test justifies it. Block here rather than leave it to the
+      // TDD judge, which can't see the full sources either.
+      const reason = (verdict.reason ?? '').trim()
+      const findings = [...reason.matchAll(/Finding:\s*(move|new behavior|unsure)/gi)]
+      const last = findings[findings.length - 1]
+      const found = last?.[1]?.toLowerCase() === 'new behavior' ? last : undefined
+      if (found) {
+        return {
+          kind: 'violation',
+          reason:
+            'This new file moves existing code under green, but also adds ' +
+            `behavior the sources it came from do not have: ${reason.slice(0, found.index).trim()}\n` +
+            'Move the code as it is in this write, then add that behavior in ' +
+            'its own red-green step: a failing test for it first.',
+        }
+      }
+    } catch {
+      // Judge unavailable or malformed: let the wrapped rule decide.
+    }
+    return rule(action, ctx)
+  }
+  Object.defineProperty(wrapped, 'name', { value: rule.name || 'extractionUnderGreen' })
+  return wrapped
 }
 
 const SKIP_DIRS = new Set([

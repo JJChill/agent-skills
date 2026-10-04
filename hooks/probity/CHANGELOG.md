@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.4.14
+
+Extracting existing code into a new file under green now passes in the
+Kotlin and KMP presets (#70), and a move with new behavior spliced in
+is now blocked instead of slipping through.
+
+- **What went wrong.** In #70, after a green `./gradlew build`, moving a
+  547-line JVM composition function into `commonMain` behind an
+  interface was blocked twice as "net-new logic": the new
+  `ClientComposition.kt` ("a parallel new common-source entry point")
+  and the new `JvmPlatformAdapters.kt` implementing the interface. The
+  Kotlin TDD judge sees each session event clipped to 6,000 characters,
+  head and tail. The 26,934-character source file it was moved from was
+  mostly invisible, and the original still on disk read as duplication.
+  The same blindness cuts the other way: a moved file with one small
+  new behavior added (a new `https` check) was allowed by the TDD judge,
+  in 0.4.13 too.
+- **Now:** a new wrapper, `withExtractionUnderGreen` (in `gates.ts`,
+  exported), sits around the Kotlin TDD judge. When a write creates a
+  new production file and the latest matching build or test run in the
+  session was green, it gives a separate judge the full, current
+  on-disk content of the production files the session read or edited
+  (up to 120,000 characters, most-related first). The judge answers
+  with one of three findings:
+  - **move**: every behavior is already there. The write passes, with
+    an `extraction-under-green` trace note.
+  - **new behavior**: the file produces an outcome a caller could
+    observe that no source has (a new rejection, call, side effect or
+    value). The write is blocked, naming it: under green there is no
+    failing test to justify it. A different route to an existing
+    outcome (try/catch instead of a null check, logic moved into a
+    caller) is not new behavior.
+  - **unsure**, any other answer, or a judge error: the TDD judge
+    decides, as before.
+- **Measured** by replaying the two real #70 writes with the session's
+  own transcript cut just before each one, and the files the session
+  had written by then on disk (5 runs each). `JvmPlatformAdapters.kt`:
+  blocked 3/3 on 0.4.13, now "move" and allowed 5/5.
+  `ClientComposition.kt`: "unsure" 5/5, then allowed by the TDD judge as
+  on 0.4.13 (its original denial did not reproduce). The same two
+  writes with one new behavior spliced in were "new behavior" and
+  blocked 10/10; on 0.4.13 one of them was allowed 3/3.
+- **Applies to** new production files only (`src/main/` and
+  `src/<target>Main/`). Edits to existing files are unchanged. The cost
+  is one extra AI call for a qualifying write, two when the finding is
+  "unsure".
+- New exports: `withExtractionUnderGreen`, `GreenRunOptions`, and in the
+  Kotlin rules `kotlinGreenRunOptions()` and
+  `KOTLIN_PRODUCTION_SOURCE_PATTERN`. `requireGreenTestRun` now shares
+  its green check with the wrapper; its behavior is unchanged.
+
 ## 0.4.13
 
 The adapter-observability judge no longer demands telemetry on calls
