@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.15
+
+The JS/TS TDD judge no longer blocks adding a new red test (#73), and it
+now blocks a production write whose new test was never run.
+
+- **What went wrong.** In #73, a JS/TS project on 0.4.14 added one new
+  failing `it(...)` to an existing Vitest file, straight after a green
+  run, with no production change. The judge denied it: "This test has
+  not been observed failing … here it is being added as a green->red
+  crossing without that observed red." A test can't fail before it
+  exists. This is the #43 bug in the Kotlin judge, fixed in 0.4.3. The
+  JS preset runs Probity's built-in `enforceTdd()`, which never got
+  that fix. Its default rules say both "adding a test is the red step"
+  and "judge a new red at the green->red boundary too" (the refactor
+  check), and the judge read the second as a demand for a failing run.
+- **Now:** a new rule, `enforceJsTdd()` (in `rules/js-tdd.ts`,
+  exported), is `enforceTdd()` with an addendum, wrapped the way the JS
+  preset already wrapped it. The JS preset uses it. The addendum says:
+  - Adding one failing test is the red step and needs no prior run.
+    "Must be observed failing" applies only to the production write
+    that follows. This holds even when the test contradicts what the
+    previous cycle just implemented.
+  - At a test write, the only green->red question is whether the prior
+    green left a refactor unmade. A passing prior run is never a reason
+    to block a new test.
+  - A production write still needs an observed failing test: a run,
+    after the test was written, whose output shows that test failing.
+    A test written but never run does not count. Neither does an
+    earlier failing run of a different test.
+- **Measured** against the live judge (Probity's `claudeCode()` agent,
+  as the hook runs it), on a replica built from the reported project's
+  own `account.ts` and `account.test.ts`. 0.4.14 did not reproduce the
+  denial: four variants of the reported write passed 20/20. These were
+  an Edit anchored on the previous test, an insertion-only Edit, a long
+  session tail after green, and a previous cycle that wrote the very
+  override the new test contradicts. With 0.4.15 they still pass 20/20.
+  The controls that must stay blocked, as 0.4.14 → 0.4.15:
+  - a production write before any test for it: 5/5 → 5/5 blocked;
+  - a test plus production change in one write (an in-source `it` in
+    `account.ts`): 5/5 → 5/5;
+  - two new tests in one write: 5/5 → 5/5;
+  - a production write after the new test was added but never run:
+    **1/10 → 10/10**. 0.4.14 let this through.
+
+  A production write after the new test was run and seen failing still
+  passes, 5/5 on both.
+- **Not changed:** Probity's own `enforceTdd({ fastPath: true })` stays
+  off. It would pass a single-test write with no AI call, but it skips
+  the refactor check at the green->red boundary. It also lacks the
+  byte-preservation checks the Kotlin fast path has.
+- **Action needed** if your `probity.config.ts` wires the TDD rule
+  itself rather than through `jsRuleEntries`. Replace
+  `withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()))`
+  with `enforceJsTdd()`, imported from `@jjchill/probity-rules` or
+  `@jjchill/probity-rules/rules/js-tdd`. Configs that use
+  `jsRuleEntries` get it automatically.
+- New exports: `enforceJsTdd`, `JS_TDD_ADDENDUM`.
+
 ## 0.4.14
 
 Extracting existing code into a new file under green now passes in the

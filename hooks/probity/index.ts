@@ -12,6 +12,7 @@
  * ones together.
  */
 export * from './rules/gates.js'
+export * from './rules/js-tdd.js'
 export * from './rules/ports-and-adapters.js'
 export * from './rules/acceptance-language.js'
 export * from './rules/spec-test-parity.js'

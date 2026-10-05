@@ -4,7 +4,7 @@
  * Turns three of the agent-skills catalog's prose disciplines into
  * hard PreToolUse gates via https://github.com/nizos/probity :
  *
- *   test-driven-development  → enforceTdd (built-in)
+ *   test-driven-development  → enforceJsTdd (built-in enforceTdd + addendum)
  *   ports-and-adapters       → enforcePortsBoundary + forbidInternalModuleMocks
  *                              + a deterministic import screen
  *   acceptance-testing       → enforceAcceptanceLanguage
@@ -17,16 +17,15 @@
  */
 import { basename } from 'node:path'
 
-import { enforceTdd, forbidContentPattern, type RuleEntry } from '@nizos/probity'
+import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
 import { enforceAcceptanceLanguage } from '../rules/acceptance-language.js'
 import {
   forbidNewAmbientEffects,
   JS_AMBIENT_EFFECT_PATTERNS,
   requireGreenTestRun,
-  withJudgeFailureDiagnostics,
-  withContradictionRetry,
 } from '../rules/gates.js'
+import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
   enforcePortsBoundary,
   forbidInternalModuleMocks,
@@ -229,7 +228,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   // screen, never after a model call.
   entries.push({
     files: tddGlobs,
-    rules: [withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()))],
+    rules: [enforceJsTdd()],
   })
 
   // ── Outer loop: acceptance-testing ──────────────────────────────

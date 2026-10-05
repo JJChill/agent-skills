@@ -16,7 +16,7 @@ The rules ship as the [`@jjchill/probity-rules`](https://www.npmjs.com/package/@
 
 | Rule | Skill it enforces | Mechanism |
 |---|---|---|
-| `enforceTdd()` (Probity built-in) | test-driven-development | AI-validated: every production write must address an observed failing test, minimally; refactor debts block the next red |
+| `enforceTdd()` (Probity built-in; `enforceJsTdd()` in the JS preset, `enforceKotlinTdd()` in the Kotlin presets) | test-driven-development | AI-validated: every production write must address an observed failing test, minimally; refactor debts block the next red |
 | `forbidContentPattern(KNOWN_INFRASTRUCTURE_IMPORTS)` | ports-and-adapters | Deterministic: known framework/vendor/OS-I/O imports never enter core code — caught free, before any AI call |
 | `enforcePortsBoundary()` (custom) | ports-and-adapters | AI-validated: the Dependency Rule, thin adapters (no business conditionals), vendor types kept out of port signatures |
 | `enforceAdapterObservability()` (custom) | ports-and-adapters + observability-and-instrumentation | AI-validated, scoped to adapter paths: a NEW adapter path doing external I/O must carry boundary observability — a structured event, a port-tap/recording decorator, or a span. Thin, not blind. Delta-based; pure mappers, wiring, and tests pass; takes a `conventionHint` naming your telemetry convention. Guarantees telemetry *presence*, never field safety (sensitive-field discipline stays with review). Note it runs after the TDD gate (first violation wins), so on brand-new behaviour TDD answers first — a second-pass gate; its deny text tells the agent to assert the event in the failing test so both gates ask for the same thing, and `withTelemetryFastPath` makes telemetry-only additions free on both sides |
