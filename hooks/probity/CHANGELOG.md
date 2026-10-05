@@ -30,22 +30,28 @@ now blocks a production write whose new test was never run.
     A test written but never run does not count. Neither does an
     earlier failing run of a different test.
 - **Measured** against the live judge (Probity's `claudeCode()` agent,
-  as the hook runs it), on a replica built from the reported project's
-  own `account.ts` and `account.test.ts`. 0.4.14 did not reproduce the
-  denial: four variants of the reported write passed 20/20. These were
-  an Edit anchored on the previous test, an insertion-only Edit, a long
-  session tail after green, and a previous cycle that wrote the very
-  override the new test contradicts. With 0.4.15 they still pass 20/20.
-  The controls that must stay blocked, as 0.4.14 → 0.4.15:
-  - a production write before any test for it: 5/5 → 5/5 blocked;
-  - a test plus production change in one write (an in-source `it` in
+  as the hook runs it), replaying the real #73 write. The input was the
+  session's own transcript, cut just before the write and read with
+  Probity's transcript reader, plus the test and production files as
+  they stood on disk then (10 runs each, 0.4.14 → 0.4.15):
+  - the reported write: allowed **2/10 → 10/10**. On 0.4.14 the
+    denials read like the reported one ("has not been observed
+    failing");
+  - the same session, then a production write with the new test never
+    run: blocked **4/10 → 9/10**;
+  - the same session, then the new test run and seen failing, then the
+    production write: allowed 10/10 → 10/10.
+
+  A replica built from the same files, but with a hand-written session,
+  never reproduced the denial (allowed 20/20 on both versions). On it,
+  the controls that must stay blocked, as 0.4.14 → 0.4.15 (5 runs
+  each unless noted):
+  - a production write before any test for it: 5/5 → 5/5;
+  - a test plus a production change in one write (an in-source `it` in
     `account.ts`): 5/5 → 5/5;
   - two new tests in one write: 5/5 → 5/5;
   - a production write after the new test was added but never run:
-    **1/10 → 10/10**. 0.4.14 let this through.
-
-  A production write after the new test was run and seen failing still
-  passes, 5/5 on both.
+    1/10 → 15/15.
 - **Not changed:** Probity's own `enforceTdd({ fastPath: true })` stays
   off. It would pass a single-test write with no AI call, but it skips
   the refactor check at the green->red boundary. It also lacks the
