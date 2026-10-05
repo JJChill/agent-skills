@@ -30,7 +30,11 @@ import {
   forbidNewAmbientEffects,
   forbidStaticMocks,
   GRADLE_TEST_COMMAND,
+  KOTLIN_API_DUMP,
   KOTLIN_BOUNDARY_ADDENDUM,
+  KOTLIN_DRIVING_ADAPTER_ADDENDUM,
+  KOTLIN_EXPORTS,
+  kotlinDomainDiscriminantPatterns,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
   KOTLIN_PRODUCTION_SOURCE_PATTERN,
   KOTLIN_TEST_SOURCE_PATTERN,
@@ -48,6 +52,7 @@ import {
 import { requireSpecBackedAcceptanceTest } from '../rules/spec-test-parity.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { drivingAdapterBlock } from './driving-adapter.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 
 export type KotlinPresetOptions = {
@@ -80,6 +85,38 @@ export type KotlinPresetOptions = {
   tddGlobs?: Globs
   /** Adapter/data packages that must carry boundary observability. */
   adapterGlobs?: Globs
+  /** Driving (inbound) adapter files held thin by
+   *  `enforceThinDrivingAdapter`: Compose screens, CLI commands, route
+   *  handlers. OFF unless set — a core-only module has none, so a
+   *  default glob would only be a dead scope. `coreGlobs` are always
+   *  excluded, so whether a ViewModel is an adapter or a presenter in
+   *  the core is decided by which of the two scopes its package
+   *  matches. Starting points:
+   *  - UI in this repo: `['**\/composeApp/src/**', '**\/src/*Main/**\/ui/**', '!**\/*Preview*.kt']`
+   *  - a CLI module: `['cli/src/main/**\/commands/**']`
+   *  - a UI-only app on a core SDK: its `ui/` packages, plus `coreApiPaths`.
+   *  Every matching write costs an AI call, before the TDD judge. */
+  drivingAdapterGlobs?: readonly string[]
+  /** Fields whose comparison to a domain value in a driving adapter is
+   *  a domain decision (e.g. `['role', 'status']`): net-new
+   *  `role == Role.ADMIN`, `when (viewer.role)` or `status is
+   *  Status.Draft` block free, before the AI call. No default. */
+  domainDiscriminants?: string[]
+  /** Appended to the discriminant block message, e.g. where permission
+   *  rules live. */
+  domainHint?: string
+  /** Give the thin-driving-adapter judge the public names declared in
+   *  `coreGlobs` sources, so it can name the existing function a copy
+   *  duplicates. Scans the tree on each judged write. */
+  coreExportsInJudge?: boolean
+  /** Cap on the export list the judge is given (default 16000
+   *  characters; the list is truncated beyond it). */
+  coreExportsMaxChars?: number
+  /** For a repo that consumes the core as a library: binary-
+   *  compatibility-validator dumps (`.api`, `.klib.api`), as files or
+   *  directories relative to the root, whose public API the
+   *  thin-driving-adapter judge is given. */
+  coreApiPaths?: string[]
   /** The real Gradle test task your commit gate should look for. */
   commitCommand?: RegExp
   /** Globs excluded (as `!`-negations) from every files-scoped block —
@@ -128,6 +165,23 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     '**/src/main/**/data/**',
   ]
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
+
+  // Driving adapters must be thin (issues #72, #76). Opt-in: listed
+  // before the TDD block, so a denial costs one AI call, not two.
+  const drivingAdapter = drivingAdapterBlock({
+    globs: options.drivingAdapterGlobs ?? [],
+    coreGlobs,
+    domainDiscriminants: options.domainDiscriminants,
+    domainHint: options.domainHint,
+    patternsFor: kotlinDomainDiscriminantPatterns,
+    coreExports: options.coreExportsInJudge
+      ? { root, language: KOTLIN_EXPORTS, maxChars: options.coreExportsMaxChars ?? 16000 }
+      : undefined,
+    publishedApi: options.coreApiPaths?.length
+      ? { paths: options.coreApiPaths, format: KOTLIN_API_DUMP, root }
+      : undefined,
+    instructions: (defaults) => defaults + KOTLIN_DRIVING_ADAPTER_ADDENDUM,
+  })
 
   const entries: RuleEntry[] = [
     // ── Deterministic wall ───────────────────────────────────────────
@@ -199,6 +253,8 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     // production already has (born green): a test-source write marked
     // `// probity: characterization` passes, and the commit gate below
     // holds the marker until a mutation probe shows that test failing.
+    ...(drivingAdapter ? [drivingAdapter] : []),
+
     {
       files: tddGlobs,
       // Telemetry-only additions pass deterministically — see the

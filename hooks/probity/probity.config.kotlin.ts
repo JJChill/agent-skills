@@ -23,6 +23,11 @@
  *   - acceptanceTestGlobs / acceptanceLanguageGlobs — your spec layer
  *   - seamHint          — your ambient-effect port(s)
  *   - commitCommand      — your real Gradle test task
+ *   - drivingAdapterGlobs — your Compose screens / CLI commands, held
+ *                         thin (opt-in; an AI call per write), with
+ *                         domainDiscriminants / coreExportsInJudge /
+ *                         coreApiPaths — see hooks/PROBITY.md
+ *                         "Driving adapters by project layout"
  */
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'

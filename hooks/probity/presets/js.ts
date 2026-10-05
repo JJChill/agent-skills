@@ -32,12 +32,11 @@ import {
 import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
   enforcePortsBoundary,
-  enforceThinDrivingAdapter,
   forbidInternalModuleMocks,
-  forbidNewDomainDiscriminantChecks,
 } from '../rules/ports-and-adapters.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { drivingAdapterBlock } from './driving-adapter.js'
 import {
   enforceSpecTestParity,
   JS_TEST_DECLARATION,
@@ -71,7 +70,7 @@ export type JsPresetOptions = {
    *  `src/components/**` and every `.tsx` under `src/`, minus tests
    *  and stories. Pass `[]` to switch
    *  the thinness rules off. */
-  drivingAdapterGlobs?: Globs
+  drivingAdapterGlobs?: readonly string[]
   /** Field names whose comparison to a literal in a driving adapter is
    *  a domain decision (e.g. `['role', 'plan']`). OFF by default —
    *  `status === 'loading'` is ordinary view state, so only your model
@@ -153,17 +152,13 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   const tddGlobs: Globs = options.tddGlobs ?? ['src/**', 'test/**', 'tests/**']
   const specGlobs: Globs = options.specGlobs ?? ['specs/**', 'acceptance/**', '**/*.feature']
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
-  const drivingAdapterGlobs: string[] = [
-    ...(options.drivingAdapterGlobs ?? [
-      'src/ui/**',
-      'src/components/**',
-      'src/**/*.tsx',
-      '!**/*.test.*',
-      '!**/*.spec.*',
-      '!**/*.stories.*',
-    ]),
-    // Core code is never a driving adapter, even as .tsx.
-    ...coreGlobs.filter((glob) => !glob.startsWith('!')).map((glob) => `!${glob}`),
+  const drivingAdapterGlobs: readonly string[] = options.drivingAdapterGlobs ?? [
+    'src/ui/**',
+    'src/components/**',
+    'src/**/*.tsx',
+    '!**/*.test.*',
+    '!**/*.spec.*',
+    '!**/*.stories.*',
   ]
 
   const entries: RuleEntry[] = [
@@ -210,29 +205,14 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   // "tested"). The free discriminant screen runs first when
   // configured; the judge runs before the TDD judge, so a denial here
   // costs one AI call, not two.
-  if (drivingAdapterGlobs.some((glob) => !glob.startsWith('!'))) {
-    const [first, ...rest] = drivingAdapterGlobs
-    entries.push({
-      files: [first!, ...rest],
-      rules: [
-        ...(options.domainDiscriminants?.length
-          ? [
-              forbidNewDomainDiscriminantChecks({
-                discriminants: options.domainDiscriminants,
-                domainHint: options.domainHint,
-              }),
-            ]
-          : []),
-        withJudgeFailureDiagnostics(
-          withContradictionRetry(
-            enforceThinDrivingAdapter({
-              coreExports: options.coreExportsInJudge ? { globs: coreGlobs } : undefined,
-            }),
-          ),
-        ),
-      ],
-    })
-  }
+  const drivingAdapter = drivingAdapterBlock({
+    globs: drivingAdapterGlobs,
+    coreGlobs,
+    domainDiscriminants: options.domainDiscriminants,
+    domainHint: options.domainHint,
+    coreExports: options.coreExportsInJudge ? {} : undefined,
+  })
+  if (drivingAdapter) entries.push(drivingAdapter)
 
   // Spec-to-test traceability (issue #18): OFF by default, so a
   // project that hasn't opted in sees no behavior change. Setting

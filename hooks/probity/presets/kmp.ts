@@ -30,6 +30,7 @@ import {
   withAcceptanceLanguageFastPath,
 } from '../rules/acceptance-language.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { drivingAdapterBlock } from './driving-adapter.js'
 import {
   enforceSpecTestParity,
   requireSpecBackedAcceptanceTest,
@@ -42,7 +43,11 @@ import {
   enforceProbeReversion,
   forbidNewAmbientEffects,
   GRADLE_TEST_COMMAND,
+  KOTLIN_API_DUMP,
   KOTLIN_BOUNDARY_ADDENDUM,
+  KOTLIN_DRIVING_ADAPTER_ADDENDUM,
+  KOTLIN_EXPORTS,
+  kotlinDomainDiscriminantPatterns,
   KOTLIN_INFRASTRUCTURE_IMPORTS,
   KOTLIN_PRODUCTION_SOURCE_PATTERN,
   KOTLIN_TEST_SOURCE_PATTERN,
@@ -106,6 +111,37 @@ export type KmpPresetOptions = {
    *  clock/randomness/env screen's deny text (default: function-typed
    *  providers such as `nowEpochMillis: () -> Long`). */
   seamHint?: string
+  /** Driving (inbound) adapter files held thin by
+   *  `enforceThinDrivingAdapter`: Compose screens, CLI commands, route
+   *  handlers. OFF unless set — a core-only module has none, so a
+   *  default glob would only be a dead scope. `coreGlobs` are always
+   *  excluded (so `presentation/` ViewModels stay core). Starting
+   *  points:
+   *  - UI in this repo: `['**\/composeApp/src/**', '**\/src/*Main/**\/ui/**', '!**\/*Preview*.kt']`
+   *  - a CLI module: `['cli/src/main/**\/commands/**']`
+   *  - a UI-only app on a core SDK: its `ui/` packages, plus `coreApiPaths`.
+   *  Every matching write costs an AI call, before the TDD judge. */
+  drivingAdapterGlobs?: readonly string[]
+  /** Fields whose comparison to a domain value in a driving adapter is
+   *  a domain decision (e.g. `['role', 'status']`): net-new
+   *  `role == Role.ADMIN`, `when (viewer.role)` or `status is
+   *  Status.Draft` block free, before the AI call. No default. */
+  domainDiscriminants?: string[]
+  /** Appended to the discriminant block message, e.g. where permission
+   *  rules live. */
+  domainHint?: string
+  /** Give the thin-driving-adapter judge the public names declared in
+   *  `coreGlobs` sources, so it can name the existing function a copy
+   *  duplicates. Scans the tree on each judged write. */
+  coreExportsInJudge?: boolean
+  /** Cap on the export list the judge is given (default 16000
+   *  characters; the list is truncated beyond it). */
+  coreExportsMaxChars?: number
+  /** For a repo that consumes the core as a library: binary-
+   *  compatibility-validator dumps (`.api`, `.klib.api`), as files or
+   *  directories relative to the root, whose public API the
+   *  thin-driving-adapter judge is given. */
+  coreApiPaths?: string[]
   /** Names your telemetry convention for the adapter-observability
    *  judge — how a boundary event is recorded in this codebase
    *  (default: a :foundation `Logger.event` or port-tap convention). */
@@ -166,6 +202,23 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
   // listed before any AI-validated rule (a model call per matching
   // write). A write with a vendor import in core code must be
   // rejected by the free import screen, not after a TDD model call.
+
+  // Driving adapters must be thin (issues #72, #76). Opt-in: listed
+  // before the TDD block, so a denial costs one AI call, not two.
+  const drivingAdapter = drivingAdapterBlock({
+    globs: options.drivingAdapterGlobs ?? [],
+    coreGlobs,
+    domainDiscriminants: options.domainDiscriminants,
+    domainHint: options.domainHint,
+    patternsFor: kotlinDomainDiscriminantPatterns,
+    coreExports: options.coreExportsInJudge
+      ? { root, language: KOTLIN_EXPORTS, maxChars: options.coreExportsMaxChars ?? 16000 }
+      : undefined,
+    publishedApi: options.coreApiPaths?.length
+      ? { paths: options.coreApiPaths, format: KOTLIN_API_DUMP, root }
+      : undefined,
+    instructions: (defaults) => defaults + KOTLIN_DRIVING_ADAPTER_ADDENDUM,
+  })
 
   const entries: RuleEntry[] = [
     // ── Deterministic wall ───────────────────────────────────────────
@@ -262,6 +315,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // marked `// probity: characterization` passes, and
     // enforceCharacterizationResolution below blocks commits until the
     // marker comes off through a recorded red under a mutation probe.
+    ...(drivingAdapter ? [drivingAdapter] : []),
+
     {
       files: [
         '**/src/*Main/kotlin/**',

@@ -1,5 +1,5 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative, sep } from 'node:path'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { isAbsolute, join, relative, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
@@ -480,6 +480,11 @@ export function domainDiscriminantPatterns(
  * @param options.domainHint — appended to the block message to name
  *   where the decision should go, e.g. "permission rules live in
  *   src/domain/permissions.ts".
+ * @param options.patternsFor — builds the patterns from the
+ *   discriminants (default {@link domainDiscriminantPatterns}, JS/TS
+ *   string literals). The Kotlin presets pass
+ *   `kotlinDomainDiscriminantPatterns`, which also matches enum
+ *   entries, `when` subjects and `is` checks.
  *
  * @example
  * { files: ['src/ui/**'], rules: [forbidNewDomainDiscriminantChecks({ discriminants: ['role'] })] }
@@ -487,8 +492,9 @@ export function domainDiscriminantPatterns(
 export function forbidNewDomainDiscriminantChecks(options: {
   discriminants: readonly string[]
   domainHint?: string
+  patternsFor?: (discriminants: readonly string[]) => NamedPattern[]
 }): Rule {
-  const patterns = domainDiscriminantPatterns(options.discriminants)
+  const patterns = (options.patternsFor ?? domainDiscriminantPatterns)(options.discriminants)
   return async function forbidNewDomainDiscriminantChecks(
     action: Action,
     ctx?: RuleContext,
@@ -502,7 +508,7 @@ export function forbidNewDomainDiscriminantChecks(options: {
       reason:
         `This write adds a domain decision to a driving adapter (${introduced.join(
           ', ',
-        )}). Driving adapters (UI components, route handlers) render ` +
+        )}). Driving adapters (UI components, route handlers, CLI commands) render ` +
         'core-supplied state and forward user intent; they do not decide ' +
         'business rules. Add a function to the domain that makes this ' +
         'decision (e.g. `canApprove(actor)`, `isEditable(order)`), ' +
@@ -516,7 +522,6 @@ export function forbidNewDomainDiscriminantChecks(options: {
 const EXPORT_DECLARATION =
   /^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
 const EXPORT_LIST = /^\s*export\s+(?:type\s+)?\{([^}]*)\}/gm
-const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/
 const EXPORT_SCAN_SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -525,6 +530,17 @@ const EXPORT_SCAN_SKIP_DIRS = new Set([
   'out',
   'coverage',
 ])
+
+/**
+ * How to read one language's exports from source: which files are
+ * source, which of those are tests (skipped), and the exported names
+ * in a file's text.
+ */
+export type ExportLanguage = {
+  sourceFile: RegExp
+  testFile: RegExp
+  exportedNames: (content: string) => string[]
+}
 
 /** Names a JS/TS module exports, from its source text. */
 export function exportedNames(content: string): string[] {
@@ -541,7 +557,24 @@ export function exportedNames(content: string): string[] {
   return [...names]
 }
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
+/** JS/TS exports: `export function|const|class|type…` and `export { … }`. */
+export const JS_EXPORTS: ExportLanguage = {
+  sourceFile: /\.(?:[cm]?[jt]sx?)$/,
+  testFile: /\.(?:test|spec)\.[^./]+$/,
+  exportedNames,
+}
+
+function sourceFiles(dir: string, pattern: RegExp, out: string[] = [], top = true): string[] {
+  // A directory holding a `.git` FILE is another working tree (a
+  // linked worktree under .claude/worktrees/, or a submodule): its
+  // copies of the core are not this checkout's exports (cf. #55).
+  if (!top) {
+    try {
+      if (statSync(join(dir, '.git')).isFile()) return out
+    } catch {
+      // no .git entry: an ordinary directory
+    }
+  }
   let entries
   try {
     entries = readdirSync(dir, { withFileTypes: true })
@@ -550,8 +583,8 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
   }
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      if (!EXPORT_SCAN_SKIP_DIRS.has(entry.name)) sourceFiles(join(dir, entry.name), out)
-    } else if (entry.isFile() && SOURCE_FILE.test(entry.name)) {
+      if (!EXPORT_SCAN_SKIP_DIRS.has(entry.name)) sourceFiles(join(dir, entry.name), pattern, out, false)
+    } else if (entry.isFile() && pattern.test(entry.name)) {
       out.push(join(dir, entry.name))
     }
   }
@@ -567,25 +600,89 @@ export function listCoreExports(options: {
   globs: readonly string[]
   root: string
   maxChars: number
+  language?: ExportLanguage
 }): string {
+  const language = options.language ?? JS_EXPORTS
   const matches = buildMatcher(options.globs)
-  const lines: string[] = []
-  for (const file of sourceFiles(options.root).sort()) {
+  const modules: [string, string[]][] = []
+  for (const file of sourceFiles(options.root, language.sourceFile).sort()) {
     const rel = relative(options.root, file).split(sep).join('/')
-    if (!matches(rel) || /\.(?:test|spec)\.[^.]+$/.test(rel)) continue
+    if (!matches(rel) || language.testFile.test(rel)) continue
     let content
     try {
       content = readFileSync(file, 'utf8')
     } catch {
       continue
     }
-    const names = exportedNames(content)
-    if (names.length > 0) lines.push(`${rel}: ${names.join(', ')}`)
+    const names = language.exportedNames(content)
+    if (names.length > 0) modules.push([rel, names])
   }
-  const text = lines.join('\n')
-  return text.length > options.maxChars
-    ? `${text.slice(0, options.maxChars)}\n(...export list truncated...)`
+  // Paths relative to the directory every module shares, so a deep
+  // package path isn't repeated on every line of a capped list.
+  const prefix = commonDirectory(modules.map(([rel]) => rel))
+  const lines = modules.map(([rel, names]) => `${rel.slice(prefix.length)}: ${names.join(', ')}`)
+  if (prefix && modules.length > 1) lines.unshift(`(paths under ${prefix})`)
+  return capped(lines.join('\n'), options.maxChars)
+}
+
+function commonDirectory(paths: readonly string[]): string {
+  if (paths.length < 2) return ''
+  const split = paths.map((path) => path.split('/').slice(0, -1))
+  const shared: string[] = []
+  for (let i = 0; split.every((parts) => i < parts.length && parts[i] === split[0]![i]); i++) {
+    shared.push(split[0]![i]!)
+  }
+  return shared.length ? `${shared.join('/')}/` : ''
+}
+
+function capped(text: string, maxChars: number): string {
+  return text.length > maxChars
+    ? `${text.slice(0, maxChars)}\n(...export list truncated...)`
     : text
+}
+
+/**
+ * How to read a published-API dump: which files in a directory are
+ * dumps, and the dump's text as `Owner: name, name` lines.
+ */
+export type ApiDumpFormat = {
+  file: RegExp
+  read: (content: string) => string[]
+}
+
+/**
+ * The core's public API from published dumps, for a repo that consumes
+ * the core as a library and has no core source to scan. Each path is a
+ * dump file or a directory of them, relative to `root` or absolute.
+ * Missing paths are skipped. Truncated beyond `maxChars`.
+ */
+export function listPublishedApi(options: {
+  paths: readonly string[]
+  root: string
+  maxChars: number
+  format: ApiDumpFormat
+}): string {
+  const files: string[] = []
+  for (const path of options.paths) {
+    const full = isAbsolute(path) ? path : join(options.root, path)
+    let stat
+    try {
+      stat = statSync(full)
+    } catch {
+      continue
+    }
+    if (stat.isDirectory()) files.push(...sourceFiles(full, options.format.file).sort())
+    else files.push(full)
+  }
+  const lines: string[] = []
+  for (const file of files) {
+    try {
+      lines.push(...options.format.read(readFileSync(file, 'utf8')))
+    } catch {
+      continue
+    }
+  }
+  return capped(lines.join('\n'), options.maxChars)
 }
 
 const THIN_DRIVING_ADAPTER_INSTRUCTIONS = `## Role
@@ -689,6 +786,13 @@ framework.`
  *   (default `process.cwd()`), truncated beyond `maxChars` (default
  *   8000), so it can spot a copy of an existing domain rule. Costs a
  *   directory scan per judged write.
+ *   `language` picks how exports are read (default {@link JS_EXPORTS};
+ *   the Kotlin presets pass `KOTLIN_EXPORTS`).
+ * @param options.publishedApi — for a repo that consumes the core as
+ *   a library: the judge is given the public API read from published
+ *   dumps at `paths` (files or directories, relative to `root`), in
+ *   `format` (e.g. `KOTLIN_API_DUMP` for binary-compatibility-validator
+ *   `.api` files). Combined with `coreExports` when both are set.
  * @param options.instructions — replaces or extends the default rules
  *   text (string, or `(defaults) => ...`).
  *
@@ -697,7 +801,18 @@ framework.`
  */
 export function enforceThinDrivingAdapter(
   options: {
-    coreExports?: { globs: readonly string[]; root?: string; maxChars?: number }
+    coreExports?: {
+      globs: readonly string[]
+      root?: string
+      maxChars?: number
+      language?: ExportLanguage
+    }
+    publishedApi?: {
+      paths: readonly string[]
+      format: ApiDumpFormat
+      root?: string
+      maxChars?: number
+    }
     instructions?: string | ((defaults: string) => string)
   } = {},
 ): Rule {
@@ -725,14 +840,29 @@ export function enforceThinDrivingAdapter(
       `## Current file content\n\n${formatBefore(before)}`,
       `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
     ]
+    const exports: string[] = []
     if (options.coreExports) {
-      const exports = listCoreExports({
-        globs: options.coreExports.globs,
-        root: options.coreExports.root ?? process.cwd(),
-        maxChars: options.coreExports.maxChars ?? 8000,
-      })
-      if (exports) sections.push(`## Core exports\n\n${exports}`)
+      exports.push(
+        listCoreExports({
+          globs: options.coreExports.globs,
+          root: options.coreExports.root ?? process.cwd(),
+          maxChars: options.coreExports.maxChars ?? 8000,
+          language: options.coreExports.language,
+        }),
+      )
     }
+    if (options.publishedApi) {
+      exports.push(
+        listPublishedApi({
+          paths: options.publishedApi.paths,
+          root: options.publishedApi.root ?? process.cwd(),
+          maxChars: options.publishedApi.maxChars ?? 8000,
+          format: options.publishedApi.format,
+        }),
+      )
+    }
+    const exportList = exports.filter(Boolean).join('\n')
+    if (exportList) sections.push(`## Core exports\n\n${exportList}`)
     sections.push(RESPONSE_SPEC)
     const verdict = await ctx.agent.reason(sections.join('\n\n'))
     if (verdict.kind === 'violation') {

@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.4.17
+
+The Kotlin and KMP presets can now keep driving adapters thin (#76):
+Compose screens and CLI commands, in the same repo as the core or in a
+separate app that consumes it as a library. Opt-in.
+
+- **What was missing.** 0.4.16 wired `enforceThinDrivingAdapter` and
+  `forbidNewDomainDiscriminantChecks` into the JS preset only. Kotlin
+  had three more gaps:
+  - Its discriminant screen matched only string literals, but Kotlin
+    compares to enum entries (`role == Role.SUPER_USER`).
+  - The export list only read JS/TS `export` declarations.
+  - A UI-only app depending on the core as a library has no core
+    source to scan at all.
+- **Opt-in, unlike JS.** `kotlinRuleEntries` and `kmpRuleEntries` get
+  a `drivingAdapterGlobs` option with **no default**. A core-only repo
+  (mysudo-core has no `@Composable` files) has no UI, so a default glob
+  would only show up as `DEAD SCOPE`. Upgrading changes nothing until
+  the option is set. When set, the block is listed before the TDD
+  judge, and `coreGlobs` are excluded from it (in KMP, that keeps
+  `presentation/` ViewModels core). Starting globs per layout are in
+  hooks/PROBITY.md, "Driving adapters by project layout".
+- **New options** (both presets):
+  - `domainDiscriminants`: turns on the free screen with Kotlin
+    patterns. It blocks net-new `role == Role.X` (either order) or
+    string-literal comparisons, `when (viewer.role)` subjects, and
+    `status is Status.Draft`.
+  - `domainHint`: appended to the screen's deny.
+  - `coreExportsInJudge`: the judge gets the public names declared in
+    `coreGlobs` sources. Capped at `coreExportsMaxChars`, default
+    16,000.
+  - `coreApiPaths`: for a UI-only app. The judge gets the core's public
+    API read from binary-compatibility-validator dumps (`.api` and
+    `.klib.api`, as files or directories). Generated members (getters,
+    `component1`, `copy`, `equals`…) are dropped; on kotlinx.coroutines'
+    real dumps this cuts 125 KB to about 10 KB.
+- **Kotlin judge addendum** (`KOTLIN_DRIVING_ADAPTER_ADDENDUM`). A CLI
+  command's options, help text, precondition checks and exhaustive
+  `when` over its use case's sealed outcome (to exit code, error code,
+  message and JSON) are translation. Branching on domain state,
+  retrying, or chaining use cases is not. It also lists Compose view
+  state and wiring (`remember`, `collectAsState`, `LaunchedEffect`
+  forwarding one intent, `@Preview`) as allowed.
+- **Export scanning (all presets).** Nested worktrees and submodules
+  (a directory with a `.git` file, such as `.claude/worktrees/*`) are
+  skipped, as the parity rule already does (#55). Paths are printed
+  relative to the directory the modules share. On mysudo-core, the
+  worktree copies would otherwise have filled the cap several times
+  over. Kotlin nested types (mostly sealed-outcome cases) are left out,
+  which takes mysudo-core's core list from 29,000 to 13,000 characters.
+- **Shared block.** `presets/driving-adapter.ts` (`drivingAdapterBlock`)
+  builds the block for all three presets. The JS preset's wiring is
+  unchanged.
+- **Measured** with Probity's real Claude Code judge, wired as the KMP
+  preset wires it, 5 runs per case.
+  - **mysudo-core's CLI** (`cli/src/main/**/commands/**`, its real
+    `coreGlobs`, `coreExportsInJudge: true`):
+    - Allowed: four real writes (adding the real `sudos delete`
+      command, the real `RegisterCommand` with its extra read for
+      display, the real 432-line `PhoneCallsCommand`, and a help-text
+      change).
+    - Blocked: four splices into real commands (label validation the
+      `CreateSudo` use case already does; a last-Sudo rule plus a retry
+      in `delete`; a role/status filter in `list`; a locked-account
+      sign-out-and-deregister policy in `register`).
+    - Result: 40/40 correct. The free screen caught the two enum cases
+      before any AI call.
+  - **Synthetic Compose versions** of the #72 cases (blocked) and
+    controls (allowed: a pure render change, calling `canApprove()`,
+    one ViewModel intent, local `remember` state): 40/40 correct.
+  - **Addendum check.** Without the Kotlin addendum, the CLI set was
+    also correct (39/39 verdicts, 1 run failed on the judge's login).
+    So the addendum is guidance these cases didn't need, not a measured
+    fix.
+- **Scope.** `probity-scope-report` was run on mysudo-core's tree from
+  a scratch copy of its config. Relative globs are anchored to the
+  config's own directory, so that copy used the unanchored
+  `**/cli/src/main/**/commands/**`. It reported the block with no
+  warning but also matched `.claude/worktrees/` copies (123 files). In
+  mysudo-core's own config, the anchored `cli/src/main/**/commands/**`
+  matches the 31 command files. A scope-report test confirms the block
+  leaves out `Composition.kt`.
+- New exports: `drivingAdapterBlock` (`presets/driving-adapter`).
+  `ExportLanguage`, `JS_EXPORTS`, `ApiDumpFormat` and
+  `listPublishedApi` (`rules/ports-and-adapters`). `kotlinExportedNames`,
+  `KOTLIN_EXPORTS`, `readKotlinApiDump`, `KOTLIN_API_DUMP`,
+  `kotlinDomainDiscriminantPatterns` and `KOTLIN_DRIVING_ADAPTER_ADDENDUM`
+  (`rules/kotlin`). `forbidNewDomainDiscriminantChecks` takes
+  `patternsFor`; `enforceThinDrivingAdapter` takes `publishedApi` and a
+  `coreExports.language`.
+
 ## 0.4.16
 
 The JS preset now keeps driving adapters (UI components, pages, route
