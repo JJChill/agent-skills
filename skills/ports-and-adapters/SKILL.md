@@ -118,7 +118,36 @@ If an adapter grows retry policies, fallback decisions, caching rules, or valida
 
 **Thin does not mean blind.** Boundary observability is translation-adjacent, not business logic: a structured event per external call/outcome, and a **port tap** — a recording decorator installed at the composition root that captures real request/response traffic for debugging, fake fixtures, and contract evidence — belong at every integration point. The pattern lives in `observability-and-instrumentation`.
 
-**Inbound adapters are equally thin.** A route handler parses/deserializes, calls one use-case port, and serializes the result. A UI component renders core-supplied state and forwards user intent. If you can't unit-test a behavior without the framework, the behavior is trapped in an adapter.
+### Driving adapters are equally thin
+
+A driving (inbound) adapter is the code the outside world calls first: a UI component or page, a route handler, a CLI command. A route handler parses/deserializes, calls one use-case port, and serializes the result. A UI component renders core-supplied state and forwards user intent. If you can't unit-test a behavior without the framework, the behavior is trapped in an adapter.
+
+Logic leaks *out* of the core into driving adapters more easily than vendors leak *in*, because a component test makes the leaked logic look tested. Each user intent should cost the adapter one call:
+
+```tsx
+// BAD — a use case and a permission rule living in a component
+async function handleSubmit() {
+  const submitted = submit(timesheet)                 // domain
+  await repository.save(submitted)                    // port 1
+  try { await notifier.timesheetSubmitted(submitted) } // port 2
+  catch { /* a failed notification must never fail the submit */ } // policy
+}
+{viewer.role === 'SuperUser' && <DeleteButton />}
+
+// GOOD — the component forwards intent and asks the domain
+async function handleSubmit() {
+  onSaved(await submitTimesheet(timesheet.id))         // one use case
+}
+{canDeleteUser(viewer) && <DeleteButton />}
+```
+
+Thinness checklist for a driving adapter:
+
+- **Decisions come from the domain.** Eligibility, permissions, state transitions and validation are domain functions (`canApprove(actor)`, `isEditable(timesheet)`), called by the adapter. Comparing a role, status or plan to a literal in a component is a decision in the wrong place.
+- **Coordination is a use case.** A handler that calls more than one port, or carries a policy about their outcomes, is a use case. Move it to the use-case layer and test it headless with fakes at its ports.
+- **One copy of each rule.** A display or derivation rule (a person's display name, a total) lives in the core once. The adapter calls it; it never re-implements it.
+- **Use cases don't live under `ui/`.** A framework-free module that coordinates ports is a use case, whatever directory it sits in.
+- **What stays:** rendering and layout, formatting for display, local view state (open/closed, loading, form values), shaping user input into a call's arguments, and calling one use case per intent.
 
 ## Ports Are the Only Test Seam
 
@@ -157,6 +186,7 @@ const app = new PlaceOrder(new InMemoryOrderStore(), approvingGateway(), clock);
 | "Wrapping the framework is fighting the framework" | The framework keeps doing what it's good at — in the adapter. The core stays portable and testable. Frameworks churn on their schedule, not yours. |
 | "An interface with one implementation is over-engineering" | Every port has at least two implementations from day one: the real adapter and the fake the tests use. |
 | "It's faster to mock the internal service class in this test" | Mocking internals welds the test to today's structure and removes your own code from the test. Substitute at the port; let the real core run. |
+| "The component has a test, so the logic in it is covered" | Only through the framework. The rule is invisible to headless and acceptance tests, and the next screen copies it. Move it to the domain or a use case; the component test then covers rendering. |
 | "The adapter can just handle the retry/fallback logic" | Then that behavior is invisible to every test that uses the fake. Decisions go in the core; adapters translate. |
 | "This vendor type is basically our domain type anyway" | Until their next major version. Port signatures use core types only. |
 | "We own that other service too, so no adapter needed" | Owning the code isn't the test — deploying together is. If it releases separately, it can change independently, so it sits behind a port. |
@@ -170,6 +200,7 @@ const app = new PlaceOrder(new InMemoryOrderStore(), approvingGateway(), clock);
 - An adapter containing `if`/`switch` on domain concepts, retries with fallback decisions, caching policy, or validation rules
 - Tests using module-mocking (`jest.mock('./our-own-module')`), patching internals, or spying on private methods
 - Business behavior only testable by spinning up the framework, a browser, or a real database
+- A UI component or handler comparing a role/status/plan to a literal, calling several ports in one handler, or re-implementing a rule the domain already exports
 - A dependency owned by another team (or released on another schedule) called directly "because it's internal"
 - A port with no fake implementation, or a fake with no contract test tying it to the real adapter
 
@@ -180,6 +211,7 @@ After introducing or reviewing a dependency boundary, confirm:
 - [ ] Every dependency that is unowned or separately deployed is reached only through a port defined in the core
 - [ ] Port names and signatures use domain language and core types exclusively — no vendor or framework types
 - [ ] Each adapter is translation-only: no business conditionals, policies, or validation (spot-check the diffs)
+- [ ] Each driving adapter (UI component, handler, command) calls one use case per user intent and asks the domain for every decision
 - [ ] Core modules have zero imports from adapters, frameworks, vendors, or OS I/O (verified by lint/arch rule if available, otherwise by inspection)
 - [ ] Every outbound port has an in-memory fake, and a contract test suite runs against both fake and real adapter
 - [ ] All test doubles in the suite are substituted at ports — no internal mocking or module patching anywhere

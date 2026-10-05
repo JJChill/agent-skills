@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.4.16
+
+The JS preset now keeps driving adapters (UI components, pages, route
+handlers) thin (#72). Business logic leaking out of the core into UI
+code is blocked, and the deny names where it should go.
+
+- **What went wrong.** The existing ports-and-adapters rules stop
+  vendors getting *into* core code. Nothing stopped logic leaking *out*
+  of it. In a React consumer on 0.4.14, with clean and fully policed
+  core boundaries, `src/ui/` grew:
+  - a submit handler running a whole use case (domain `submit()`,
+    `repository.save()`, `notifier.timesheetSubmitted()`, and a "a
+    failed notification must never fail the submit" policy)
+  - `viewer.role === 'SuperUser'` permission checks in four places,
+    next to a domain that already exported `canEdit` and `canApprove`
+  - a display-name rule copied seven times, with two copies disagreeing
+  - a React-free use case filed under `src/ui/`
+
+  Each one had a component test, so the TDD judge had no reason to
+  object. It checks whether code is tested, not where it belongs.
+- **Now:** two new rules in `rules/ports-and-adapters.ts`.
+  - `enforceThinDrivingAdapter`, an AI judge. It blocks a write that
+    adds (a) a decision in domain terms, (b) coordination of more than
+    one port or use-case call, (c) a re-implementation of something the
+    core exports, or (d) a framework-free use case under a UI path. The
+    deny names the extraction target: a domain function or a use case.
+    Rendering, display formatting, local view state, and one call per
+    user intent pass. Only what a write adds is judged, so an existing
+    thick component doesn't freeze.
+  - `forbidNewDomainDiscriminantChecks`, a free deterministic screen.
+    It blocks net-new comparisons of configured fields to a literal
+    (`viewer.role === 'SuperUser'`, either order) and points to a domain
+    function. Off until you list the fields: there is no default,
+    because `status === 'loading'` is ordinary view state.
+- **Preset wiring (JS only).** `jsRuleEntries` gets a block on the new
+  `drivingAdapterGlobs` option, **on by default**: `src/ui/**`,
+  `src/components/**` and `src/**/*.tsx`, minus `*.test.*`, `*.spec.*`
+  and `*.stories.*`. It runs before the TDD judge, so a denial costs one
+  AI call. New options:
+  - `drivingAdapterGlobs`: the scope; `[]` switches the rules off.
+  - `domainDiscriminants`: turns on the free screen, e.g. `['role']`.
+  - `domainHint`: appended to the screen's deny, e.g. where permission
+    rules live.
+  - `coreExportsInJudge`: gives the judge the export names of every
+    module under `coreGlobs` (capped at 8,000 characters), so it can
+    name the existing function a copy duplicates. Off by default; it
+    scans the tree on each judged write.
+- **Measured** with Probity's real Claude Code judge, 5 runs per case,
+  on synthetic writes built from the four cases above plus five
+  controls that must pass: a pure render change, adding a `canX()`
+  call, a single use-case call, a local `status === 'loading'` check,
+  and calling an existing `displayName` export. These are written from
+  the issue's descriptions, not replays of the consumer's real writes.
+  With and without the export list, 90/90 verdicts were correct (40
+  blocked, 50 allowed). The prompt's examples were then made
+  domain-neutral and the replay rerun: 76 of 90 runs returned a verdict
+  and all 76 were correct. The other 14 hit a judge login failure in
+  the test environment. On 0.4.14 no rule judged these writes, so all
+  would pass.
+- **Cost:** one extra AI call per write to a matching UI file, on top of
+  the TDD judge.
+- **Migration.** Consumers calling `jsRuleEntries` get the new block on
+  upgrade. Check it with `probity-scope-report`: it lists the block and
+  flags it `DEAD SCOPE` if your UI lives elsewhere. Then set
+  `drivingAdapterGlobs` to your layout, or `[]` to opt out. Hand-composed
+  configs add the block themselves:
+
+  ```ts
+  {
+    files: ['src/ui/**', '!**/*.test.*'],
+    rules: [
+      forbidNewDomainDiscriminantChecks({ discriminants: ['role'] }),
+      withJudgeFailureDiagnostics(withContradictionRetry(enforceThinDrivingAdapter())),
+    ],
+  }
+  ```
+
+  The Kotlin, KMP and Swift presets are unchanged; Compose and SwiftUI
+  globs are a follow-up.
+- New exports: `enforceThinDrivingAdapter`,
+  `forbidNewDomainDiscriminantChecks`, `domainDiscriminantPatterns`,
+  `exportedNames` and `listCoreExports`.
+- Skills: `ports-and-adapters` gets a "Driving adapters are equally
+  thin" section with a checklist, red flags and a rationalization;
+  `frontend-ui-engineering` points to it.
+
 ## 0.4.15
 
 The JS/TS TDD judge no longer blocks adding a new red test (#73), and it

@@ -14,6 +14,11 @@
  *   - coreGlobs             — where your core/domain code lives
  *   - infrastructureImports — your stack's known vendor/framework imports
  *   - specGlobs             — where your acceptance specs live
+ *   - drivingAdapterGlobs   — your UI components / route handlers, held
+ *                             thin (an AI call per write; [] = off)
+ *   - domainDiscriminants   — fields whose literal comparison in UI code
+ *                             is a domain decision, e.g. ['role'] (off
+ *                             until set; blocks free, before the AI call)
  *   - glossaryPath          — absolute path to a ubiquitous-language glossary
  *   - commitCommand / commitSuccessPattern / commitFailurePattern
  *                           — your real test command and its output shapes
@@ -36,5 +41,7 @@ import { jsRuleEntries } from '@jjchill/probity-rules/presets/js'
 export default defineConfig({
   rules: jsRuleEntries({
     // glossaryPath: fileURLToPath(new URL('./docs/GLOSSARY.md', import.meta.url)),
+    // domainDiscriminants: ['role'],
+    // coreExportsInJudge: true,
   }),
 })

@@ -307,6 +307,8 @@ function useToggleTask() {
 
 For detailed accessibility requirements and testing tools, see `../../references/accessibility-checklist.md`.
 
+Components are driving adapters: they render core-supplied state and forward user intent, and business decisions stay in the domain. For the thinness checklist and red flags, see the "Driving adapters are equally thin" section of `../ports-and-adapters/SKILL.md`.
+
 ## Common Rationalizations
 
 | Rationalization | Reality |
@@ -320,6 +322,7 @@ For detailed accessibility requirements and testing tools, see `../../references
 ## Red Flags
 
 - Components with more than 200 lines (split them)
+- Permission checks, multi-step use cases, or copied domain rules inside a component (see `ports-and-adapters`)
 - Inline styles or arbitrary pixel values
 - Missing error states, loading states, or empty states
 - No keyboard navigation testing
