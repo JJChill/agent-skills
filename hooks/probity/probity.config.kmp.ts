@@ -27,6 +27,11 @@
  * to your layout. The optional `parity` second argument turns on the
  * per-scenario driver mapping; see the commented example in
  * presets/kmp.ts.
+ *
+ * Thin driving adapters are opt-in: set `drivingAdapterGlobs` to your
+ * Compose screens or CLI commands (e.g. `['cli/src/main/**\/commands/**']`)
+ * to have each write there judged before the TDD gate. See
+ * hooks/PROBITY.md "Driving adapters by project layout".
  */
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'

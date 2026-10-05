@@ -13,6 +13,7 @@ import {
   type NamedPattern,
 } from './gates.js'
 import { GIT_COMMIT, nestedCommitTree } from './commit-target.js'
+import type { ApiDumpFormat, ExportLanguage } from './ports-and-adapters.js'
 
 /**
  * Kotlin/JVM/Android preset for the ports-and-adapters rules. The
@@ -1620,3 +1621,186 @@ export const KOTLIN_BOUNDARY_ADDENDUM = `
     the hexagon; \`expect\`/\`actual\` pairs and per-platform source
     sets (\`androidMain\`, \`iosMain\`, \`desktopMain\`) implementing a
     common declaration are adapters and may touch platform APIs.`
+
+// ── Thin driving adapters (issue #76) ────────────────────────────────
+
+const KOTLIN_DECLARATION =
+  /^([ \t]*)((?:(?:public|protected|private|internal|open|final|abstract|sealed|data|enum|value|inline|suspend|override|operator|infix|tailrec|external|const|lateinit|annotation|expect|actual|inner)\s+)*)(fun|val|var|class|interface|object|typealias)\s+(?:<[^>\n]*>\s+)?(?:([\w.<>?, ]+?)\.)?([A-Za-z_]\w*)/gm
+const HIDDEN_MODIFIER = /\b(?:private|internal|protected|override)\b/
+
+/**
+ * Names a Kotlin file exposes to other modules: non-private,
+ * non-internal `fun`s at any depth (extension functions as
+ * `Receiver.name`), and top-level types, objects, typealiases and
+ * `val`/`var`s. Overrides are skipped (they name the supertype's
+ * member, not a new one).
+ */
+export function kotlinExportedNames(content: string): string[] {
+  const names = new Set<string>()
+  for (const match of content.matchAll(KOTLIN_DECLARATION)) {
+    const [, indent = '', modifiers = '', kind, receiver, name] = match
+    if (!name || name === 'interface' || HIDDEN_MODIFIER.test(modifiers)) continue
+    // Indented properties are members or locals (alike to a regex);
+    // indented types are mostly sealed-outcome cases, noise beside the
+    // functions a copy would duplicate.
+    if (kind !== 'fun' && indent.length > 0) continue
+    names.add(kind === 'fun' && receiver ? `${receiver.replace(/<.*>/, '')}.${name}` : name)
+  }
+  return [...names]
+}
+
+/** Kotlin exports, for `enforceThinDrivingAdapter`'s `coreExports`. */
+export const KOTLIN_EXPORTS: ExportLanguage = {
+  sourceFile: /\.kt$/,
+  testFile: KOTLIN_TEST_SOURCE_PATTERN,
+  exportedNames: kotlinExportedNames,
+}
+
+// Generated members that say nothing about the domain: constructors,
+// data-class and enum boilerplate, synthetic default-argument bridges.
+const API_DUMP_NOISE =
+  /^(?:<init>|component\d+|copy|equals|hashCode|toString|values|valueOf|entries|getEntries|INSTANCE|Companion|\$VALUES)$|\$/
+
+function simpleName(qualified: string): string {
+  return qualified.replace(/<.*>/, '').split(/[/.]/).pop()!.replace(/\$/g, '.')
+}
+
+/**
+ * Public API, one `Owner: name, name` line per class, from a
+ * binary-compatibility-validator dump: a JVM `.api` file
+ * (`public final class com/x/Permissions {` with `fun canApprove (…)Z`
+ * members) or a Kotlin/Native `.klib.api` file (`final class
+ * com.x/Permissions {`, top-level `final fun (com.x/Viewer).com.x/canApprove()`).
+ * JVM getters become property names; setters and generated members
+ * are dropped. Top-level declarations are grouped under `(top level)`
+ * (`…Kt` facade classes in a JVM dump).
+ */
+export function readKotlinApiDump(content: string): string[] {
+  const owners = new Map<string, Set<string>>()
+  const add = (owner: string, name: string) => {
+    if (API_DUMP_NOISE.test(name)) return
+    if (!owners.has(owner)) owners.set(owner, new Set())
+    owners.get(owner)!.add(name)
+  }
+  const klib = content.startsWith('// Klib ABI Dump')
+  let owner = '(top level)'
+  for (const raw of content.split('\n')) {
+    const line = klib ? raw.replace(/ \/\/ .*$/, '') : raw
+    if (/^\s*(?:\/\/|$)/.test(line)) continue
+    const indented = /^\s/.test(line)
+    const type = line.match(
+      klib
+        ? /^(?:[a-z]+ )*(?:class|interface|object)\s+(?:<.*?>\s+)?([\w.$/]+)/
+        : /^(?:public|protected) (?:[a-z]+ )*(?:class|interface)\s+([\w$/]+)/,
+    )
+    if (type && !indented) {
+      const name = simpleName(type[1]!)
+      owner = /Kt$/.test(name) && !klib ? '(top level)' : name
+      continue
+    }
+    if (/^}/.test(line)) {
+      owner = '(top level)'
+      continue
+    }
+    if (klib) {
+      const entry = line.match(/^\s+enum entry (\w+)/)
+      if (entry) {
+        add(owner, entry[1]!)
+        continue
+      }
+      const member = line.match(
+        /^\s*(?:[a-z]+ )*(fun|val|var)\s+(?:<.*?>\s+)?(?:\(([^)]*)\)\.)?(?:[\w.]*\/)?([\w$<>-]+)/,
+      )
+      if (!member || member[3]!.startsWith('<')) continue
+      const where = indented ? owner : '(top level)'
+      add(where, member[2] ? `${simpleName(member[2])}.${member[3]}` : member[3]!)
+      continue
+    }
+    const field = line.match(/^\s+public (?:[a-z]+ )*field (\w+) /)
+    if (field) {
+      add(owner, field[1]!)
+      continue
+    }
+    const fun = line.match(/^\s+(?:public|protected) (?:[a-z]+ )*fun ([\w$<>]+) \(/)
+    if (!fun) continue
+    const name = fun[1]!
+    if (/^set[A-Z]/.test(name)) continue
+    add(owner, /^get[A-Z]/.test(name) ? name[3]!.toLowerCase() + name.slice(4) : name)
+  }
+  return [...owners].map(([name, members]) => `${name}: ${[...members].join(', ')}`)
+}
+
+/** binary-compatibility-validator dumps: `*.api`, including `*.klib.api`. */
+export const KOTLIN_API_DUMP: ApiDumpFormat = {
+  file: /\.api$/,
+  read: readKotlinApiDump,
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Kotlin forms of a domain discriminant check, one pattern per field:
+ * comparison to a string literal or to an enum entry / object
+ * (`role == Role.SUPER_USER`, `Role.SUPER_USER != viewer.role`), a
+ * `when (viewer.role)` subject, and an `is`/`!is` type check
+ * (`status is Status.Draft`). For `forbidNewDomainDiscriminantChecks`'
+ * `patternsFor`.
+ */
+export function kotlinDomainDiscriminantPatterns(
+  discriminants: readonly string[],
+): NamedPattern[] {
+  return discriminants.map((name) => {
+    const field = escapeRegExp(name)
+    const subject = String.raw`[\w.?!]*\b${field}\b`
+    const value = String.raw`(?:[A-Z]\w*\.)+[A-Za-z_]\w*`
+    return {
+      label: `${name} compared to a domain value`,
+      pattern: new RegExp(
+        [
+          String.raw`\b${field}\s*[!=]==?\s*(?:"|${value})`,
+          String.raw`(?:"[^"\n]*"|${value})\s*[!=]==?\s*${subject}`,
+          String.raw`\bwhen\s*\(\s*${subject}\s*\)`,
+          String.raw`\b${field}\s+!?is\s+[A-Z]`,
+        ].join('|'),
+        'g',
+      ),
+    }
+  })
+}
+
+/**
+ * Kotlin addendum for `enforceThinDrivingAdapter`: what thin means for
+ * a CLI command and a Compose screen. Pass as
+ * `instructions: (defaults) => defaults + KOTLIN_DRIVING_ADAPTER_ADDENDUM`.
+ */
+export const KOTLIN_DRIVING_ADAPTER_ADDENDUM = `
+
+### Kotlin specifics: CLI commands and Compose screens
+
+  - A CLI command (a Clikt \`CliktCommand\`, picocli, kotlinx-cli) is a
+    driving adapter. Always allowed: declaring options and arguments,
+    help text, finding the selected configuration or session, calling
+    one use case, and mapping its outcome to output. Mapping is
+    translation even with many branches: an exhaustive \`when\` over
+    the use case's sealed outcome type that turns each case into an
+    exit code, an error code, a message, a hint or JSON is one branch
+    per outcome the core already decided. A precondition the command
+    itself needs (no configuration selected → a usage error) is
+    translation too.
+  - Block a command that decides something its use case's outcome
+    doesn't already say: branching on domain state or a role to choose
+    what happens, retrying or falling back, or calling several use
+    cases where one's result decides whether or how the next runs.
+    Reading one more value only to display it beside the result (e.g.
+    whether the account is signed in after registering) is not
+    coordination.
+  - Composables: \`remember { mutableStateOf(…) }\`, \`rememberSaveable\`,
+    \`collectAsState()\`/\`collectAsStateWithLifecycle()\`, a
+    \`LaunchedEffect\` that forwards one intent, navigation callbacks,
+    modifiers, theming and \`@Preview\` functions are view state or
+    wiring — always allowed. Sending one intent to a ViewModel, or
+    calling one use case per user action, is the intended pattern.
+  - Composition roots — Koin modules, a \`Composition\` that builds the
+    client, DI wiring — are always allowed.`

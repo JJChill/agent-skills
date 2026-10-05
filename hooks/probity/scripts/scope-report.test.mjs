@@ -156,3 +156,45 @@ test('the JS preset driving-adapter block claims UI files without a core-purity 
     out,
   )
 })
+
+// Issue #76: the KMP preset's driving-adapter block is opt-in. Unset,
+// a core-only repo gets no block (so no DEAD SCOPE); set to a CLI
+// module, it claims the commands and not the core.
+function kmpConfig(options) {
+  return `
+import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { kmpRuleEntries } from ${JSON.stringify(join(HERE, '..', 'presets', 'kmp.ts'))}
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default { rules: kmpRuleEntries(ROOT, ${JSON.stringify(options)}) }
+`
+}
+
+test('the KMP preset wires no driving-adapter block unless drivingAdapterGlobs is set', (t) => {
+  const dir = workspace(t, {
+    'probity.config.mjs': kmpConfig({}),
+    'sdk/src/commonMain/kotlin/x/domain/Viewer.kt': 'class Viewer',
+  })
+  const out = report(dir)
+  assert.doesNotMatch(out, /enforceThinDrivingAdapter/, out)
+})
+
+test('the KMP preset driving-adapter block claims CLI commands, not the core', (t) => {
+  const dir = workspace(t, {
+    'probity.config.mjs': kmpConfig({
+      coreGlobs: ['**/src/commonMain/**/domain/**'],
+      drivingAdapterGlobs: ['cli/src/main/**/commands/**'],
+      domainDiscriminants: ['role'],
+    }),
+    'sdk/src/commonMain/kotlin/x/domain/Viewer.kt': 'class Viewer',
+    'cli/src/main/kotlin/x/commands/SudosCommand.kt': 'class SudosCommand',
+    'cli/src/main/kotlin/x/Composition.kt': 'interface Composition',
+  })
+  const out = report(dir)
+  assert.match(
+    out,
+    /\[forbidNewDomainDiscriminantChecks, enforceThinDrivingAdapter\][\s\S]*?→ 1 file\(s\)\n\s+cli\/src\/main\/kotlin\/x\/commands\/SudosCommand\.kt\n/,
+    out,
+  )
+  assert.doesNotMatch(out, /DEAD SCOPE: block \d+ \[forbidNewDomainDiscriminantChecks/, out)
+})
