@@ -26,6 +26,8 @@ import {
   forbidNewAmbientEffects,
   JS_AMBIENT_EFFECT_PATTERNS,
   requireGreenTestRun,
+  withJudgeFailureDiagnostics,
+  withContradictionRetry,
 } from '../rules/gates.js'
 import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
