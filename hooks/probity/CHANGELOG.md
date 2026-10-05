@@ -53,8 +53,12 @@ code is blocked, and the deny names where it should go.
   call, a single use-case call, a local `status === 'loading'` check,
   and calling an existing `displayName` export. These are written from
   the issue's descriptions, not replays of the consumer's real writes.
-  With the export list: 20/20 blocked, 25/25 allowed. Without it: the
-  same, 45/45. On 0.4.14 no rule judged these writes, so all would pass.
+  With and without the export list, 90/90 verdicts were correct (40
+  blocked, 50 allowed). The prompt's examples were then made
+  domain-neutral and the replay rerun: 76 of 90 runs returned a verdict
+  and all 76 were correct. The other 14 hit a judge login failure in
+  the test environment. On 0.4.14 no rule judged these writes, so all
+  would pass.
 - **Cost:** one extra AI call per write to a matching UI file, on top of
   the TDD judge.
 - **Migration.** Consumers calling `jsRuleEntries` get the new block on

@@ -160,6 +160,8 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
       '!**/*.spec.*',
       '!**/*.stories.*',
     ]),
+    // Core code is never a driving adapter, even as .tsx.
+    ...coreGlobs.filter((glob) => !glob.startsWith('!')).map((glob) => `!${glob}`),
   ]
 
   const entries: RuleEntry[] = [

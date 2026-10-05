@@ -267,6 +267,11 @@ test('domainDiscriminants puts the free screen first in the block', async () => 
   assert.match(result.reason ?? '', /see src\/domain/)
 })
 
+test('core globs are excluded from the driving-adapter block', () => {
+  const thin = block(jsRuleEntries({ coreGlobs: ['src/model/**'] }), 'enforceThinDrivingAdapter')
+  assert.ok(thin?.files?.includes('!src/model/**'))
+})
+
 test('drivingAdapterGlobs: [] switches the thinness rules off', () => {
   const entries = jsRuleEntries({ drivingAdapterGlobs: [] })
   assert.equal(blockIndex(entries, 'enforceThinDrivingAdapter'), -1)

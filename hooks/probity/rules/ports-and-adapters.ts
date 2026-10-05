@@ -438,7 +438,7 @@ function escapeRegExp(text: string): string {
 /**
  * One pattern per discriminant: the field compared to a string literal
  * with `===`, `!==`, `==` or `!=`, in either order
- * (`viewer.role === 'SuperUser'`, `'Draft' !== timesheet.status`).
+ * (`viewer.role === 'SuperUser'`, `'Draft' !== order.status`).
  */
 export function domainDiscriminantPatterns(
   discriminants: readonly string[],
@@ -461,7 +461,7 @@ export function domainDiscriminantPatterns(
  * UI component or other inbound adapter that compares a domain
  * discriminant — a role, a status, a plan — to a literal is deciding a
  * business rule itself. The domain should export that decision
- * (`canApprove(actor)`, `isEditable(timesheet)`) and the adapter call
+ * (`canApprove(actor)`, `isEditable(order)`) and the adapter call
  * it.
  *
  * Delta-based, like `forbidNewAmbientEffects`: only a write that adds
@@ -505,7 +505,7 @@ export function forbidNewDomainDiscriminantChecks(options: {
         )}). Driving adapters (UI components, route handlers) render ` +
         'core-supplied state and forward user intent; they do not decide ' +
         'business rules. Add a function to the domain that makes this ' +
-        'decision (e.g. `canApprove(actor)`, `isEditable(timesheet)`), ' +
+        'decision (e.g. `canApprove(actor)`, `isEditable(order)`), ' +
         `test it without the UI framework, and call it here.${hint} ` +
         'Existing comparisons in the file are untouched by this rule — ' +
         'only new ones are blocked.',
@@ -622,8 +622,8 @@ ambiguous, pass.
 
 (a) **A decision expressed in domain terms**: eligibility, permission,
     a state transition, a validation rule, or a derived value used to
-    make one (who may approve, which manager an invitee reports to,
-    whether a timesheet is editable). Comparing a role, status or plan
+    make one (who may approve, which approver a request is routed to,
+    whether an order can still be edited). Comparing a role, status or plan
     to a literal is the usual shape. Extraction target: a domain
     function the adapter calls.
 (b) **Coordination of more than one port or use-case call in one
