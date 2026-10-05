@@ -118,3 +118,41 @@ test('a stale --allow-empty is noted without failing; a misspelt one warns', (t)
   assert.equal(typo.code, 1, typo.out)
   assert.match(typo.out, /--allow-empty src\/adapter\/\*\* matches no block's files glob/, typo.out)
 })
+
+// Issue #72: the JS preset's thin-driving-adapter block is reported
+// like any other, flagged when its globs match nothing, and not
+// mistaken for a core-purity rule pointed at UI files.
+const JS_PRESET_CONFIG = `
+import { jsRuleEntries } from ${JSON.stringify(join(HERE, '..', 'presets', 'js.ts'))}
+export default { rules: jsRuleEntries({ domainDiscriminants: ['role'] }) }
+`
+
+test('the JS preset reports its driving-adapter block, flagging it when no UI files exist', (t) => {
+  const dir = workspace(t, {
+    'probity.config.mjs': JS_PRESET_CONFIG,
+    'src/core/timesheet.ts': 'export {}',
+  })
+  const out = report(dir)
+  assert.match(
+    out,
+    /DEAD SCOPE: block \d+ \[forbidNewDomainDiscriminantChecks, enforceThinDrivingAdapter\] matches no files/,
+    out,
+  )
+})
+
+test('the JS preset driving-adapter block claims UI files without a core-purity warning', (t) => {
+  const dir = workspace(t, {
+    'probity.config.mjs': JS_PRESET_CONFIG,
+    'src/core/timesheet.ts': 'export {}',
+    'src/ui/TimesheetPage.tsx': 'export {}',
+    'src/ui/TimesheetPage.test.tsx': 'export {}',
+  })
+  const out = report(dir)
+  assert.doesNotMatch(out, /DEAD SCOPE: block \d+ \[forbidNewDomainDiscriminantChecks/, out)
+  assert.doesNotMatch(out, /enforceThinDrivingAdapter\] claims/, out)
+  assert.match(
+    out,
+    /\[forbidNewDomainDiscriminantChecks, enforceThinDrivingAdapter\][\s\S]*?→ 1 file\(s\)\n\s+src\/ui\/TimesheetPage\.tsx\n/,
+    out,
+  )
+})

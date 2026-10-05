@@ -7,6 +7,8 @@
  *   test-driven-development  → enforceJsTdd (built-in enforceTdd + addendum)
  *   ports-and-adapters       → enforcePortsBoundary + forbidInternalModuleMocks
  *                              + a deterministic import screen
+ *                              + enforceThinDrivingAdapter on UI/inbound
+ *                                adapter files
  *   acceptance-testing       → enforceAcceptanceLanguage
  *
  * `jsRuleEntries(options?)` reproduces exactly what the shipped
@@ -28,7 +30,9 @@ import {
 import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
   enforcePortsBoundary,
+  enforceThinDrivingAdapter,
   forbidInternalModuleMocks,
+  forbidNewDomainDiscriminantChecks,
 } from '../rules/ports-and-adapters.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
@@ -59,6 +63,27 @@ export type JsPresetOptions = {
   /** Point at your canonical ports once they exist, e.g. "inject the
    *  Clock port from src/ports/clock.ts". */
   seamHint?: string
+  /** Driving (inbound) adapter files — UI components, pages, route
+   *  handlers, CLI commands — held thin by `enforceThinDrivingAdapter`
+   *  (an AI call per matching write). Default: `src/ui/**`,
+   *  `src/components/**` and every `.tsx` under `src/`, minus tests
+   *  and stories. Pass `[]` to switch
+   *  the thinness rules off. */
+  drivingAdapterGlobs?: Globs
+  /** Field names whose comparison to a literal in a driving adapter is
+   *  a domain decision (e.g. `['role', 'plan']`). OFF by default —
+   *  `status === 'loading'` is ordinary view state, so only your model
+   *  knows which fields carry domain meaning. Set it to block net-new
+   *  comparisons free, before the AI call. */
+  domainDiscriminants?: string[]
+  /** Appended to the discriminant block message, e.g. "permission
+   *  rules live in src/domain/permissions.ts". */
+  domainHint?: string
+  /** Give the thin-driving-adapter judge the export names of every
+   *  module under `coreGlobs`, so it can spot a copy of an existing
+   *  domain rule. Off by default: it costs a directory scan per judged
+   *  write. */
+  coreExportsInJudge?: boolean
   /** Files where internal-module mocking is forbidden (the only test
    *  seam is a port). */
   mockGlobs?: Globs
@@ -126,6 +151,16 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   const tddGlobs: Globs = options.tddGlobs ?? ['src/**', 'test/**', 'tests/**']
   const specGlobs: Globs = options.specGlobs ?? ['specs/**', 'acceptance/**', '**/*.feature']
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
+  const drivingAdapterGlobs: string[] = [
+    ...(options.drivingAdapterGlobs ?? [
+      'src/ui/**',
+      'src/components/**',
+      'src/**/*.tsx',
+      '!**/*.test.*',
+      '!**/*.spec.*',
+      '!**/*.stories.*',
+    ]),
+  ]
 
   const entries: RuleEntry[] = [
     // ── Boundaries: ports-and-adapters ──────────────────────────────
@@ -163,6 +198,37 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
       rules: [forbidInternalModuleMocks()],
     },
   ]
+
+  // Driving adapters must be thin (issue #72). The core-purity block
+  // above stops vendors getting INTO core code; this stops business
+  // logic leaking OUT of it into UI components and handlers, which the
+  // TDD gate alone never questions (a component test makes the logic
+  // "tested"). The free discriminant screen runs first when
+  // configured; the judge runs before the TDD judge, so a denial here
+  // costs one AI call, not two.
+  if (drivingAdapterGlobs.some((glob) => !glob.startsWith('!'))) {
+    const [first, ...rest] = drivingAdapterGlobs
+    entries.push({
+      files: [first!, ...rest],
+      rules: [
+        ...(options.domainDiscriminants?.length
+          ? [
+              forbidNewDomainDiscriminantChecks({
+                discriminants: options.domainDiscriminants,
+                domainHint: options.domainHint,
+              }),
+            ]
+          : []),
+        withJudgeFailureDiagnostics(
+          withContradictionRetry(
+            enforceThinDrivingAdapter({
+              coreExports: options.coreExportsInJudge ? { globs: coreGlobs } : undefined,
+            }),
+          ),
+        ),
+      ],
+    })
+  }
 
   // Spec-to-test traceability (issue #18): OFF by default, so a
   // project that hasn't opted in sees no behavior change. Setting

@@ -1,4 +1,10 @@
+import { readdirSync, readFileSync } from 'node:fs'
+import { join, relative, sep } from 'node:path'
+
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
+
+import { introducedPatterns, type NamedPattern } from './gates.js'
+import { buildMatcher } from './scoping.js'
 
 type FileContent = Awaited<ReturnType<NonNullable<RuleContext['readFile']>>>
 
@@ -422,5 +428,316 @@ export function forbidInternalModuleMocks(
         'mocking the module. If no port exists yet, that is the missing ' +
         'design step — see the ports-and-adapters skill.',
     }
+  }
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * One pattern per discriminant: the field compared to a string literal
+ * with `===`, `!==`, `==` or `!=`, in either order
+ * (`viewer.role === 'SuperUser'`, `'Draft' !== timesheet.status`).
+ */
+export function domainDiscriminantPatterns(
+  discriminants: readonly string[],
+): NamedPattern[] {
+  return discriminants.map((name) => {
+    const field = escapeRegExp(name)
+    const literal = String.raw`(['"\x60])[^'"\x60\n]*\1`
+    return {
+      label: `${name} compared to a literal`,
+      pattern: new RegExp(
+        String.raw`\b${field}\s*[!=]==?\s*['"\x60]|${literal}\s*[!=]==?\s*[\w$.?!]*\b${field}\b`,
+        'g',
+      ),
+    }
+  })
+}
+
+/**
+ * Deterministic first screen for thin driving adapters (issue #72): a
+ * UI component or other inbound adapter that compares a domain
+ * discriminant — a role, a status, a plan — to a literal is deciding a
+ * business rule itself. The domain should export that decision
+ * (`canApprove(actor)`, `isEditable(timesheet)`) and the adapter call
+ * it.
+ *
+ * Delta-based, like `forbidNewAmbientEffects`: only a write that adds
+ * comparisons beyond what the file on disk already has blocks, so an
+ * existing thick component doesn't freeze. No AI call.
+ *
+ * There is no default list. `status === 'loading'` is ordinary local
+ * view state in a UI, so the discriminants must be the fields that
+ * carry domain meaning in YOUR model.
+ *
+ * Applies to: write actions. Scope it to driving-adapter files (UI
+ * components, route handlers, CLI commands).
+ *
+ * @param options.discriminants — field names whose literal comparisons
+ *   are domain decisions, e.g. `['role', 'plan']`.
+ * @param options.domainHint — appended to the block message to name
+ *   where the decision should go, e.g. "permission rules live in
+ *   src/domain/permissions.ts".
+ *
+ * @example
+ * { files: ['src/ui/**'], rules: [forbidNewDomainDiscriminantChecks({ discriminants: ['role'] })] }
+ */
+export function forbidNewDomainDiscriminantChecks(options: {
+  discriminants: readonly string[]
+  domainHint?: string
+}): Rule {
+  const patterns = domainDiscriminantPatterns(options.discriminants)
+  return async function forbidNewDomainDiscriminantChecks(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write' || patterns.length === 0) return { kind: 'pass' }
+    const introduced = await introducedPatterns(action, ctx, patterns)
+    if (introduced.length === 0) return { kind: 'pass' }
+    const hint = options.domainHint ? ` ${options.domainHint}.` : ''
+    return {
+      kind: 'violation',
+      reason:
+        `This write adds a domain decision to a driving adapter (${introduced.join(
+          ', ',
+        )}). Driving adapters (UI components, route handlers) render ` +
+        'core-supplied state and forward user intent; they do not decide ' +
+        'business rules. Add a function to the domain that makes this ' +
+        'decision (e.g. `canApprove(actor)`, `isEditable(timesheet)`), ' +
+        `test it without the UI framework, and call it here.${hint} ` +
+        'Existing comparisons in the file are untouched by this rule — ' +
+        'only new ones are blocked.',
+    }
+  }
+}
+
+const EXPORT_DECLARATION =
+  /^\s*export\s+(?:default\s+)?(?:declare\s+)?(?:async\s+)?(?:abstract\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
+const EXPORT_LIST = /^\s*export\s+(?:type\s+)?\{([^}]*)\}/gm
+const SOURCE_FILE = /\.(?:[cm]?[jt]sx?)$/
+const EXPORT_SCAN_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'build',
+  'dist',
+  'out',
+  'coverage',
+])
+
+/** Names a JS/TS module exports, from its source text. */
+export function exportedNames(content: string): string[] {
+  const names = new Set<string>()
+  for (const match of content.matchAll(EXPORT_DECLARATION)) {
+    if (match[1]) names.add(match[1])
+  }
+  for (const match of content.matchAll(EXPORT_LIST)) {
+    for (const part of (match[1] ?? '').split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.replace(/^type\s+/, '').trim()
+      if (name && /^[A-Za-z_$][\w$]*$/.test(name)) names.add(name)
+    }
+  }
+  return [...names]
+}
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!EXPORT_SCAN_SKIP_DIRS.has(entry.name)) sourceFiles(join(dir, entry.name), out)
+    } else if (entry.isFile() && SOURCE_FILE.test(entry.name)) {
+      out.push(join(dir, entry.name))
+    }
+  }
+  return out
+}
+
+/**
+ * The core's export list, one line per module (`src/domain/roles.ts:
+ * canApprove, canEdit`), for the thin-driving-adapter judge. Test files
+ * are skipped. Truncated beyond `maxChars`.
+ */
+export function listCoreExports(options: {
+  globs: readonly string[]
+  root: string
+  maxChars: number
+}): string {
+  const matches = buildMatcher(options.globs)
+  const lines: string[] = []
+  for (const file of sourceFiles(options.root).sort()) {
+    const rel = relative(options.root, file).split(sep).join('/')
+    if (!matches(rel) || /\.(?:test|spec)\.[^.]+$/.test(rel)) continue
+    let content
+    try {
+      content = readFileSync(file, 'utf8')
+    } catch {
+      continue
+    }
+    const names = exportedNames(content)
+    if (names.length > 0) lines.push(`${rel}: ${names.join(', ')}`)
+  }
+  const text = lines.join('\n')
+  return text.length > options.maxChars
+    ? `${text.slice(0, options.maxChars)}\n(...export list truncated...)`
+    : text
+}
+
+const THIN_DRIVING_ADAPTER_INSTRUCTIONS = `## Role
+
+You are a driving-adapter thinness validator. A driving (inbound)
+adapter is the code the outside world calls first: a UI component, a
+page, a route handler, a CLI command. In this codebase it renders
+core-supplied state and forwards user intent to the core. Business
+logic in it can only be tested through the framework, drifts when it
+is copied, and is invisible to headless and acceptance tests. Judge
+whether the pending write keeps this adapter thin, per the rules below.
+
+## Inputs
+
+1. "Current file content" — what's on disk right now (may be a marker
+   like \`(file does not exist)\`).
+2. "Pending action" — the file path and the file content after the
+   write.
+3. Optionally, "Core exports" — what the domain and use-case modules
+   already export, one module per line.
+
+## What you judge
+
+Judge only what this write adds (before → after), never pre-existing
+code: an existing thick component is migrated incrementally, so a
+write that leaves old logic in place but adds none passes. A transient
+state (an unresolved import, a half-built component) is never itself a
+violation. A block recorded earlier in the session is a past verdict,
+not a rule; when the user says to let a change through, treat that as
+authoritative and pass. The bar is a clear violation; when genuinely
+ambiguous, pass.
+
+## Block a write that adds any of these
+
+(a) **A decision expressed in domain terms**: eligibility, permission,
+    a state transition, a validation rule, or a derived value used to
+    make one (who may approve, which manager an invitee reports to,
+    whether a timesheet is editable). Comparing a role, status or plan
+    to a literal is the usual shape. Extraction target: a domain
+    function the adapter calls.
+(b) **Coordination of more than one port or use-case call in one
+    handler**, or a policy about their outcomes (call the domain, then
+    save, then notify; "a failed notification must never fail the
+    submit"). That is a use case. Extraction target: a use-case
+    function, tested headless with fakes at its ports, which the
+    handler calls once.
+(c) **A re-implementation of something the core already exports**, or
+    a copy of a domain rule that already lives elsewhere (a
+    display-name rule, a permission check). When "Core exports" lists
+    a matching name, block and name it. Extraction target: call the
+    existing export, or move the rule into the domain once and call it.
+(d) **A use case filed as an adapter**: a module under a driving-
+    adapter path that uses no UI or framework API and coordinates
+    ports (e.g. \`startCheckout(billing, logger)\`). Extraction target:
+    move it to the use-case layer.
+
+## Always pass
+
+  - Rendering and layout, styling, accessibility attributes.
+  - Formatting for display: dates, currency, pluralization, truncation.
+  - Local view state: open/closed, loading/error flags, form field
+    values, the selected tab, input focus.
+  - Parsing and shaping user input into the arguments of a call.
+  - Calling ONE use case or port per user intent and showing its
+    result or error.
+  - Calling a domain function to make a decision (\`canApprove(actor)\`)
+    — that is the intended pattern.
+  - Wiring/composition (providers, DI, routing tables), test code, and
+    deleting code.
+  - Files that are clearly not driving adapters despite the path.
+
+## When you block
+
+Name the exact logic the write adds and its extraction target: a
+domain function (for a decision or a duplicated rule) or a use case
+(for coordination). Name the existing core export to call when there
+is one. Remind the agent that under this codebase's TDD gate the
+extracted function gets its failing test first, written without the UI
+framework.`
+
+/**
+ * AI-validated rule for thin driving adapters (issue #72): UI
+ * components, pages, route handlers and CLI commands must not add
+ * business logic. The judge blocks a write that adds (a) a decision in
+ * domain terms, (b) coordination of more than one port/use-case call,
+ * (c) a re-implementation of something the core already exports, or
+ * (d) a framework-free use case filed as an adapter — naming the
+ * extraction target (domain function or use case) in the deny.
+ * Rendering, display formatting, local view state and one call per
+ * user intent pass. Delta-based: only what a write adds is judged.
+ *
+ * The other ports-and-adapters rules stop vendors getting INTO core
+ * code; this one stops logic leaking OUT of it.
+ *
+ * Applies to: write actions. Scope it to driving-adapter files — every
+ * matching write costs an AI call. Pair it with
+ * `forbidNewDomainDiscriminantChecks` so the obvious cases block free.
+ *
+ * @param options.coreExports — when set, the judge is given the
+ *   export names of every source file matching `globs` under `root`
+ *   (default `process.cwd()`), truncated beyond `maxChars` (default
+ *   8000), so it can spot a copy of an existing domain rule. Costs a
+ *   directory scan per judged write.
+ * @param options.instructions — replaces or extends the default rules
+ *   text (string, or `(defaults) => ...`).
+ *
+ * @example
+ * { files: ['src/ui/**', '!**\/*.test.*'], rules: [enforceThinDrivingAdapter()] }
+ */
+export function enforceThinDrivingAdapter(
+  options: {
+    coreExports?: { globs: readonly string[]; root?: string; maxChars?: number }
+    instructions?: string | ((defaults: string) => string)
+  } = {},
+): Rule {
+  const rules =
+    typeof options.instructions === 'function'
+      ? options.instructions(THIN_DRIVING_ADAPTER_INSTRUCTIONS)
+      : (options.instructions ?? THIN_DRIVING_ADAPTER_INSTRUCTIONS)
+  return async function enforceThinDrivingAdapter(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    if (!ctx?.agent) {
+      return {
+        kind: 'violation',
+        reason:
+          'enforceThinDrivingAdapter: no AI agent available; configure Config.ai or use a vendor that ships one.',
+      }
+    }
+    const before: FileContent = (await ctx.readFile?.(action.path)) ?? {
+      kind: 'unknown',
+    }
+    const sections = [
+      rules,
+      `## Current file content\n\n${formatBefore(before)}`,
+      `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
+    ]
+    if (options.coreExports) {
+      const exports = listCoreExports({
+        globs: options.coreExports.globs,
+        root: options.coreExports.root ?? process.cwd(),
+        maxChars: options.coreExports.maxChars ?? 8000,
+      })
+      if (exports) sections.push(`## Core exports\n\n${exports}`)
+    }
+    sections.push(RESPONSE_SPEC)
+    const verdict = await ctx.agent.reason(sections.join('\n\n'))
+    if (verdict.kind === 'violation') {
+      return { kind: 'violation', reason: verdict.reason }
+    }
+    return { kind: 'pass', reason: verdict.reason }
   }
 }
