@@ -118,3 +118,30 @@ test('Kotlin TDD judge lets a new red test in without a prior run of it', async 
     assert.match(prompt, /uncommitted production changes/, preset)
   })
 })
+
+// #80: the judge read an Account-wide test's needs off the store, not off
+// the gateway port, and denied the one port method that could deliver the
+// data. It kept proposing a store merge that had already been tried.
+test('Kotlin TDD judge reasons from the ports a failing test can reach', async () => {
+  await forEachCapturedPrompt([], (prompt, preset) => {
+    assert.match(prompt, /A port method can be the minimal green/, preset)
+    assert.match(prompt, /no store, merge, or use-case logic can make it pass/, preset)
+    assert.match(prompt, /do not deny it over its signature/, preset)
+    assert.match(prompt, /paging, cursors, retries, or deletion handling the test does not assert are still over-implementation/, preset)
+  })
+})
+
+test('Kotlin TDD judge does not re-propose a route already tried and still red', async () => {
+  await forEachCapturedPrompt([], (prompt, preset) => {
+    assert.match(prompt, /A route that was tried and still fails is ruled out/, preset)
+    assert.match(prompt, /do not deny the next write by proposing that route again/, preset)
+  })
+})
+
+test('Kotlin TDD judge treats tightening a red test as red-step work, not weakening', async () => {
+  await forEachCapturedPrompt([], (prompt, preset) => {
+    assert.match(prompt, /Tightening a red test is part of the red step/, preset)
+    assert.match(prompt, /Retrofitting is changing a test after production code makes it pass/, preset)
+    assert.match(prompt, /is weakening, not tightening, and is a violation/, preset)
+  })
+})

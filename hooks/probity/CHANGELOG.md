@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.4.18
+
+The Kotlin and KMP TDD judge no longer blocks a new port method that a
+failing test needs (#80). It also stops repeating a fix that was already
+tried, and lets a red test be tightened.
+
+- **What went wrong.** In mysudo-core #145, a test read Sudo A online,
+  went offline, then expected Sudo B's messages from the local store. B
+  was never read online. The gateway port (`TextMessageGateway`) could
+  only read one Sudo at a time, so no store logic could make the test
+  pass. The fix needed a new port method,
+  `changes(account, since: Long?)`. The judge denied it four times as
+  over-implementation: "the test only needs the kept store to retain
+  every Sudo's messages … it never exercises a changes-feed". It reasoned
+  from the store, not from what the port can deliver. The store merge it
+  proposed was written, and the test still failed. When the red test was
+  then edited to assert the Account-wide gateway call, the judge called
+  that "retrofitting".
+- **Now:** the Kotlin TDD addendum (`internal/kotlin-tdd.ts`) has three
+  new rules:
+  - **A port method can be the minimal green.** The judge checks what
+    the existing port methods and the test's fakes can deliver. When no
+    existing method can deliver the data the test asserts, adding the
+    one port method that can (with its result type and the fake's
+    implementation) is the minimal green. The judge does not deny it
+    over its signature: a parameter the test passes as null, or a result
+    field it ignores, does nothing by itself. The code behind the port
+    is still held to the test's assertions. Paging, cursors, retries and
+    deletion handling the test doesn't assert are still denied.
+  - **A tried route is ruled out.** If a change an earlier denial
+    proposed was written, and the same test still failed the same way,
+    the judge must not propose it again.
+  - **Tightening a red test is part of the red step.** Adding or
+    strengthening an assertion in a test that is still failing is not
+    retrofitting. Retrofitting means editing a test after production
+    code makes it pass. Replacing or loosening a red test's assertion so
+    current code passes is weakening, and is denied.
+- **Measured** with Probity's real Claude Code judge, wired as the KMP
+  preset wires it, on a replica of the #145 session (port, store, use
+  case, fake and test files on disk, plus a hand-written transcript).
+  Five runs per case, 0.4.17 → 0.4.18. Cases that must be allowed:
+  - adding `changes()` after the proposed store merge was tried and the
+    test still failed (the reported write): **1/5 → 5/5**;
+  - adding `changes()` straight after the first red run: **0/5 → 5/5**;
+  - adding the gateway-call assertion to the still-red test:
+    **0/5 → 4/5**;
+  - adding `changes()` after that tightened test ran red (the issue's
+    workaround): **0/5 → 5/5**;
+  - the minimal use-case green after the port and fake exist:
+    5/5 → 5/5.
+
+  Cases that must stay denied (allowed count, 0.4.17 → 0.4.18):
+  - `changes()` with no failing test, after a green run: 1/5 → 0/5;
+  - a full changes-feed sync (paging loop, cursor store, deletions) for
+    the red test: 0/5 → 0/5;
+  - the port gaining two more methods no test needs: 0/5 → 0/5;
+  - the red test's outcome assertion replaced by one current code
+    passes: **3/5 → 0/5**.
+
+  The original transcript wasn't replayed. The hand-written replica
+  reproduced the reported denial wording on 0.4.17.
+- **Not changed:**
+  - The JS/TS (`JS_TDD_ADDENDUM`) and Swift judges don't get these rules
+    yet.
+  - Adding an assertion to a test that already passes is still allowed.
+    The judge allowed it 5/5 on 0.4.17 and 4/5 on 0.4.18.
+- **Action needed:** none. Configs that use `kotlinRuleEntries` or
+  `kmpRuleEntries` get it on upgrade.
+
 ## 0.4.17
 
 The Kotlin and KMP presets can now keep driving adapters thin (#76):
