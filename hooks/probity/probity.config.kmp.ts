@@ -42,4 +42,11 @@ import { kmpRuleEntries } from '@jjchill/probity-rules/presets/kmp'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({ rules: kmpRuleEntries(ROOT) })
+export default defineConfig({
+  rules: kmpRuleEntries(ROOT),
+  // To judge on kiro-cli, falling back to the Claude judge where
+  // kiro-cli is missing or down (hooks/PROBITY.md, "Choosing the AI
+  // judge"), import { claudeJudge, judgeChain, kiroJudge } from
+  // '@jjchill/probity-rules' and add:
+  //   ai: judgeChain([kiroJudge(), claudeJudge()]),
+})

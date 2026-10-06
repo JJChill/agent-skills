@@ -172,6 +172,25 @@ Probity lives in the **consuming project** (the codebase you're building), not i
 
    Anchor the hook with `cd "$CLAUDE_PROJECT_DIR" &&`, never a bare relative `./node_modules/...`: hooks are not guaranteed to run with the repo root as their working directory (a session launched from a parent directory, a worktree, a `cd` elsewhere). A bare relative path then fails to resolve and the hook errors **non-blocking** — every rule silently stops enforcing while work continues. The `cd` also matters beyond binary resolution: Probity discovers `probity.config.ts` by searching upward from the working directory, so a hook run from the wrong cwd finds no config even with an absolute bin path. **Open Claude Code on the repository itself.** The hook lives in the repository's `.claude/settings.json`, and Probity finds `probity.config.ts` by searching upward from `$CLAUDE_PROJECT_DIR` — so a session opened on a parent folder that holds several repositories loads neither, and enforces nothing without any error. The agent-skills plugin's SessionStart notice (`hooks/probity-notice.sh`, the only hook the plugin registers) warns when that is the situation, and prints nothing otherwise: a `probity.config.*` in a repository one or two levels below the project, but none at its root. Prefer the direct bin path over `npx @nizos/probity`: the hook runs on **every** matched tool call, and npx's resolution overhead is ~0.6-1.6s per call vs ~0.2s for the bin (measured on a warm cache). A truly resident validator process would cut the remaining startup too, but that's engine work — worth an upstream issue, not something the templates can provide.
 
+### Choosing the AI judge
+
+By default the judged rules (the TDD gate and the other AI rules) run on Probity's own judge: the Claude Agent SDK on the logged-in Claude account. When that account hits its spend limit, every judged write is blocked until the limit resets. To judge on kiro-cli instead, or to fall back from one to the other, set `ai` in `probity.config.ts`:
+
+```ts
+import { claudeJudge, judgeChain, kiroJudge } from '@jjchill/probity-rules'
+
+export default defineConfig({
+  rules: kmpRuleEntries(root),
+  ai: judgeChain([kiroJudge(), claudeJudge()]),
+})
+```
+
+- **`kiroJudge(options?)`** runs each verdict as one `kiro-cli chat --no-interactive` call, with the prompt on stdin. It defaults to `claude-opus-5.5` at `high` effort; at `medium` it let a production write with no failing test through 7 times in 25. It uses a judge-only Kiro agent, `probity-judge`, with no tools and no hooks, which it writes into its own working directory (`<tmpdir>/probity-kiro-judge`). So a judge run cannot edit files, run commands, or set off the Kiro shim's hook, and Kiro's saved sessions for judge runs stay out of your project. Kiro keeps one saved session per verdict there, so clear that directory now and then. When kiro-cli is missing, exits with an error, prints nothing, or takes longer than `timeoutMs` (default 60 s), the verdict is "Kiro judge unavailable". Options: `model`, `effort`, `agent` (only an agent with no tools and no hooks), `timeoutMs`, `command`, `cwd`.
+- **`claudeJudge()`** is Probity's default Claude judge, for use in a chain.
+- **`judgeChain([...])`** asks each judge in order and uses the first one that is available, so the array order is the fallback order. It moves on only when a judge is unavailable: kiro-cli could not run, or Claude reports a spend limit, quota, rate limit or authentication failure. A real verdict, deny included, stands. Within one hook run, a judge that was just unavailable is skipped for the run's later verdicts (`skipUnavailableMs`), so one dead judge cannot use up the hook's time limit. Probity starts afresh for every tool call, though, so a kiro-cli that hangs costs each write the full `timeoutMs` before the next judge answers. Lower `timeoutMs` if that bites.
+
+A committed config with `kiroJudge()` first still works on a checkout without kiro-cli: the chain finds kiro-cli missing in milliseconds and uses Claude. Expect Kiro verdicts to be slower, around 15 s typical and 42 s at worst against 8 s and 12 s on Claude. A write occasionally takes up to three verdicts, so leave the hook enough time: a hook that times out does not block, and in Claude Code the write then goes ahead unjudged. Claude Code's default limit for a command hook is 10 minutes, which is enough; don't set a lower `timeout` on the Probity hook. The Kiro shim template's `timeout_ms` is 300000 (5 minutes) from 0.4.19; an agent config copied from an earlier template has 120000, which three slow Kiro verdicts can exceed, so raise it.
+
 **Updating:** once this is set up, run `/probity-update` to bring it forward instead of repeating these steps by hand — it upgrades the `@jjchill/probity-rules` package, proposes config migrations, refreshes the Kiro shim, and re-verifies scoping.
 
 ## Mental model

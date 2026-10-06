@@ -13,6 +13,11 @@ contract.
 | `skill-activation-forced-eval.sh` | userPromptSubmit skill-activation hook |
 | `kiro-agent.template.json` | agent config template (skills + both hooks) |
 
+The shim still asks Probity's default judge, on the Claude login. To judge
+on kiro-cli as well, set `ai: judgeChain([kiroJudge(), claudeJudge()])` in
+`probity.config.ts` (see `hooks/PROBITY.md`, "Choosing the AI judge"). The
+judge runs a no-tool, no-hook agent, so it never triggers this shim.
+
 **Setup:** see [`docs/kiro-setup.md`](../../../docs/kiro-setup.md).
 
 These are copy-in artifacts (like the `probity.config.*.ts` presets): install

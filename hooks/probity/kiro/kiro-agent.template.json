@@ -33,12 +33,12 @@
       {
         "matcher": "write",
         "command": "bash \"$( (git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") )/.kiro/hooks/probity-kiro.sh\"",
-        "timeout_ms": 120000
+        "timeout_ms": 300000
       },
       {
         "matcher": "shell",
         "command": "bash \"$( (git rev-parse --show-toplevel 2>/dev/null || echo \"$PWD\") )/.kiro/hooks/probity-kiro.sh\"",
-        "timeout_ms": 120000
+        "timeout_ms": 300000
       }
     ]
   }
