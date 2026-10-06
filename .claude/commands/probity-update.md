@@ -42,6 +42,8 @@ Read `node_modules/@jjchill/probity-rules/CHANGELOG.md` for the entries between 
 
 Propose the concrete edits to the user. Apply them **only with explicit approval**. Never overwrite or regenerate `probity.config.ts` wholesale — it holds this project's real globs, test commands, and layout, which the template cannot know.
 
+Apply each edit so the config still loads after it: add an import in the same edit as its first use, or before it, or rewrite the file in one Write. Probity loads the config on every tool call and blocks everything when the load throws, the edit that would fix it included. From 0.4.19, `probity-claude` blocks a config edit that would leave it unloadable, and lets edits to an already-broken config through; the bare `probity` bin does neither.
+
 Also check the Claude Code hook command in `.claude/settings.json`. From 0.4.2, it should run `./node_modules/.bin/probity-claude` instead of `./node_modules/.bin/probity --agent claude-code`, so work done inside sub-agents is judged against the sub-agent's own transcript. Propose that edit with the config edits.
 
 ## 5. Refresh the Kiro shim

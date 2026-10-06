@@ -35,6 +35,15 @@
  * config's imports still resolve from the project's node_modules, one
  * directory level up the tree.
  *
+ * Finally, it keeps a broken config fixable (issue #81). Probity loads
+ * probity.config.* on every call and blocks everything when that load
+ * throws, including the edit that would fix it. So for an Edit or Write
+ * to the config Probity would load, the wrapper loads the after-state
+ * first (in a scratch copy beside the config) and blocks an edit that
+ * would leave it unloadable. And if the config already fails to load,
+ * edits to it pass through to the normal permission flow while every
+ * other call stays blocked, with a deny that says how to recover.
+ *
  * Use it in place of the probity bin in `.claude/settings.json`:
  *
  *   "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity-claude"
@@ -58,8 +67,8 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** The sub-agent transcript for a payload, or null to keep the original. */
 export function subagentTranscript(payload) {
@@ -214,9 +223,115 @@ export function debugArgs(args, projectDir) {
   )
 }
 
-function probityBin() {
+/**
+ * The config Probity will load when run in `dir` with `args`: its
+ * `--config` (resolved against `dir`, as Probity does), else the
+ * nearest probity.config.* searching upward. Null when there is none.
+ */
+export function activeConfig(dir, args = []) {
+  const flag = args.indexOf('--config')
+  if (flag !== -1 && typeof args[flag + 1] === 'string') return resolve(dir, args[flag + 1])
+  for (let current = resolve(dir); ; current = dirname(current)) {
+    const name = CONFIG_NAMES.find((candidate) => existsSync(join(current, candidate)))
+    if (name) return join(current, name)
+    if (dirname(current) === current) return null
+  }
+}
+
+/** Whether the payload is an Edit or Write of `config`. */
+export function targetsConfig(payload, config) {
+  if (!config || !['Edit', 'Write'].includes(payload?.tool_name)) return false
+  const file = payload.tool_input?.file_path
+  if (typeof file !== 'string') return false
+  const base = typeof payload.cwd === 'string' ? payload.cwd : process.cwd()
+  return canonical(isAbsolute(file) ? file : resolve(base, file)) === canonical(config)
+}
+
+/**
+ * The content an Edit or Write leaves `path` with, or null when Claude
+ * Code would reject the call anyway (old_string missing, or ambiguous
+ * without replace_all). Matches in LF space, like Probity's applyEdit.
+ */
+export function afterState(payload, path) {
+  const input = payload?.tool_input ?? {}
+  if (payload?.tool_name === 'Write') return typeof input.content === 'string' ? input.content : null
+  if (typeof input.old_string !== 'string' || typeof input.new_string !== 'string') return null
+  let current
+  try {
+    current = readFileSync(path, 'utf8').replace(/\r\n/g, '\n')
+  } catch {
+    return null
+  }
+  const oldString = input.old_string.replace(/\r\n/g, '\n')
+  const newString = input.new_string.replace(/\r\n/g, '\n')
+  if (oldString === '' || !current.includes(oldString)) return null
+  if (!input.replace_all && current.indexOf(oldString) !== current.lastIndexOf(oldString)) return null
+  return input.replace_all
+    ? current.replaceAll(oldString, () => newString)
+    : current.replace(oldString, () => newString)
+}
+
+/**
+ * Loads `config` with Probity's own loader and returns the error
+ * message, or null when it loads. With `content`, loads that text
+ * instead, from a scratch file beside the config so its relative and
+ * node_modules imports resolve the same way; the scratch file's name
+ * is not one Probity would ever pick up, and it is always removed.
+ * Throws only when the check itself cannot run (no loader, no scratch).
+ */
+export async function configLoadError(probityRoot, config, content) {
+  // loadConfig is not on the package's exports map; import it by path.
+  const { loadConfig } = await import(pathToFileURL(join(probityRoot, 'dist', 'config.js')).href)
+  let target = config
+  if (content !== undefined) {
+    target = join(dirname(config), `.probity-config-check-${process.pid}${extname(config)}`)
+    writeFileSync(target, content)
+  }
+  try {
+    await loadConfig(target)
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  } finally {
+    if (target !== config) rmSync(target, { force: true })
+  }
+}
+
+/** A Claude Code PreToolUse deny with `reason`. */
+function denyResponse(reason) {
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason },
+  })
+}
+
+/** The deny for an edit whose after-state would not load. */
+export function brokenEditReason(config, error) {
+  return (
+    `Probity: this edit would leave ${basename(config)} unable to load (${error}), and a config ` +
+    'that fails to load blocks every tool call, including the edit that would fix it. Make every ' +
+    'intermediate state load (add an import before its first use), or rewrite the file in one Write.'
+  )
+}
+
+/** `response` (Probity's stdout) with the self-repair hint appended to its deny reason. */
+export function withLockoutHint(response, config) {
+  let parsed
+  try {
+    parsed = JSON.parse(response)
+  } catch {
+    return response
+  }
+  const output = parsed?.hookSpecificOutput
+  if (output?.permissionDecision !== 'deny') return response
+  output.permissionDecisionReason +=
+    `\n${config} failed to load, so Probity blocks every tool call until it does. ` +
+    `Edit or Write ${config} to fix it: those calls are not blocked while it is broken.`
+  return JSON.stringify(parsed)
+}
+
+function probityRoot() {
   // @nizos/probity doesn't export its package.json, so resolve the main
-  // entry and walk up to the package root for the bin path.
+  // entry and walk up to the package root.
   const require = createRequire(join(process.cwd(), 'noop.js'))
   let dir = dirname(require.resolve('@nizos/probity'))
   while (dir !== dirname(dir)) {
@@ -225,7 +340,7 @@ function probityBin() {
       const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
       if (manifest.name === '@nizos/probity') {
         const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.probity
-        return join(dir, bin)
+        return { root: dir, bin: join(dir, bin) }
       }
     }
     dir = dirname(dir)
@@ -250,22 +365,63 @@ async function main() {
   const args = debugArgs(process.argv.slice(2), projectDir)
   if (!args.includes('--agent')) args.unshift('--agent', 'claude-code')
 
-  let bin
+  let probity
   try {
-    bin = probityBin()
+    probity = probityRoot()
   } catch (error) {
     console.error(`probity-claude: cannot find @nizos/probity from ${process.cwd()}: ${error.message}`)
     cleanup()
     process.exit(2)
   }
-  const child = spawn(process.execPath, [bin, ...args], {
+
+  // A crash here would exit non-zero, which Claude Code treats as
+  // "proceed": when the check itself cannot run, leave it to Probity.
+  const config = activeConfig(workDir, args)
+  if (targetsConfig(payload, config)) {
+    try {
+      if (await configLoadError(probity.root, config)) {
+        // Broken already: let the fix through to the normal permission flow.
+        console.error(`probity-claude: ${config} fails to load; not blocking this edit to it`)
+        cleanup()
+        process.exit(0)
+      }
+      const after = afterState(payload, config)
+      const error = after === null ? null : await configLoadError(probity.root, config, after)
+      if (error) {
+        process.stdout.write(denyResponse(brokenEditReason(config, error)))
+        cleanup()
+        process.exit(0)
+      }
+    } catch (error) {
+      console.error(`probity-claude: cannot check the edit to ${config}: ${error.message}`)
+    }
+  }
+
+  const child = spawn(process.execPath, [probity.bin, ...args], {
     cwd: workDir,
-    stdio: ['pipe', 'inherit', 'inherit'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
+  const out = []
+  const err = []
+  child.stdout.on('data', (chunk) => out.push(chunk))
+  child.stderr.on('data', (chunk) => err.push(chunk))
   child.stdin.end(input)
-  child.on('exit', (code, signal) => {
+  child.on('close', async (code, signal) => {
     cleanup()
-    process.exit(signal ? 1 : (code ?? 1))
+    let stdout = Buffer.concat(out).toString('utf8')
+    const stderr = Buffer.concat(err).toString('utf8')
+    // Probity writes `Probity: <reason>` to stderr only when it fails
+    // closed outside the rules; confirm it was the config before saying so.
+    try {
+      if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
+        stdout = withLockoutHint(stdout, config)
+      }
+    } catch {
+      // Forward Probity's deny as it is.
+    }
+    process.stdout.write(stdout)
+    process.stderr.write(stderr)
+    process.exitCode = signal ? 1 : (code ?? 1)
   })
 }
 
