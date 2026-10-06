@@ -707,9 +707,31 @@ function lastSentence(text: string): string {
 // Reasons Probity's verdict plumbing produces when the AI judge never
 // returned a verdict at all — the validator's raw output was not JSON,
 // had the wrong shape, or the SDK stream produced no result. None of
-// these is a code-policy judgment of the pending write.
+// these is a code-policy judgment of the pending write. The
+// "<name> judge unavailable" form comes from this package's own judges
+// (rules/kiro-judge.ts): the judge could not be started or answered
+// nothing.
 const JUDGE_FAILURE_REASON =
-  /^(?:could not parse verdict from validator output|validator returned unexpected shape|expected string result from validator|no result message received|enforceTdd: no AI agent available)/
+  /^(?:could not parse verdict from validator output|validator returned unexpected shape|expected string result from validator|no result message received|enforceTdd: no AI agent available|\w+ judge unavailable)/
+
+// Judge failures that mean "no service": nothing to retry against this
+// judge, so a judge chain moves on to the next one.
+const JUDGE_UNAVAILABLE_REASON =
+  /^(?:\w+ judge unavailable|no result message received|expected string result from validator|enforceTdd: no AI agent available)/
+
+/**
+ * Whether a verdict's reason says the judge gave no verdict because it
+ * is unavailable, rather than judging the write: one of this package's
+ * judges could not be started or answered nothing, the SDK stream
+ * ended without a result, or the provider reports a spend limit,
+ * quota, rate limit or authentication failure. Output that was simply
+ * not valid JSON is not unavailability: the judge is up, and
+ * `withJudgeFailureDiagnostics` asks it again.
+ */
+export function isJudgeUnavailable(reason: string): boolean {
+  if (JUDGE_UNAVAILABLE_REASON.test(reason)) return true
+  return JUDGE_FAILURE_REASON.test(reason) && PROVIDER_UNAVAILABLE.test(judgeOutput(reason))
+}
 
 // Provider messages that mean "no service" rather than "bad output":
 // spend/credit limits, quota, rate limits, and auth failures.

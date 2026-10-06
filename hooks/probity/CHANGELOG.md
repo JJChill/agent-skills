@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.4.20
+
+Probity's AI judge can now run on kiro-cli, with a fallback between
+judges, so judged writes keep working when the Claude login hits its
+spend limit. Opt-in.
+
+- **What was missing.** The judged rules (the TDD gate and the other AI
+  rules) ask Probity's default judge: the Claude Agent SDK on the
+  user's Claude login. In mysudo-core, the org's monthly Claude spend
+  limit was hit twice in a week. Every judged write then failed closed
+  ("judge returned no verdict … spend limit"), including writes made in
+  kiro-cli through the Kiro shim, since the shim asks the same judge.
+  Probity's config already takes a custom judge (`ai`), but there was
+  no kiro-cli judge and no way to fall back.
+- **Now:** three new exports, in `rules/kiro-judge.ts`:
+  - **`kiroJudge(options?)`** answers each verdict with one
+    `kiro-cli chat --no-interactive` run. The prompt goes on stdin,
+    since judge prompts can pass Linux's 128 KB per-argument limit.
+    The answer is parsed like Probity's own (bare, fenced, or the last
+    JSON object). Defaults: `claude-opus-5.5`, `high` effort, 60 s
+    timeout.
+    - It fails closed with a "Kiro judge unavailable" reason when
+      kiro-cli is missing, exits non-zero, prints nothing, or times
+      out. On a timeout it stops kiro-cli and the processes it started.
+      An answer that isn't a valid verdict is reported like Probity
+      reports one, so the presets ask once more.
+  - **`judgeChain([...])`** asks judges in order and moves on only when
+    one is unavailable: Kiro unavailable, or Claude reporting a spend
+    limit, quota, rate limit or authentication failure. A real verdict
+    stands, and so does a malformed answer. Within one hook run, a
+    judge found unavailable is skipped for the run's later verdicts, so
+    a dead judge can't eat the hook's time across several verdicts.
+    Probity starts afresh per tool call, so a hanging kiro-cli still
+    costs each write the full `timeoutMs`.
+  - **`claudeJudge()`** is Probity's default Claude judge, for use in a
+    chain. Probity doesn't export it, so it is loaded from the installed
+    `@nizos/probity`. If that ever fails, it reports "Claude judge
+    unavailable" instead of crashing.
+- **Hook safety.** `--trust-tools=` alone doesn't make a Kiro run
+  tool-free: the built-in `kiro_default` agent still read a file in its
+  working directory. So `kiroJudge` writes its own agent,
+  `probity-judge`, with no tools, hooks or resources, into a working
+  directory of its own (`<tmpdir>/probity-kiro-judge`). Asked to read a
+  file, that agent answered without reading it. A judge run therefore
+  can't edit files, run commands, set off the Kiro shim's hook, or get
+  the default agent's prompt hook added to its prompt. Kiro's saved
+  sessions for judge runs stay out of the project's session list; they
+  accumulate in that directory, one per verdict.
+  `withJudgeFailureDiagnostics` reports "<name> judge unavailable" as
+  an infrastructure failure, not as a policy deny, and doesn't retry it.
+- **Measured** on the #80 replica (the mysudo-core #145 session: port,
+  store, use case, fake and test on disk, plus a hand-written
+  transcript), through the KMP preset's TDD rule, 5 runs per case.
+  Allowed counts:
+
+  | Case | Expect | Claude | Kiro, medium | Kiro, high |
+  |---|---|---|---|---|
+  | P0–P4: port method and the steps around it (5 cases) | allow | 5/5 each | 5/5 each | 5/5 each |
+  | C1: port method with no failing test, after green | block | 0/5 (+0/10) | 1/5 (+2/10, +4/10) | 0/5 (+0/10) |
+  | C2: full sync engine for the red test | block | 0/5 | 0/5 | 0/5 |
+  | C3: assertion added to a passing test | not a control | 5/5 | 1/5 | 0/5 |
+  | C4: red test's assertion loosened | block | 0/5 | 0/5 | 0/5 |
+  | C5: port gains two unneeded methods | block | 0/5 | 0/5 | 0/5 |
+
+  At `high`, Kiro agreed with Claude on every case that has a right
+  answer. At `medium`, it let C1 through 7 times in 25, always with an
+  empty reason, so `high` is the default. On C3, Kiro is stricter than
+  Claude. That is a policy grey area: neither version blocks it on
+  purpose.
+
+  Latency per verdict:
+  - Kiro, high: 15 s median, 22 s p90, 42 s max.
+  - Kiro, medium: 16 s median, 40 s max.
+  - Claude: 8 s median, 12 s max.
+
+  Fallbacks, timed through Probity's real CLI and config loader:
+  - kiro-cli missing: found in 4 ms, then Claude answered.
+  - A Kiro timeout set to 3 s: Claude answered 6.5 s after the start.
+- **Kiro shim timeout raised.** `kiro/kiro-agent.template.json` now gives
+  the Probity preToolUse hooks 300 s (`timeout_ms: 300000`), not 120 s.
+  A write can take up to three verdicts, and three slow Kiro verdicts
+  can pass 120 s. A hook that times out doesn't block: Claude Code's
+  docs say the tool call then proceeds, and Kiro's behavior wasn't
+  checked. Claude Code's default limit for a command hook (10 minutes)
+  is already enough.
+- **Not measured:** a judge run started from inside a live Kiro session
+  (the Kiro shim calling Probity, which calls kiro-cli). The judge's
+  agent has no tools or hooks, so it can't trigger the shim. Whether
+  kiro-cli behaves differently when nested was not tested.
+- **Action needed:** none; nothing changes unless `ai` is set. To use
+  it, see hooks/PROBITY.md, "Choosing the AI judge". If you use
+  `kiroJudge` under Kiro, raise `timeout_ms` on the Probity hooks in
+  your `.kiro/agents/*.json` to 300000 (`/probity-update` refreshes the
+  shim, not your agent config).
+- New exports: `kiroJudge`, `claudeJudge`, `judgeChain`,
+  `isJudgeUnavailable`, `KIRO_JUDGE_AGENT`, and the types
+  `KiroJudgeOptions`, `KiroRun`, `KiroRunResult`, `JudgeChainOptions`.
+
 ## 0.4.19
 
 `probity-claude` keeps a broken `probity.config.ts` fixable (#81).
