@@ -277,15 +277,15 @@ export function afterState(payload, path) {
  * instead, from a scratch file beside the config so its relative and
  * node_modules imports resolve the same way; the scratch file's name
  * is not one Probity would ever pick up, and it is always removed.
+ * Throws only when the check itself cannot run (no loader, no scratch).
  */
 export async function configLoadError(probityRoot, config, content) {
   // loadConfig is not on the package's exports map; import it by path.
   const { loadConfig } = await import(pathToFileURL(join(probityRoot, 'dist', 'config.js')).href)
   let target = config
   if (content !== undefined) {
-    const suffix = `${process.pid}-${Math.random().toString(36).slice(2)}`
-    target = join(dirname(config), `.probity-config-check-${suffix}${extname(config)}`)
-    writeFileSync(target, content, { flag: 'wx' })
+    target = join(dirname(config), `.probity-config-check-${process.pid}${extname(config)}`)
+    writeFileSync(target, content)
   }
   try {
     await loadConfig(target)
@@ -374,20 +374,26 @@ async function main() {
     process.exit(2)
   }
 
+  // A crash here would exit non-zero, which Claude Code treats as
+  // "proceed": when the check itself cannot run, leave it to Probity.
   const config = activeConfig(workDir, args)
   if (targetsConfig(payload, config)) {
-    if (await configLoadError(probity.root, config)) {
-      // Broken already: let the fix through to the normal permission flow.
-      console.error(`probity-claude: ${config} fails to load; not blocking this edit to it`)
-      cleanup()
-      process.exit(0)
-    }
-    const after = afterState(payload, config)
-    const error = after === null ? null : await configLoadError(probity.root, config, after)
-    if (error) {
-      process.stdout.write(denyResponse(brokenEditReason(config, error)))
-      cleanup()
-      process.exit(0)
+    try {
+      if (await configLoadError(probity.root, config)) {
+        // Broken already: let the fix through to the normal permission flow.
+        console.error(`probity-claude: ${config} fails to load; not blocking this edit to it`)
+        cleanup()
+        process.exit(0)
+      }
+      const after = afterState(payload, config)
+      const error = after === null ? null : await configLoadError(probity.root, config, after)
+      if (error) {
+        process.stdout.write(denyResponse(brokenEditReason(config, error)))
+        cleanup()
+        process.exit(0)
+      }
+    } catch (error) {
+      console.error(`probity-claude: cannot check the edit to ${config}: ${error.message}`)
     }
   }
 
@@ -406,8 +412,12 @@ async function main() {
     const stderr = Buffer.concat(err).toString('utf8')
     // Probity writes `Probity: <reason>` to stderr only when it fails
     // closed outside the rules; confirm it was the config before saying so.
-    if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
-      stdout = withLockoutHint(stdout, config)
+    try {
+      if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
+        stdout = withLockoutHint(stdout, config)
+      }
+    } catch {
+      // Forward Probity's deny as it is.
     }
     process.stdout.write(stdout)
     process.stderr.write(stderr)

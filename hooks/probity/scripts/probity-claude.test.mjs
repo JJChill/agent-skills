@@ -5,7 +5,7 @@
 // work.
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -366,4 +366,14 @@ test('end to end: --config names the config the edit guard protects', (t) => {
   writeFileSync(custom, BROKEN_CONFIG)
   assert.equal(run(editConfig(custom, 'probe(function', 'function'), ['--config', 'custom.config.ts']), null)
   assert.match(run({ tool_name: 'Bash', tool_input: { command: 'ls' } }, ['--config', 'custom.config.ts']), /custom\.config\.ts failed to load/)
+})
+
+test('end to end: when the edit check cannot run, Probity still judges the edit', (t) => {
+  const { dir, config, run } = configProject(t, LOADING_CONFIG)
+  chmodSync(dir, 0o555) // no room for the scratch copy
+  try {
+    assert.equal(run(editConfig(config, 'function ran()', 'probe(function ran()')), 'Probity: rule ran')
+  } finally {
+    chmodSync(dir, 0o755)
+  }
 })

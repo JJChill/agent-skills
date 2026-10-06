@@ -25,6 +25,13 @@
 - **Cost.** The config is loaded in the wrapper only for edits to the
   config itself, and when Probity fails closed outside its rules. Other
   calls run as before.
+- **Tradeoff.** While the config is broken, Edit and Write calls to it
+  are not judged by any rule, including rules that guard the config.
+  A config that does not exist yet (the hook wired before the file)
+  still blocks everything; that case is not covered here.
+- **If the check cannot run** (no scratch file can be written beside
+  the config, say), the wrapper leaves the edit to Probity as before
+  instead of failing open.
 - **Upgrading.** No config or hook change if the hook already runs
   `probity-claude`. The bare `probity` bin does not get this.
 
