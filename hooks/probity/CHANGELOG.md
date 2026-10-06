@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.19
+## 0.4.20
 
 Probity's AI judge can now run on kiro-cli, with a fallback between
 judges, so judged writes keep working when the Claude login hits its
@@ -97,6 +97,41 @@ spend limit. Opt-in.
 - New exports: `kiroJudge`, `claudeJudge`, `judgeChain`,
   `isJudgeUnavailable`, `KIRO_JUDGE_AGENT`, and the types
   `KiroJudgeOptions`, `KiroRun`, `KiroRunResult`, `JudgeChainOptions`.
+
+## 0.4.19
+
+`probity-claude` keeps a broken `probity.config.ts` fixable (#81).
+
+- **What happened.** Probity loads its config on every tool call and
+  fails closed when the load throws. An agent added
+  `withMutationProbe(...)` to the config in one Edit and its import in
+  the next. After the first edit, every Bash, Edit and Write was denied
+  with `Probity: withMutationProbe is not defined`, including the
+  Edit that would add the import. Only a human could revert the file.
+- **Edits to the config are checked first.** For an Edit or Write to
+  the config Probity would load (the nearest `probity.config.*`, or
+  `--config`), the wrapper applies the edit to a scratch copy beside
+  the config, loads it with Probity's own loader, and denies the edit
+  if it would not load. The deny names the load error and says to
+  import before use, or to write the file in one Write. The scratch
+  copy is always removed.
+- **A config that is already broken can still be edited.** If the
+  config fails to load, Edit and Write calls to it are not blocked: the
+  wrapper returns no decision, so Claude Code's normal permission flow
+  decides. Every other call stays denied, and the deny now ends with
+  the config's path and that editing it is the way out.
+- **Cost.** The config is loaded in the wrapper only for edits to the
+  config itself, and when Probity fails closed outside its rules. Other
+  calls run as before.
+- **Tradeoff.** While the config is broken, Edit and Write calls to it
+  are not judged by any rule, including rules that guard the config.
+  A config that does not exist yet (the hook wired before the file)
+  still blocks everything; that case is not covered here.
+- **If the check cannot run** (no scratch file can be written beside
+  the config, say), the wrapper leaves the edit to Probity as before
+  instead of failing open.
+- **Upgrading.** No config or hook change if the hook already runs
+  `probity-claude`. The bare `probity` bin does not get this.
 
 ## 0.4.18
 
