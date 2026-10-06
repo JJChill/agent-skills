@@ -5,13 +5,13 @@
 // work.
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { PROBITY_MAX_TRANSCRIPT_BYTES, debugArgs, preparePayload, probityDirectory, subagentTranscript, transcriptTail } from './probity-claude.mjs'
+import { PROBITY_MAX_TRANSCRIPT_BYTES, activeConfig, afterState, debugArgs, preparePayload, probityDirectory, subagentTranscript, targetsConfig, transcriptTail } from './probity-claude.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WRAPPER = join(HERE, 'probity-claude.mjs')
@@ -264,4 +264,106 @@ export default defineConfig({ rules: [function whereAmI() { return { kind: 'viol
   assert.match(run(edit(project, join(project, 'src/A.kt'))), new RegExp(`root=${project}$`))
   assert.ok(existsSync(join(project, 'probity-debug.jsonl')), 'debug log stays in the project directory')
   assert.equal(existsSync(join(worktree, 'probity-debug.jsonl')), false)
+})
+
+// Issue #81: Probity loads its config on every call and blocks
+// everything when that load throws, including the edit that would fix
+// the config. The wrapper validates edits to the config before they
+// land, and lets edits to an already-broken config through.
+
+const LOADING_CONFIG = `import { defineConfig } from '@nizos/probity'
+export default defineConfig({ rules: [function ran() { return { kind: 'violation', reason: 'rule ran' } }] })
+`
+// The #81 state: a call added before its import.
+const BROKEN_CONFIG = LOADING_CONFIG.replace("function ran()", "probe(function ran()").replace("'rule ran' } }]", "'rule ran' } })]")
+
+function configProject(t, content) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'probity-claude-config-')))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  symlinkSync(join(HERE, '..', 'node_modules'), join(dir, 'node_modules'), 'dir')
+  const config = join(dir, 'probity.config.ts')
+  writeFileSync(config, content)
+  const run = (payload, args = []) => {
+    const res = spawnSync(process.execPath, [WRAPPER, ...args], {
+      cwd: dir,
+      input: JSON.stringify({ session_id: 's', hook_event_name: 'PreToolUse', cwd: dir, ...payload }),
+      encoding: 'utf8',
+    })
+    assert.equal(res.status, 0, res.stderr)
+    return res.stdout === '' ? null : JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason
+  }
+  return { dir, config, run }
+}
+
+const editConfig = (config, old_string, new_string) => ({ tool_name: 'Edit', tool_input: { file_path: config, old_string, new_string } })
+
+test('activeConfig honors --config, else finds the nearest config upward', (t) => {
+  const { dir, config } = configProject(t, LOADING_CONFIG)
+  mkdirSync(join(dir, 'src'))
+  assert.equal(activeConfig(join(dir, 'src')), config)
+  assert.equal(activeConfig(dir, ['--config', 'other.config.ts']), join(dir, 'other.config.ts'))
+  assert.equal(activeConfig(tmpdir()), null)
+})
+
+test('targetsConfig matches Edit and Write of the config, by absolute or relative path', (t) => {
+  const { dir, config } = configProject(t, LOADING_CONFIG)
+  assert.ok(targetsConfig({ tool_name: 'Edit', tool_input: { file_path: config } }, config))
+  assert.ok(targetsConfig({ cwd: dir, tool_name: 'Write', tool_input: { file_path: 'probity.config.ts' } }, config))
+  assert.equal(targetsConfig({ tool_name: 'Edit', tool_input: { file_path: join(dir, 'a.ts') } }, config), false)
+  assert.equal(targetsConfig({ tool_name: 'Bash', tool_input: { command: `cat ${config}` } }, config), false)
+})
+
+test('afterState applies an Edit like Claude Code, and gives up where Claude Code would reject it', (t) => {
+  const { config } = configProject(t, 'a $& b a\n')
+  const edit = (input) => afterState({ tool_name: 'Edit', tool_input: { file_path: config, ...input } }, config)
+  assert.equal(edit({ old_string: 'b', new_string: '$&' }), 'a $& $& a\n')
+  assert.equal(edit({ old_string: 'a', new_string: 'c', replace_all: true }), 'c $& b c\n')
+  assert.equal(edit({ old_string: 'a', new_string: 'c' }), null, 'ambiguous without replace_all')
+  assert.equal(edit({ old_string: 'zzz', new_string: 'c' }), null, 'not found')
+  assert.equal(afterState({ tool_name: 'Write', tool_input: { file_path: config, content: 'x' } }, config), 'x')
+})
+
+test('end to end: an edit that would leave the config unloadable is blocked before it lands', (t) => {
+  const { dir, config, run } = configProject(t, LOADING_CONFIG)
+  const reason = run(editConfig(config, 'function ran()', 'probe(function ran()'))
+  assert.match(reason, /would leave probity\.config\.ts unable to load/)
+  assert.match(reason, /add an import before its first use/)
+  assert.equal(readFileSync(config, 'utf8'), LOADING_CONFIG)
+  assert.deepEqual(readdirSync(dir).filter((name) => name.startsWith('.probity-config-check')), [], 'scratch copy removed')
+})
+
+test('end to end: edits and Writes that keep the config loading go on to the rules', (t) => {
+  const { config, run } = configProject(t, LOADING_CONFIG)
+  assert.equal(run(editConfig(config, "'rule ran'", "'rule ran'+''")), 'Probity: rule ran')
+  assert.equal(run({ tool_name: 'Write', tool_input: { file_path: config, content: LOADING_CONFIG } }), 'Probity: rule ran')
+})
+
+test('end to end: an edit Claude Code would reject is left to Probity', (t) => {
+  const { config, run } = configProject(t, LOADING_CONFIG)
+  assert.doesNotMatch(run(editConfig(config, 'not in the file', 'x')), /unable to load/)
+})
+
+test('end to end: a broken config lets edits to itself through and says so on every other deny', (t) => {
+  const { dir, config, run } = configProject(t, BROKEN_CONFIG)
+  assert.equal(run(editConfig(config, 'probe(function', 'function')), null, 'no opinion: the normal permission flow decides')
+  assert.equal(run({ tool_name: 'Write', tool_input: { file_path: config, content: LOADING_CONFIG } }), null)
+  const reason = run({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+  assert.match(reason, /^Probity: probe is not defined/)
+  assert.ok(reason.includes(`${config} failed to load`), reason)
+  assert.ok(reason.includes(`Edit or Write ${config} to fix it`), reason)
+  const other = run({ tool_name: 'Write', tool_input: { file_path: join(dir, 'a.ts'), content: 'x' } })
+  assert.match(other, /failed to load/)
+})
+
+test('end to end: rule denies from a loading config get no lockout hint', (t) => {
+  const { run } = configProject(t, LOADING_CONFIG)
+  assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'ls' } }), 'Probity: rule ran')
+})
+
+test('end to end: --config names the config the edit guard protects', (t) => {
+  const { dir, run } = configProject(t, LOADING_CONFIG)
+  const custom = join(dir, 'custom.config.ts')
+  writeFileSync(custom, BROKEN_CONFIG)
+  assert.equal(run(editConfig(custom, 'probe(function', 'function'), ['--config', 'custom.config.ts']), null)
+  assert.match(run({ tool_name: 'Bash', tool_input: { command: 'ls' } }, ['--config', 'custom.config.ts']), /custom\.config\.ts failed to load/)
 })
