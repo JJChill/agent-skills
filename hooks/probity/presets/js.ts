@@ -36,6 +36,7 @@ import {
 } from '../rules/ports-and-adapters.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import {
   enforceSpecTestParity,
@@ -137,6 +138,10 @@ export type JsPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Deny a shell command (Bash, Kiro's shell) that writes a file any
+   *  files-scoped block covers, so the edit goes through the write
+   *  tool and the content rules judge it (issue #79). Default: on. */
+  shellWriteScreen?: boolean
 }
 
 /**
@@ -329,5 +334,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
     }),
   )
 
-  return withExcludeGlobs(entries, excludeGlobs)
+  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+    enabled: options.shellWriteScreen,
+  })
 }
