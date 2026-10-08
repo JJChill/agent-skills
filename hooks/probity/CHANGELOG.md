@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.28
+
+`judgeChain` now remembers an unavailable judge across hook runs (#87),
+so a hanging kiro-cli no longer costs every write the full timeout.
+
+- **What was missing.** `judgeChain` (0.4.20) skipped a judge found
+  unavailable for `skipUnavailableMs` (5 minutes), but only in memory.
+  Probity starts a new process for every tool call, so the skip lasted
+  one hook run. When kiro-cli hung instead of failing fast, each write
+  waited `kiroJudge`'s full `timeoutMs` (60 s) before the Claude fallback
+  answered.
+- **Now:**
+  - `kiroJudge()` and `claudeJudge()` carry a `name` (`kiro`, `claude`;
+    new type `NamedJudge`).
+  - `judgeChain` keeps a named judge's "unavailable until" time in a
+    state file, `<tmpdir>/probity-kiro-judge/judge-chain.json` by
+    default, beside the Kiro judge's working directory. The next hook
+    run reads it and skips that judge until the time is up. An answer
+    from the judge (any real verdict) clears its entry.
+  - The file is keyed by judge name, so it's shared across projects on
+    the machine: a Kiro outage is machine-wide.
+  - The last judge in a chain is still always asked, so a single-judge
+    config retries every time.
+  - New option `stateFile`: a path, or `false` to keep the skip in
+    memory as before. Unnamed judges are only remembered in memory.
+  - A state file that can't be read or written only loses the memory;
+    it never blocks a verdict.
+- **Action needed:** none.
 ## 0.4.27
 
 The Swift preset can now keep SwiftUI views thin (#77), in an app with
