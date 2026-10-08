@@ -16,7 +16,7 @@
  */
 import { join } from 'node:path'
 
-import { enforceTdd, forbidContentPattern, type RuleEntry } from '@nizos/probity'
+import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
 import {
   enforceAcceptanceLanguage,
@@ -50,6 +50,7 @@ import {
 } from '../rules/swift.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
+import { enforceSwiftTdd } from '../internal/swift-tdd.js'
 import {
   withJudgeFailureDiagnostics,
   withContradictionRetry,
@@ -225,7 +226,7 @@ function swiftEntries(root: string): RuleEntry[] {
           withCharacterizationTest(
             withMutationProbe(
               withTelemetryFastPath(
-                withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()), {
+                withJudgeFailureDiagnostics(withContradictionRetry(enforceSwiftTdd()), {
                   deterministicPaths: SWIFT_DETERMINISTIC_PATHS,
                 }),
                 {
