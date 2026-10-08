@@ -45,6 +45,8 @@ Apply each edit so the config still loads after it: add an import in the same ed
 
 From 0.4.21, every preset denies a shell command that writes a file one of its blocks covers (shellWriteScreen, hooks/PROBITY.md). It needs no config edit. If the project's config adds its own { files, rules } blocks next to the preset's entries, propose wrapping the whole list in withShellWriteScreen with the preset's own screen switched off (shellWriteScreen: false), so those blocks are screened as well.
 
+From 0.4.24, the KMP and Kotlin presets take harnessGlobs: if the project has a device or app harness whose checks can only run in a signed app (hooks/PROBITY.md, "Adapters only an app can exercise"), propose adding its paths, e.g. harnessGlobs: ['harness/**'].
+
 Also check the Claude Code hook command in `.claude/settings.json`. From 0.4.2, it should run `./node_modules/.bin/probity-claude` instead of `./node_modules/.bin/probity --agent claude-code`, so work done inside sub-agents is judged against the sub-agent's own transcript. Propose that edit with the config edits.
 
 ## 5. Refresh the Kiro shim

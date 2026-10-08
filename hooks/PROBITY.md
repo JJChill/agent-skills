@@ -65,6 +65,18 @@ The config above is tuned for a JS/TS project. Probity's engine and the AI-valid
 
 A `{ files, rules }` block's `files` list accepts `!`-prefixed globs as negations (picomatch's `ignore` option) alongside the includes — see [`probity/rules/scoping.ts`](probity/rules/scoping.ts). The KMP, Kotlin, and JS presets each take an `excludeGlobs` option (default `['spikes/**', '**/build/**']`) that appends `!`-negations for those globs to *every* files-scoped block the preset wires — so a throwaway spike or generated build output never gets claimed by the TDD gate, the boundary rules, or any other write-scoped rule, without hand-editing each block. It does not affect flat, non-files-scoped rules (the commit gates). Pass `excludeGlobs: []` to disable it and fall back to whatever your other globs already cover.
 
+## Adapters only an app can exercise (`harnessGlobs`)
+
+Some adapters can't be tested in a plain test process. The iOS Keychain, for one, refuses an unsigned Kotlin/Native simulator test (errSecNotAvailable), so a Keychain adapter's real behavior only shows inside a signed app. A project then runs a shared contract in a device harness app, which logs the names of the checks that fail ([#94](https://github.com/JJChill/agent-skills/issues/94)). From 0.4.24 the KMP and Kotlin presets support that loop:
+
+- **`harnessGlobs`** (e.g. `['harness/**']`) takes the harness's own code out of the TDD block. A check-runner that can only run in the app could never be green under the TDD gate, because its Gradle test reaches only the failure path. The paths stay under every other block: core boundary, adapter observability, the shell-write screen.
+- **The TDD judge counts a harness run as a red.** When the session shows the app's output naming failing checks, and the checks' source, each named check is an observed failing test for the adapter it exercises, and authorizes the behavior it asserts. A Gradle test that can only reach the adapter's refusal path doesn't narrow that.
+- **Boundary events are part of the minimum green.** The event the observability rule requires at each external call a red covers (one per call or outcome, static fields) goes in with that call's green, instead of needing a red of its own. Anything else the contract doesn't assert, such as an item's accessibility attribute, still needs its own red: write a harness check for it, run it in the app, then implement.
+
+```ts
+rules: kmpRuleEntries(ROOT, { harnessGlobs: ['harness/**'] }),
+```
+
 ## Shell writes to scoped files (`shellWriteScreen`)
 
 Probity's content rules judge write actions: `Write`, `Edit` and `NotebookEdit` in Claude Code, the write tool in Kiro. A file changed by a shell command (`sed -i`, `cat > file <<EOF`, `tee`, `cp`/`mv`, `git apply`, or a `python3 - <<'EOF' … open(p, 'w')` script) reaches Probity as a command, so none of those rules see it. Scripted edits are an ordinary shell idiom, which makes this an easy bypass to take by accident ([#79](https://github.com/JJChill/agent-skills/issues/79)).

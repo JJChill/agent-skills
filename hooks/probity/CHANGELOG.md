@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.24
+
+The KMP and Kotlin presets now support adapters that can only be checked
+inside an app, such as an iOS Keychain adapter run from a device harness
+(#94). Also, KMP target test tasks such as `iosSimulatorArm64Test` now
+count as test runs.
+
+- **What was missing.** The iOS Keychain refuses an unsigned Kotlin/Native
+  simulator test process (errSecNotAvailable). In mysudo-core #187, the
+  Keychain adapter could only be checked by a shared contract run in the
+  device harness, which logs the failing check names. On 0.4.23:
+  - The TDD judge accepted that run as the red for the contract's
+    behaviors, then denied the Telemetry events the observability rule
+    requires at those Keychain calls as unasserted.
+  - A harness check written to observe them could never be green: its
+    Gradle test reaches no keychain, so only its catch branch ran, and
+    the judge denied the rest as over-implementation.
+  - A `TODO()` stub after a compile red was denied once and allowed on an
+    identical retry. Cause: `iosSimulatorArm64Test` wasn't recognized as
+    a test task, so the compile red was invisible. The extraction-under-
+    green wrapper (#70) saw an older green build, judged the new stub
+    file as a "move", and sometimes called it new behavior.
+- **Now:**
+  - **`harnessGlobs`** (KMP and Kotlin presets, e.g. `['harness/**']`)
+    takes test-infrastructure paths out of the TDD block. Every other block
+    still covers them.
+  - **TDD judge addendum** (Kotlin/KMP), three clauses:
+    - A harness run naming failing checks, with the checks' source in the
+      session, is a red for the adapter they exercise. A Gradle test that
+      reaches only the refusal path doesn't narrow it.
+    - The event the observability rule requires at each external call a
+      red covers is part of that call's minimum green. A platform attribute
+      that changes what is stored or who can read it (a Keychain
+      accessibility class, an access group) still needs its own red.
+    - After a compile red for a missing symbol, a `TODO()`-only
+      declaration is the authorized placeholder, in a new file too.
+  - **KMP target test tasks** (`iosSimulatorArm64Test`, `iosX64Test`,
+    `macosArm64Test`, `jsNodeTest`, `wasmJsBrowserTest`, `desktopTest`,
+    `linuxX64Test`, …) count as test runs, for the commit gate and the
+    extraction wrapper. Compile, link and `…TestBinaries` tasks still don't.
+- **Measured** on a replica of the #187 session: the real transcript sliced
+  at each denied write, the files as they were, and only the KMP TDD block
+  through Probity's bin. 5 runs per case. Allowed counts, 0.4.23 → 0.4.24:
+
+  | Case | Expect | Kiro judge (project's) | Claude judge (default) |
+  |---|---|---|---|
+  | A: adapter for the contract, with its boundary events | allow | 2/5 → 5/5 | 4/5 → 5/5 |
+  | B: A plus an unasserted `kSecAttrAccessible` | deny | 2/5 → 0/5 | 1/5 → 1/5 |
+  | C: B after a boundary check's harness red | allow | 5/5 → 5/5 | 5/5 → 5/5 |
+  | D: A plus an unasserted in-memory cache | deny | 0/5 → 0/5 | 0/5 → 0/5 |
+  | E: A with no harness run in the session | deny | 0/5 → 0/5 | 0/5 → 0/5 |
+
+  On the Kiro judge, B's denials on 0.4.24 name only the attribute; on
+  0.4.23 they named the events too. The Claude judge lets B through 1 time
+  in 5 on both versions. No judge failures in 100 runs.
+- **Upgrading.** For a device harness, add `harnessGlobs` to the preset
+  call. No other change.
+
 ## 0.4.23
 
 A shell command run from the main checkout that writes into a sibling

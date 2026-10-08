@@ -103,6 +103,14 @@ export type KmpPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Test-infrastructure paths outside the TDD gate (issue #94), such
+   *  as a device harness whose check-runners can only run in a signed
+   *  app, e.g. `['harness/**']`. The TDD block (with its mutation-probe
+   *  and characterization wrappers) leaves them out; every other block
+   *  still covers them: core boundary, adapter observability, the
+   *  shell-write screen. The judge counts their checks' device output as
+   *  the red for the adapters they exercise. Default: none. */
+  harnessGlobs?: string[]
   /** Deny a shell command (Bash, Kiro's shell) that writes a file any
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
@@ -191,6 +199,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
   const testRoots = options.testRoots ?? [root]
   const baselinePath = options.baselinePath ?? join(root, 'docs/specs/.parity-baseline')
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
+  const harnessExclusions = (options.harnessGlobs ?? []).map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
 
   // Core purity scope — the inside of the hexagon: domain, ports,
   // use cases, and MVI presentation in commonMain. Adapter, DI, and
@@ -328,6 +337,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
         '**/src/*Test/kotlin/**',
         '**/src/main/kotlin/**',
         '**/src/test/kotlin/**',
+        ...harnessExclusions,
       ],
       // Telemetry-only additions (a complete logger.event/breadcrumb
       // line) pass deterministically — instrumentation demanded by the
