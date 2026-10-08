@@ -52,6 +52,7 @@ import {
 import { requireSpecBackedAcceptanceTest } from '../rules/spec-test-parity.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 
@@ -122,6 +123,10 @@ export type KotlinPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Deny a shell command (Bash, Kiro's shell) that writes a file any
+   *  files-scoped block covers, so the edit goes through the write
+   *  tool and the content rules judge it (issue #79). Default: on. */
+  shellWriteScreen?: boolean
 }
 
 /**
@@ -337,5 +342,8 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     requireGreenTestRun({ command: options.commitCommand ?? GRADLE_TEST_COMMAND }),
   ]
 
-  return withExcludeGlobs(entries, excludeGlobs)
+  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+    root,
+    enabled: options.shellWriteScreen,
+  })
 }

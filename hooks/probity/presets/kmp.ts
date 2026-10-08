@@ -30,6 +30,7 @@ import {
   withAcceptanceLanguageFastPath,
 } from '../rules/acceptance-language.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
+import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import {
   enforceSpecTestParity,
@@ -102,6 +103,10 @@ export type KmpPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Deny a shell command (Bash, Kiro's shell) that writes a file any
+   *  files-scoped block covers, so the edit goes through the write
+   *  tool and the content rules judge it (issue #79). Default: on. */
+  shellWriteScreen?: boolean
   /** Files the acceptance Language Test applies to: the spec layer
    *  and acceptance test cases, never drivers or DSL classes (default:
    *  `specGlobs` plus `**\/acceptance/**` minus `*Robot.kt`, `*Dsl.kt`,
@@ -464,5 +469,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ]
 
-  return withExcludeGlobs(entries, excludeGlobs)
+  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+    root,
+    enabled: options.shellWriteScreen,
+  })
 }

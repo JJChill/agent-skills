@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.21
+
+Every preset now denies a shell command that writes a file its rules
+cover, so the edit goes through the write tool, where the rules judge
+it. On by default (#79).
+
+- **What was missing.** The content rules (the TDD gate, the boundary
+  and thin-adapter rules, `forbidContentPattern` and the rest) judge
+  write actions only. A file changed from the shell (`sed -i`,
+  `cat > file <<EOF`, a `python3 - <<'EOF' … open(p, 'w')` script)
+  reached Probity as a command and passed unjudged. Seen in
+  timesheet-tracker on 0.4.16, and on 0.4.20 through kiro-cli in
+  mysudo-core: a green step on a scoped `jvmMain` file made by a
+  Python heredoc passed, while the same session's write-tool edits
+  were judged and blocked 3 times.
+- **Now:** `forbidShellWritesToScopedFiles` (in `rules/shell-writes.ts`)
+  reads each command for the files it writes and denies it when one
+  falls inside a files-scoped block, after `excludeGlobs`. It is
+  deterministic, runs first, and costs no AI call. It works the same
+  for Claude Code's `Bash` and Kiro's `shell`.
+  - Recognized: redirects and `tee`; `sed -i` and `perl -i`;
+    `cp`/`mv`/`install`/`ln`/`rsync` destinations; `dd of=`;
+    `truncate`; `git apply` and `patch` from a heredoc or a patch
+    file; inline `python`/`node`/`ruby`/`perl`/`bun`/`deno`/`php`
+    scripts that call a file-writing API. Shell variables, `for` loop
+    variables and `cd` are followed.
+  - For an inline script, any scoped path the command mentions counts,
+    since the script can take its target from a variable. A script that
+    reads a scoped file and writes a report elsewhere is denied too.
+  - Not seen, so still passing: script files named on the command line,
+    `find -exec`/`xargs`, and paths computed at run time.
+- **Options.** Each preset takes `shellWriteScreen` (default `true`);
+  `swiftRuleEntries` gains an options argument for it.
+  `withShellWriteScreen(entries, { root })` screens a hand-built list,
+  for a config that adds its own blocks to a preset's (see
+  hooks/PROBITY.md).
+- **Upgrading.** No config edit needed for a config that uses a preset
+  as it is.
+
 ## 0.4.20
 
 Probity's AI judge can now run on kiro-cli, with a fallback between

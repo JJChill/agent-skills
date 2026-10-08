@@ -65,6 +65,25 @@ The config above is tuned for a JS/TS project. Probity's engine and the AI-valid
 
 A `{ files, rules }` block's `files` list accepts `!`-prefixed globs as negations (picomatch's `ignore` option) alongside the includes — see [`probity/rules/scoping.ts`](probity/rules/scoping.ts). The KMP, Kotlin, and JS presets each take an `excludeGlobs` option (default `['spikes/**', '**/build/**']`) that appends `!`-negations for those globs to *every* files-scoped block the preset wires — so a throwaway spike or generated build output never gets claimed by the TDD gate, the boundary rules, or any other write-scoped rule, without hand-editing each block. It does not affect flat, non-files-scoped rules (the commit gates). Pass `excludeGlobs: []` to disable it and fall back to whatever your other globs already cover.
 
+## Shell writes to scoped files (`shellWriteScreen`)
+
+Probity's content rules judge write actions: `Write`, `Edit` and `NotebookEdit` in Claude Code, the write tool in Kiro. A file changed by a shell command (`sed -i`, `cat > file <<EOF`, `tee`, `cp`/`mv`, `git apply`, or a `python3 - <<'EOF' … open(p, 'w')` script) reaches Probity as a command, so none of those rules see it. Scripted edits are an ordinary shell idiom, which makes this an easy bypass to take by accident ([#79](https://github.com/JJChill/agent-skills/issues/79)).
+
+From 0.4.21 every preset puts `forbidShellWritesToScopedFiles` ([`probity/rules/shell-writes.ts`](probity/rules/shell-writes.ts)) first. It reads each shell command for the files it writes and denies the command when one of them falls inside any files-scoped block the preset wires, `excludeGlobs` applied, telling the agent to make the change with the write tool. It is deterministic and costs no AI call. It covers Claude Code's `Bash` and Kiro's `shell` (through the Kiro shim) alike.
+
+It reads the command text and does not run it. It recognizes redirects (`>`, `>>`, `&>`, `tee`), `sed -i`, `perl -i`, `cp`/`mv`/`install`/`ln`/`rsync` destinations, `dd of=`, `truncate`, patches from `git apply` or `patch` (a heredoc or a patch file), and `python`/`node`/`ruby`/`perl`/`bun`/`deno`/`php` scripts given inline (`-c`, `-e`, a heredoc) that call a file-writing API. It follows shell variables, `for` loop variables and `cd` within the command. For such a script, any scoped path the command mentions counts, because the script can name its target through a variable or an argument. So a script that reads a scoped file and writes a report elsewhere is denied too; print the report to stdout instead. What it can't see still passes: a script file named on the command line (`python3 tool.py`), writes through `find -exec` or `xargs`, and paths computed at run time. Formatters (`prettier --write`, `ktlint -F`, `swiftformat`) and `git checkout`/`git restore` pass, as before.
+
+Pass `shellWriteScreen: false` to a preset to switch it off. A config that adds its own `{ files, rules }` blocks next to a preset's should screen them too: build the list with the preset's screen off and wrap the whole list.
+
+```ts
+import { withShellWriteScreen } from '@jjchill/probity-rules'
+
+rules: withShellWriteScreen(
+  [...kmpRuleEntries(ROOT, { shellWriteScreen: false }), ...projectBlocks],
+  { root: ROOT },
+),
+```
+
 ## Spec↔test traceability (KMP preset)
 
 The KMP preset also enforces the `acceptance-testing` skill's definition of done mechanically: every scenario in a Markdown spec is claimed by an acceptance test, and every claim resolves to a real scenario. The link is declared, not inferred — a test carries a tag (comment or annotation argument):

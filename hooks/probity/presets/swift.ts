@@ -49,6 +49,7 @@ import {
   XCUITEST_MECHANICS,
 } from '../rules/swift.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
+import { withShellWriteScreen } from '../rules/shell-writes.js'
 import {
   withJudgeFailureDiagnostics,
   withContradictionRetry,
@@ -77,7 +78,18 @@ const SWIFT_TELEMETRY_LINES = [
  * root. Relative globs are anchored by Probity's loadConfig against
  * this file's directory.
  */
-export function swiftRuleEntries(root: string): RuleEntry[] {
+export function swiftRuleEntries(root: string, options: SwiftPresetOptions = {}): RuleEntry[] {
+  return withShellWriteScreen(swiftEntries(root), { root, enabled: options.shellWriteScreen })
+}
+
+export type SwiftPresetOptions = {
+  /** Deny a shell command (Bash, Kiro's shell) that writes a file any
+   *  files-scoped block covers, so the edit goes through the write
+   *  tool and the content rules judge it (issue #79). Default: on. */
+  shellWriteScreen?: boolean
+}
+
+function swiftEntries(root: string): RuleEntry[] {
   const glossary = join(root, 'docs/GLOSSARY.md')
 
   // Rule ordering principle: Probity stops at the first violation, so
