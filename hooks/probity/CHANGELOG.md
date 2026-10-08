@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.26
+
+The Swift preset's TDD judge gets the #80 rules (#85, Swift half). It no
+longer blocks a new protocol method a failing test needs, stops repeating
+a fix that was already tried, and lets a red test be tightened.
+
+- **What was missing.** 0.4.18 added three rules to the Kotlin/KMP TDD
+  addendum. The Swift preset ran Probity's plain `enforceTdd()`, with no
+  addendum, so a Swift project hit the same #80 failure. A replica of
+  the #145 session in Swift (a gateway protocol that reads one Sudo at a
+  time, a test expecting another Sudo's messages offline) reproduced the
+  0.4.17 denial nearly word for word: "Adding changes(since:) to the
+  protocol plus the MessageChanges type and cursor is new port surface no
+  assertion requires."
+- **Now:** `enforceSwiftTdd()` (`internal/swift-tdd.ts`) is `enforceTdd()`
+  with `SWIFT_TDD_ADDENDUM`, used by the Swift preset:
+  - **A port method can be the minimal green.** When no existing protocol
+    requirement can deliver the data a test asserts, adding the one that
+    can, its result type and the fake's implementation is the minimal
+    green. The code behind it stays held to the test's assertions.
+  - **A tried route is ruled out.**
+  - **Tightening a red test is part of the red step; weakening it is
+    denied.** The Swift wording adds what the replica needed: the added
+    assertion may name a fake or port member that doesn't exist yet, and
+    the compile failure that follows doesn't replace the earlier
+    assertion failure as the red.
+- **Measured** with Probity's default Claude judge, wired as the Swift
+  preset wires it, on the Swift replica: files on disk, a hand-written
+  transcript of `xcodebuild test` runs. 5 runs per case, allowed counts,
+  0.4.24 → 0.4.26:
+
+  | Case | Expect | Allowed |
+  |---|---|---|
+  | `changes()` after the proposed store merge was tried (the reported write) | allow | 0/5 → 5/5 |
+  | `changes()` straight after the first red | allow | 0/5 → 5/5 |
+  | the gateway-call assertion added to the still-red test | allow | 3/5 → 5/5 |
+  | `changes()` after the tightened test ran red | allow | 0/5 → 5/5 |
+  | the minimal use case after the port and fake exist | allow | 5/5 → 5/5 |
+  | `changes()` with no failing test, after a green run | deny | 0/5 → 0/5 |
+  | a full changes-feed sync (paging, cursor, deletions, retries) | deny | 0/5 → 0/5 |
+  | the port gaining two methods no test needs | deny | 0/5 → 0/5 |
+  | the red test's outcome assertion replaced by one current code passes | deny | 0/5 → 0/5 |
+
+  The first wording of the tightening rule (the Kotlin one) brought the
+  third and fourth rows only to 1/5 and 3/5: the judge read the missing
+  `accountReads` member as a reason to deny. The table is the final
+  wording.
+- **Not changed:** the JS/TS judge (`JS_TDD_ADDENDUM`) still lacks these
+  rules; #85 stays open for it.
+- **Action needed:** none for configs that use `swiftRuleEntries`.
 ## 0.4.25
 
 Android device tests now count as test runs, including a Gradle call with
