@@ -10,6 +10,10 @@ allowed every call (issue #90). It must fall back to the main worktree's
 install, judging the call with the worktree's own config, and block with an
 install hint when Probity is installed nowhere, letting the install command
 itself through.
+
+A shell call from the main checkout reaches the sibling by path (issue #92):
+the shim runs probity-claude, which also judges a write in the tree that
+holds it.
 """
 import json
 import os
@@ -19,7 +23,20 @@ import subprocess
 import tempfile
 
 _HERE = pathlib.Path(__file__).parent
-_PACKAGE_MODULES = (_HERE.parent / "node_modules").resolve()
+_PACKAGE = _HERE.parent.resolve()
+_PACKAGE_MODULES = _PACKAGE / "node_modules"
+
+ALLOW_ALL = """import { defineConfig } from '@nizos/probity'
+export default defineConfig({ rules: [] })
+"""
+
+SCREEN = f"""import {{ dirname }} from 'node:path'
+import {{ fileURLToPath }} from 'node:url'
+import {{ defineConfig }} from '@nizos/probity'
+import {{ forbidShellWritesToScopedFiles }} from '{_PACKAGE / "rules" / "shell-writes.ts"}'
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default defineConfig({{ rules: [forbidShellWritesToScopedFiles({{ root: ROOT, scopes: [['src/**']] }})] }})
+"""
 
 CONFIG = """import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -46,6 +63,15 @@ def git(cwd, *args):
     )
 
 
+def install(tree):
+    """A node_modules holding Probity and this package's probity-claude bin."""
+    modules = tree / "node_modules"
+    (modules / ".bin").mkdir(parents=True)
+    (modules / "@nizos").symlink_to(_PACKAGE_MODULES / "@nizos", target_is_directory=True)
+    (modules / ".bin" / "probity").symlink_to(_PACKAGE_MODULES / "@nizos" / "probity" / "dist" / "bin.js")
+    (modules / ".bin" / "probity-claude").symlink_to(_PACKAGE / "scripts" / "probity-claude.mjs")
+
+
 def shim(tree, command):
     event = {"hook_event_name": "preToolUse", "cwd": str(tree), "tool_name": "shell", "tool_input": {"command": command}}
     env = {k: v for k, v in os.environ.items() if k not in ("KIRO_SESSION_ID", "NODE_PATH")}
@@ -69,7 +95,7 @@ with tempfile.TemporaryDirectory() as tmp:
     git(main, "add", ".")
     git(main, "commit", "-q", "-m", "init")
     git(main, "worktree", "add", "-q", str(sibling), "-b", "wt")
-    (main / "node_modules").symlink_to(_PACKAGE_MODULES, target_is_directory=True)
+    install(main)
 
     res = shim(sibling, "sed -i s/a/b/ src/A.kt")
     check("sibling worktree without node_modules: the call is judged (exit 2)", res.returncode == 2, res.stderr)
@@ -78,7 +104,17 @@ with tempfile.TemporaryDirectory() as tmp:
     res = shim(main, "sed -i s/a/b/ src/A.kt")
     check("main checkout: judged by its own config", res.returncode == 2 and f"root={main}" in res.stderr, res.stderr)
 
-    (main / "node_modules").unlink()
+    (main / "probity.config.ts").write_text(ALLOW_ALL)
+    (sibling / "probity.config.ts").write_text(SCREEN)
+    (sibling / "src").mkdir()
+    res = shim(main, f"sed -i s/a/b/ {sibling}/src/A.kt")
+    check("main checkout writing into the sibling: judged by the sibling's config", res.returncode == 2 and "writes src/A.kt" in res.stderr, res.stderr)
+    res = shim(main, "sed -i s/a/b/ ../project-wt/src/A.kt")
+    check("...by a relative path from the main checkout too", res.returncode == 2 and "writes src/A.kt" in res.stderr, res.stderr)
+    res = shim(main, f"sed -i s/a/b/ {sibling}/docs/notes.md")
+    check("...and an unscoped sibling path passes", res.returncode == 0, res.stderr)
+
+    shutil.rmtree(main / "node_modules")
     res = shim(sibling, "sed -i s/a/b/ src/A.kt")
     check("Probity installed nowhere: the call is blocked (exit 2)", res.returncode == 2, res.stderr)
     check("...with an npm ci hint", "npm ci" in res.stderr, res.stderr)

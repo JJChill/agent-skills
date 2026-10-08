@@ -71,7 +71,7 @@ def cmd_event():
     cwd = event.get("cwd") or os.getcwd()
 
     if tool in SHELL_TOOLS:
-        payload = {"tool_name": "Bash", "tool_input": {"command": ti.get("command", "")}}
+        payload = {"tool_name": "Bash", "tool_input": {"command": ti.get("command", "")}, "cwd": cwd}
     elif tool in WRITE_TOOLS:
         path = ti.get("path", "")
         if ti.get("command") == "strReplace":

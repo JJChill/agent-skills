@@ -25,6 +25,12 @@ this worktree's config, which loads the main worktree's packages through
 with "Run npm ci in <tree>", except that install command. Up to 0.4.21 it
 allowed every call in that case, so the rules were off without a trace.
 
+From 0.4.23 the shim runs `probity-claude` (the bare `probity` bin when an
+older install lacks it), so Kiro gets the same worktree handling as Claude
+Code: a call is judged in the worktree it targets, including a shell write
+into another worktree by path, and an edit that would break the config is
+blocked before it lands.
+
 **Setup:** see [`docs/kiro-setup.md`](../../../docs/kiro-setup.md).
 
 These are copy-in artifacts (like the `probity.config.*.ts` presets): install

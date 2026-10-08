@@ -236,6 +236,31 @@ function nonOptions(args: string[]): string[] {
   return args.filter((arg) => !arg.startsWith('-'))
 }
 
+/** The file operands of an in-place `sed` or `perl` call: script
+ *  arguments (`-e`/`-f` values, else sed's first operand) and a BSD
+ *  `-i ''`/`-i .bak` suffix left out. */
+function inPlaceFiles(args: string[], tool: 'sed' | 'perl'): string[] {
+  const files: string[] = []
+  let scripted = false
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at]!
+    if (/^-[ef]$|^--(?:expression|file)$/.test(arg) || (tool === 'perl' && arg === '-E')) {
+      scripted = true
+      at++
+    } else if (arg === '-i' && tool === 'sed' && /^(?:$|\.)/.test(args[at + 1] ?? '-')) {
+      at++
+    } else if (/^--(?:expression|file)=/.test(arg)) {
+      scripted = true
+    } else if (tool === 'perl' && /^-[a-zA-Z]*e$/.test(arg)) {
+      scripted = true
+      at++
+    } else if (!arg.startsWith('-')) {
+      files.push(arg)
+    }
+  }
+  return tool === 'sed' && !scripted ? files.slice(1) : files
+}
+
 /** The diff's file paths, with git's `a/` and `b/` prefixes removed. */
 function patchPaths(text: string): string[] {
   const paths: string[] = []
@@ -264,15 +289,15 @@ function isDirectory(path: string): boolean {
 }
 
 /**
- * The project-relative POSIX paths a shell command writes, as far as
- * the command text shows. For an interpreter script that calls a
+ * The absolute paths a shell command run in `cwd` writes, as far as the
+ * command text shows. For an interpreter script that calls a
  * file-writing API, every path the command mentions counts, since the
  * script may name its target through a variable or an argument.
  */
-export function shellWriteTargets(command: string, root: string): string[] {
+export function shellWritePaths(command: string, cwd: string): string[] {
   const vars = new Map<string, string[]>()
   const found: string[] = []
-  let cwd = root
+  const start = cwd
 
   const expand = (text: string): string[] => {
     const ref = /\$\{?([A-Za-z_]\w*)\}?/.exec(text)
@@ -284,10 +309,7 @@ export function shellWriteTargets(command: string, root: string): string[] {
   const add = (candidate: string) => {
     for (const text of expand(candidate)) {
       if (!text || text.includes('$(') || text.includes('`')) continue
-      const absolute = resolve(cwd, text.replace(/^~(?=\/)/, process.env.HOME ?? '~'))
-      const rel = relative(root, absolute).split(/[\\/]/).join(posix.sep)
-      if (!rel || rel.startsWith('..') || isAbsolute(rel)) continue
-      found.push(rel)
+      found.push(resolve(cwd, text.replace(/^~(?=\/)/, process.env.HOME ?? '~')))
     }
   }
   const destination = (sources: string[], dest: string) => {
@@ -324,15 +346,15 @@ export function shellWriteTargets(command: string, root: string): string[] {
       const inAt = args.indexOf('in')
       if (args[0] && inAt !== -1) vars.set(args[0], args.slice(inAt + 1).filter((arg) => arg !== 'do'))
     } else if (name === 'cd') {
-      const target = expand(args[0] ?? root)[0]
+      const target = expand(args[0] ?? start)[0]
       if (target) cwd = resolve(cwd, target)
     } else if (name === 'tee') {
       nonOptions(args).forEach(add)
     } else if (name === 'sed' || name === 'gsed') {
       const inPlace = args.some((arg) => /^--in-place/.test(arg) || /^-[a-zA-Z]*i/.test(arg))
-      if (inPlace) nonOptions(args).forEach(add)
+      if (inPlace) inPlaceFiles(args, 'sed').forEach(add)
     } else if (name === 'perl' && args.some((arg) => /^-[a-zA-Z]*i/.test(arg))) {
-      nonOptions(args).forEach(add)
+      inPlaceFiles(args, 'perl').forEach(add)
     } else if (name === 'cp' || name === 'mv' || name === 'install' || name === 'ln' || name === 'rsync') {
       const targetDir = args.findIndex((arg) => arg === '-t' || arg === '--target-directory')
       const paths = nonOptions(args)
@@ -367,6 +389,25 @@ export function shellWriteTargets(command: string, root: string): string[] {
 }
 
 /**
+ * The `root`-relative POSIX paths a shell command run in `cwd` (default:
+ * `root`) writes inside `root`; see {@link shellWritePaths}.
+ */
+export function shellWriteTargets(command: string, root: string, cwd: string = root): string[] {
+  const inside: string[] = []
+  for (const absolute of shellWritePaths(command, cwd)) {
+    const rel = relative(root, absolute).split(/[\\/]/).join(posix.sep)
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) inside.push(rel)
+  }
+  return [...new Set(inside)]
+}
+
+/** The directory a command runs in: the hook's `PROBITY_SESSION_CWD` when absolute, else `root`. */
+function sessionCwd(root: string): string {
+  const cwd = process.env.PROBITY_SESSION_CWD
+  return cwd && isAbsolute(cwd) ? cwd : root
+}
+
+/**
  * Denies a shell command that writes a file inside any of `scopes` —
  * the `files` lists of the config's files-scoped blocks, each with its
  * own `!`-negations — so the edit goes through the write tool, where
@@ -374,7 +415,9 @@ export function shellWriteTargets(command: string, root: string): string[] {
  * already.
  *
  * Applies to: command actions (Claude Code's Bash, Kiro's shell
- * through the Kiro shim).
+ * through the Kiro shim). Relative paths resolve from the session's
+ * cwd, which probity-claude passes as `PROBITY_SESSION_CWD`; without it,
+ * from `root`.
  */
 export function forbidShellWritesToScopedFiles(options: {
   /** The directory the scope globs are relative to; default: the hook
@@ -386,7 +429,7 @@ export function forbidShellWritesToScopedFiles(options: {
   const matchers = options.scopes.map((globs) => buildMatcher(globs))
   return function forbidShellWritesToScopedFiles(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    const scoped = shellWriteTargets(action.command, root).filter((path) =>
+    const scoped = shellWriteTargets(action.command, root, sessionCwd(root)).filter((path) =>
       matchers.some((matches) => matches(path) || matches(join(root, path))),
     )
     if (!scoped.length) return { kind: 'pass' }

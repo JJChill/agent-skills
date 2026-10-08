@@ -16,6 +16,7 @@ import { kotlinRuleEntries } from '../presets/kotlin.ts'
 import { swiftRuleEntries } from '../presets/swift.ts'
 import {
   forbidShellWritesToScopedFiles,
+  shellWritePaths,
   shellWriteTargets,
   withShellWriteScreen,
 } from './shell-writes.ts'
@@ -135,6 +136,30 @@ test('shellWriteTargets reads a patch file named on the command line', () => {
   writeFileSync(join(root, 'tmp/fix.patch'), '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n')
   assert.deepEqual(shellWriteTargets('git apply tmp/fix.patch', root), ['src/a.ts'])
   assert.deepEqual(shellWriteTargets('patch -p1 < tmp/fix.patch', root), ['src/a.ts'])
+})
+
+test('shellWritePaths gives absolute paths, resolved from the session cwd, inside the project or not', () => {
+  assert.deepEqual(shellWritePaths("sed -i 's/a/b/' ../wt/src/a.ts", '/base/repo'), ['/base/wt/src/a.ts'])
+  assert.deepEqual(shellWritePaths('echo x > /base/wt/src/a.ts', '/base/repo'), ['/base/wt/src/a.ts'])
+  assert.deepEqual(shellWritePaths("cd ../wt && sed -i 's/a/b/' src/a.ts", '/base/repo'), ['/base/wt/src/a.ts'])
+  assert.deepEqual(shellWriteTargets("sed -i 's/a/b/' a.ts", '/repo', '/repo/src'), ['src/a.ts'])
+  assert.deepEqual(shellWritePaths("sed -E -i 's/a/b/' x.ts", '/r'), ['/r/x.ts'])
+  assert.deepEqual(shellWritePaths("sed -i '' 's/a/b/' x.ts", '/r'), ['/r/x.ts'])
+  assert.deepEqual(shellWritePaths("perl -i -pe 's/a/b/' x.ts", '/r'), ['/r/x.ts'])
+})
+
+test('the screen resolves relative paths from PROBITY_SESSION_CWD when the hook sets it', async (t) => {
+  const saved = process.env.PROBITY_SESSION_CWD
+  t.after(() => {
+    if (saved === undefined) delete process.env.PROBITY_SESSION_CWD
+    else process.env.PROBITY_SESSION_CWD = saved
+  })
+  process.env.PROBITY_SESSION_CWD = '/repo/src'
+  await assertBlocked("sed -i 's/a/b/' a.ts", 'src/a.ts')
+  process.env.PROBITY_SESSION_CWD = '/elsewhere'
+  await assertAllowed("sed -i 's/a/b/' src/a.ts")
+  process.env.PROBITY_SESSION_CWD = 'relative/is/ignored'
+  await assertBlocked("sed -i 's/a/b/' src/a.ts", 'src/a.ts')
 })
 
 test('withShellWriteScreen screens every files-scoped block and can be switched off', async () => {

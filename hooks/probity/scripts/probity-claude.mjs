@@ -42,6 +42,14 @@
  * after the worktree's own node_modules. When the packages resolve
  * nowhere, Probity's deny says to run `npm ci` in that tree.
  *
+ * A Bash call keeps the session's cwd, so it reaches another worktree by
+ * path (issue #92): `sed -i … ../<name>/src/A.kt` from the main checkout.
+ * The wrapper reads the files a command writes with the shell-write
+ * screen's own parser and also runs Probity in each other tree they lie
+ * in, so the config that covers a file judges its write; the first deny
+ * stands. It passes the session's cwd as PROBITY_SESSION_CWD, so the
+ * screen resolves a command's relative paths from where it runs.
+ *
  * Finally, it keeps a broken config fixable (issue #81). Probity loads
  * probity.config.* on every call and blocks everything when that load
  * throws, including the edit that would fix it. So for an Edit or Write
@@ -56,7 +64,7 @@
  *   "command": "cd \"$CLAUDE_PROJECT_DIR\" && ./node_modules/.bin/probity-claude"
  *
  * Extra arguments are forwarded; `--agent claude-code` is added unless
- * one is given. Zero dependencies; Probity is resolved from the working
+ * one is given. Probity is resolved from the working
  * directory's node_modules, exactly as the direct bin would be.
  */
 import { execFileSync, spawn } from 'node:child_process'
@@ -197,8 +205,15 @@ function commandDirectory(command) {
   return target ? unquote(target) : null
 }
 
+const worktreeCache = new Map()
+
 /** The roots of every worktree of the repository at `dir`, or [] when git can't say. */
 function worktreeRoots(dir) {
+  if (!worktreeCache.has(dir)) worktreeCache.set(dir, listWorktrees(dir))
+  return worktreeCache.get(dir)
+}
+
+function listWorktrees(dir) {
   try {
     const listing = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd: dir,
@@ -246,6 +261,86 @@ export function probityDirectory(payload, projectDir) {
     .filter((root) => root !== project && (root === target || isBelow(root, target)))
     .sort((a, b) => b.length - a.length)[0]
   return sibling && hasConfig(sibling) ? sibling : null
+}
+
+/**
+ * `shellWritePaths` from the package's shell-write screen: the
+ * TypeScript source when it is there (this repository, loaded through
+ * jiti, as Probity loads configs), else the built module an installed
+ * package ships. Null when neither loads.
+ */
+async function loadShellWritePaths() {
+  const source = fileURLToPath(new URL('../rules/shell-writes.ts', import.meta.url))
+  const built = new URL('../dist/rules/shell-writes.js', import.meta.url)
+  try {
+    if (existsSync(source)) {
+      const { createJiti } = await import('jiti')
+      return (await createJiti(import.meta.url).import(source)).shellWritePaths ?? null
+    }
+    if (existsSync(fileURLToPath(built))) return (await import(built.href)).shellWritePaths ?? null
+  } catch {
+    // Without the parser, Probity still runs in workDir as before.
+  }
+  return null
+}
+
+/**
+ * The other trees a Bash command writes into (issue #92): for each path
+ * the shell-write screen reads from the command, the worktree whose
+ * config covers it (a nested or sibling worktree with its own config,
+ * else the project), leaving out `workDir`, where Probity runs anyway.
+ * A session's commands keep its cwd, so a write into a sibling worktree
+ * arrives as an absolute or `../` path from the main checkout.
+ */
+export function writtenTrees(payload, projectDir, workDir, shellWritePaths) {
+  const command = payload?.tool_input?.command
+  if (payload?.tool_name !== 'Bash' || typeof command !== 'string' || !shellWritePaths) return []
+  const cwd = typeof payload.cwd === 'string' ? payload.cwd : projectDir
+  let paths
+  try {
+    paths = shellWritePaths(command, cwd)
+  } catch {
+    return []
+  }
+  const project = canonical(projectDir)
+  const skip = canonical(workDir)
+  const trees = new Set()
+  for (const file of paths) {
+    const tree =
+      probityDirectory({ cwd, tool_name: 'Edit', tool_input: { file_path: file } }, projectDir) ??
+      (isBelow(project, canonical(file)) ? project : null)
+    if (tree && canonical(tree) !== skip) trees.add(canonical(tree))
+  }
+  return [...trees]
+}
+
+/** Whether `response` (Probity's stdout) is a deny. */
+function isDeny(response) {
+  try {
+    return JSON.parse(response)?.hookSpecificOutput?.permissionDecision === 'deny'
+  } catch {
+    return false
+  }
+}
+
+/** Runs Probity in `dir` on `input`; resolves with its output and exit. */
+function runProbity(bin, args, dir, env, input) {
+  return new Promise((resolveRun) => {
+    const child = spawn(process.execPath, [bin, ...args], { cwd: dir, env, stdio: ['pipe', 'pipe', 'pipe'] })
+    const out = []
+    const err = []
+    child.stdout.on('data', (chunk) => out.push(chunk))
+    child.stderr.on('data', (chunk) => err.push(chunk))
+    child.stdin.end(input)
+    child.on('close', (code, signal) =>
+      resolveRun({
+        dir,
+        stdout: Buffer.concat(out).toString('utf8'),
+        stderr: Buffer.concat(err).toString('utf8'),
+        status: signal ? 1 : (code ?? 1),
+      }),
+    )
+  })
 }
 
 /**
@@ -479,35 +574,33 @@ async function main() {
     }
   }
 
-  const child = spawn(process.execPath, [probity.bin, ...args], {
-    cwd: workDir,
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  const out = []
-  const err = []
-  child.stdout.on('data', (chunk) => out.push(chunk))
-  child.stderr.on('data', (chunk) => err.push(chunk))
-  child.stdin.end(input)
-  child.on('close', async (code, signal) => {
-    cleanup()
-    let stdout = Buffer.concat(out).toString('utf8')
-    const stderr = Buffer.concat(err).toString('utf8')
-    // Probity writes `Probity: <reason>` to stderr only when it fails
-    // closed outside the rules; confirm it was the config before saying so.
-    try {
-      const hinted = withInstallHint(stdout, workDir)
-      if (hinted !== stdout) stdout = isInstallCommand(payload?.tool_input?.command) ? '' : hinted
-      else if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
-        stdout = withLockoutHint(stdout, config)
-      }
-    } catch {
-      // Forward Probity's deny as it is.
+  // The shell-write screen resolves a command's relative paths from here.
+  const runEnv =
+    typeof payload?.cwd === 'string' && isAbsolute(payload.cwd) ? { ...env, PROBITY_SESSION_CWD: payload.cwd } : env
+  // Probity runs in workDir, and in every other tree the command writes
+  // into, so each write is judged by the config that covers it. The
+  // first deny stands; otherwise workDir's answer does.
+  const shellWritePaths = payload?.tool_name === 'Bash' ? await loadShellWritePaths() : null
+  const dirs = [workDir, ...writtenTrees(payload, projectDir, workDir, shellWritePaths)]
+  const runs = await Promise.all(dirs.map((dir) => runProbity(probity.bin, args, dir, runEnv, input)))
+  cleanup()
+  const run = runs.find((candidate) => isDeny(candidate.stdout)) ?? runs[0]
+  let stdout = run.stdout
+  const runConfig = run.dir === workDir ? config : activeConfig(run.dir, args)
+  // Probity writes `Probity: <reason>` to stderr only when it fails
+  // closed outside the rules; confirm it was the config before saying so.
+  try {
+    const hinted = withInstallHint(stdout, run.dir)
+    if (hinted !== stdout) stdout = isInstallCommand(payload?.tool_input?.command) ? '' : hinted
+    else if (runConfig && run.stderr.startsWith('Probity: ') && (await configLoadError(probity.root, runConfig))) {
+      stdout = withLockoutHint(stdout, runConfig)
     }
-    process.stdout.write(stdout)
-    process.stderr.write(stderr)
-    process.exitCode = signal ? 1 : (code ?? 1)
-  })
+  } catch {
+    // Forward Probity's deny as it is.
+  }
+  process.stdout.write(stdout)
+  process.stderr.write(run.stderr)
+  process.exitCode = run.status
 }
 
 // Run only as a program (npm links bins through node_modules/.bin, so
