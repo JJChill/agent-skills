@@ -50,4 +50,6 @@ test('the Swift TDD judge lets a red test be tightened but not weakened', async 
   const prompt = await capturedPrompt()
   assert.match(prompt, /Tightening a red test is part of the red step/)
   assert.match(prompt, /replacing or loosening the asserted outcome so that the current production code passes is weakening/)
+  assert.match(prompt, /may name a member the fake or a port does not have yet/)
+  assert.match(prompt, /does not replace the earlier assertion failure as the red/)
 })
