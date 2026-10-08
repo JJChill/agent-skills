@@ -240,6 +240,41 @@ test('kotlinRuleEntries: a spikes/ write is excluded from the TDD block by defau
   assert.equal(tddBlockMatches(openEntries, '/repo', spikeWrite.path), true)
 })
 
+// ── Issue #94: harnessGlobs, test infrastructure outside the TDD gate ──
+
+function blocksMatching(entries: readonly RuleEntry[], root: string, path: string): RuleBlock[] {
+  return entries.filter(
+    (entry): entry is RuleBlock =>
+      isRuleBlock(entry) && !!entry.files && buildMatcher(entry.files.map((g) => anchorGlob(g, root)))(path),
+  )
+}
+
+for (const [label, build, harnessCheck, harnessAdapter] of [
+  [
+    'kmpRuleEntries',
+    (options = {}) => kmpRuleEntries('/repo', options),
+    '/repo/harness/ios/framework/src/iosMain/kotlin/harness/HarnessChecks.kt',
+    '/repo/harness/ios/framework/src/iosMain/kotlin/harness/adapter/Probe.kt',
+  ],
+  [
+    'kotlinRuleEntries',
+    (options = {}) => kotlinRuleEntries('/repo', options),
+    '/repo/harness/src/main/kotlin/harness/HarnessChecks.kt',
+    '/repo/harness/src/main/kotlin/harness/adapter/Probe.kt',
+  ],
+] as const) {
+  test(`${label}: harnessGlobs takes a path out of the TDD block and nothing else`, () => {
+    const before = build()
+    assert.equal(tddBlockMatches(before, '/repo', harnessCheck), true, 'in the TDD block by default')
+    const after = build({ harnessGlobs: ['harness/**'] })
+    assert.equal(tddBlockMatches(after, '/repo', harnessCheck), false)
+    const others = (entries: readonly RuleEntry[]) =>
+      blocksMatching(entries, '/repo', harnessAdapter).filter((block) => block !== findKotlinTddBlock(entries)).length
+    assert.equal(others(after), others(before), 'every other block still covers harness code')
+    assert.ok(others(after) > 0)
+  })
+}
+
 test('jsRuleEntries: a build/ write is excluded from the TDD block by default, included with excludeGlobs: []', () => {
   const buildWrite = '/repo/src/build/index.js'
   const defaultEntries = jsRuleEntries()

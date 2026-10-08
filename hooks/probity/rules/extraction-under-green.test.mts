@@ -140,3 +140,43 @@ test('the extraction prompt asks for a final Finding line', async () => {
     assert.ok(s.prompts[0]!.includes(`"Finding: ${finding}"`), finding)
   }
 })
+
+// Issue #94: a compile red from a KMP target test task (iosSimulatorArm64Test)
+// was not a matching run, so the wrapper saw an older green build, judged the
+// TODO() stub the red authorised as a "move", and sometimes blocked it.
+test('with the Kotlin green-run options, a red iosSimulatorArm64Test run leaves a new file to the TDD judge', async () => {
+  const { kotlinGreenRunOptions, KOTLIN_PRODUCTION_SOURCE_PATTERN, KOTLIN_TEST_SOURCE_PATTERN } = await import('./kotlin.ts')
+  let wrappedCalls = 0
+  let judged = 0
+  const wrapped: Rule = async function enforceKotlinTdd() {
+    wrappedCalls++
+    return { kind: 'pass' }
+  }
+  const compileRed: SessionEvent = {
+    kind: 'command',
+    command: './gradlew :harness:ios-framework:iosSimulatorArm64Test -Pmysudo.targets.native=true 2>&1 | grep -E "^e:|BUILD|FAILED" | head -5',
+    output: "> Task :harness:ios-framework:compileTestKotlinIosSimulatorArm64 FAILED\ne: HarnessChecksTest.kt:15:24 Unresolved reference 'HarnessChecks'.\nBUILD FAILED in 6s",
+  }
+  const ctx = {
+    history: async () => [green, read(SOURCE), compileRed],
+    readFile: async (path: string) =>
+      path === SOURCE
+        ? { kind: 'present', content: 'class IosKeychainSecretBackend(private val accessGroup: String?) : SecretBackend' }
+        : { kind: 'absent' },
+    agent: { reason: async () => { judged++; return { kind: 'violation', reason: 'new entry point. Finding: new behavior' } } },
+  } as unknown as RuleContext
+  const rule = withExtractionUnderGreen(wrapped, {
+    ...kotlinGreenRunOptions(),
+    productionPattern: KOTLIN_PRODUCTION_SOURCE_PATTERN,
+    testPattern: KOTLIN_TEST_SOURCE_PATTERN,
+  })
+  const stub: Action = {
+    kind: 'write',
+    path: '/repo/harness/ios/framework/src/iosMain/kotlin/harness/HarnessChecks.kt',
+    content: 'object HarnessChecks {\n    fun secretBackend(accessGroup: String?): List<String> = TODO()\n}\n',
+  }
+  const result = await rule(stub, ctx)
+  assert.equal(result.kind, 'pass')
+  assert.equal(judged, 0, 'the extraction judge is not asked')
+  assert.equal(wrappedCalls, 1)
+})

@@ -57,7 +57,7 @@ export const MOCKING_LIBRARY_IMPORTS =
  * builds outputs without running verification.
  */
 export const GRADLE_TEST_COMMAND =
-  /\bgradlew?\b[^\n;&|]*(?:\b(?:build|check|test|allTests|jvmTest)\b|\btest[A-Za-z0-9]*Test\b)/
+  /\bgradlew?\b[^\n;&|]*(?:\b(?:build|check|test|allTests|jvmTest)\b|\btest[A-Za-z0-9]*Test\b|\b(?:ios|macos|tvos|watchos|linux|mingw|androidNative|js|wasmJs|wasmWasi|desktop)[A-Za-z0-9]*Test\b)/
 
 const STATIC_MOCK_PATTERNS: NamedPattern[] = [
   { label: 'Mockito.mockStatic()', pattern: /\bmockStatic\s*[(<]/g },
@@ -846,6 +846,13 @@ const EXCLUDE_TASK_FLAG = /^(?:-x(?:=?.+)?|--exclude-task(?:=.+)?)$/
 const REDIRECT = /^(?:\d*|&)(?:>>?|<<?)/
 const REDIRECT_WITH_SEPARATE_TARGET = /^(?:\d*|&)(?:>>?|<<?)$/
 
+/** A Kotlin Multiplatform target's test task (`iosSimulatorArm64Test`,
+ *  `macosArm64Test`, `jsNodeTest`, `wasmJsBrowserTest`, `desktopTest`,
+ *  issue #94). Compile, link and `…TestBinaries` tasks run nothing and
+ *  don't end in `Test`. */
+const KMP_TARGET_TEST_TASK =
+  /^(?:ios|macos|tvos|watchos|linux|mingw|androidNative|js|wasmJs|wasmWasi|desktop)[A-Za-z0-9]*Test$/
+
 function isVerificationTask(word: string): boolean {
   const task = word.replace(/^:+/, '').split(':').pop() ?? ''
   return (
@@ -854,7 +861,8 @@ function isVerificationTask(word: string): boolean {
     task === 'test' ||
     task === 'allTests' ||
     task === 'jvmTest' ||
-    /^test[A-Za-z0-9]*Test$/.test(task)
+    /^test[A-Za-z0-9]*Test$/.test(task) ||
+    KMP_TARGET_TEST_TASK.test(task)
   )
 }
 
@@ -948,7 +956,8 @@ export function kotlinGreenRunOptions(command: RegExp = GRADLE_TEST_COMMAND): Gr
 
 const DEFAULT_GRADLE_GREEN_REASON =
   'Accepted Gradle verification tasks: test/test...Test, build, or check ' +
-  '(including module-qualified tasks and allTests/jvmTest; not --dry-run ' +
+  '(including module-qualified tasks, allTests/jvmTest and Kotlin ' +
+  'Multiplatform target test tasks such as iosSimulatorArm64Test; not --dry-run ' +
   'or -x/--exclude-task). Under Kiro, a quiet run with no BUILD ' +
   'SUCCESSFUL text is accepted only when the tool result is the canonical ' +
   '{"exit_status": "exit status: 0", ...} envelope (a zero exit_status) ' +

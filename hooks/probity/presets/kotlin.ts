@@ -123,6 +123,14 @@ export type KotlinPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Test-infrastructure paths outside the TDD gate (issue #94), such
+   *  as a device harness whose check-runners can only run in a signed
+   *  app, e.g. `['harness/**']`. The TDD block (with its mutation-probe
+   *  and characterization wrappers) leaves them out; every other block
+   *  still covers them: core boundary, adapter observability, the
+   *  shell-write screen. The judge counts their checks' device output as
+   *  the red for the adapters they exercise. Default: none. */
+  harnessGlobs?: string[]
   /** Deny a shell command (Bash, Kiro's shell) that writes a file any
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
@@ -170,6 +178,7 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     '**/src/main/**/data/**',
   ]
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
+  const harnessExclusions = (options.harnessGlobs ?? []).map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
 
   // Driving adapters must be thin (issues #72, #76). Opt-in: listed
   // before the TDD block, so a denial costs one AI call, not two.
@@ -261,7 +270,7 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     ...(drivingAdapter ? [drivingAdapter] : []),
 
     {
-      files: tddGlobs,
+      files: [tddGlobs[0], ...tddGlobs.slice(1), ...harnessExclusions],
       // Telemetry-only additions pass deterministically — see the
       // KMP preset's note on the TDD/observability tension.
       rules: [
