@@ -22,6 +22,10 @@ export type DrivingAdapterBlockOptions = {
   globs: readonly string[]
   /** Core scope, excluded: core code is never a driving adapter. */
   coreGlobs: readonly string[]
+  /** Leave `coreGlobs` out of the block (default). A preset whose core
+   *  scope contains its views (Swift's module folders) passes false and
+   *  takes the views out of its core block instead. */
+  excludeCore?: boolean
   /** Fields whose literal comparison is a domain decision. */
   domainDiscriminants?: readonly string[]
   /** Appended to the discriminant screen's deny. */
@@ -38,10 +42,11 @@ export type DrivingAdapterBlockOptions = {
 
 export function drivingAdapterBlock(options: DrivingAdapterBlockOptions): RuleEntry | undefined {
   if (!options.globs.some((glob) => !glob.startsWith('!'))) return undefined
-  const [first, ...rest] = [
-    ...options.globs,
-    ...options.coreGlobs.filter((glob) => !glob.startsWith('!')).map((glob) => `!${glob}`),
-  ]
+  const coreExclusions =
+    options.excludeCore === false
+      ? []
+      : options.coreGlobs.filter((glob) => !glob.startsWith('!')).map((glob) => `!${glob}`)
+  const [first, ...rest] = [...options.globs, ...coreExclusions]
   return {
     files: [first!, ...rest],
     rules: [

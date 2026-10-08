@@ -23,7 +23,15 @@
  * App/Sources packages) are calibrated to the reference app above —
  * audit them against your tree with `npx probity-scope-report` before
  * trusting the gate; the file's own comments flag which patterns need
- * per-project calibration (test command, driver scopes).
+ * per-project calibration (test command, driver scopes). The main code
+ * globs are options: `tddGlobs`, `coreGlobs` (ports and core behavior)
+ * and `adapterGlobs` (boundary observability) default to the reference
+ * app's paths.
+ *
+ * SwiftUI views (opt-in, issue #77): set `drivingAdapterGlobs` to hold
+ * views thin. Starting globs per layout, and the `domainDiscriminants`,
+ * `coreExportsInJudge` and `coreApiPaths` options, are in
+ * hooks/PROBITY.md, "Driving adapters by project layout".
  */
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,4 +42,10 @@ import { swiftRuleEntries } from '@jjchill/probity-rules/presets/swift'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({ rules: swiftRuleEntries(ROOT) })
+export default defineConfig({
+  rules: swiftRuleEntries(ROOT, {
+    // drivingAdapterGlobs: ['App/Sources/**/Views/**', 'App/Sources/**/*View.swift', '!**/*Tests.swift', '!**/Previews/**'],
+    // domainDiscriminants: ['role'],
+    // coreExportsInJudge: true,
+  }),
+})

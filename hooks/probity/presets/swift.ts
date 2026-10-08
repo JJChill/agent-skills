@@ -18,6 +18,9 @@ import { join } from 'node:path'
 
 import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
+import { drivingAdapterBlock } from './driving-adapter.js'
+import type { Globs } from '../rules/scoping.js'
+
 import {
   enforceAcceptanceLanguage,
   enforceControlledPreconditions,
@@ -41,8 +44,12 @@ import {
   surfaceScenarioLinkBreakage,
 } from '../rules/spec-test-parity.js'
 import {
+  SWIFT_DRIVING_ADAPTER_ADDENDUM,
+  SWIFT_EXPORTS,
   SWIFT_FIXED_SLEEPS,
+  SWIFT_INTERFACE,
   SWIFT_PROBE_FILE_PATTERN,
+  swiftDomainDiscriminantPatterns,
   XCODEBUILD_TEST_COMMAND,
   XCODEBUILD_TEST_FAILED,
   XCODEBUILD_TEST_SUCCEEDED,
@@ -80,7 +87,7 @@ const SWIFT_TELEMETRY_LINES = [
  * this file's directory.
  */
 export function swiftRuleEntries(root: string, options: SwiftPresetOptions = {}): RuleEntry[] {
-  return withShellWriteScreen(swiftEntries(root), { root, enabled: options.shellWriteScreen })
+  return withShellWriteScreen(swiftEntries(root, options), { root, enabled: options.shellWriteScreen })
 }
 
 export type SwiftPresetOptions = {
@@ -88,10 +95,70 @@ export type SwiftPresetOptions = {
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
   shellWriteScreen?: boolean
+  /** Files the TDD judge covers. Default: `App/*.swift`, `App/Sources/**`,
+   *  `AcceptanceTests/**`, `VPNNetworkExtension/**`. */
+  tddGlobs?: Globs
+  /** Where ports and core behavior live, for the boundary judge (and the
+   *  core exports the driving-adapter judge is given). Default:
+   *  `App/Sources/Modules/**`, `App/Sources/Utilities/Providers/**`. */
+  coreGlobs?: Globs
+  /** Adapters held to boundary observability. Default:
+   *  `App/Sources/**\/Adapters/**`, `App/Sources/**\/Services/**`,
+   *  `App/Sources/**\/Analytics/**`. */
+  adapterGlobs?: Globs
+  /** SwiftUI views (driving adapters) held thin by
+   *  `enforceThinDrivingAdapter` (issue #77). OFF unless set: a core-only
+   *  package has no views. Views inside `coreGlobs` move to this judge
+   *  and out of the boundary judge, so a view write costs one AI call
+   *  there, not two. View models stay core: they are presenters. See
+   *  hooks/PROBITY.md, "Driving adapters by project layout". */
+  drivingAdapterGlobs?: readonly string[]
+  /** Field names whose comparison to an enum case or literal in a view
+   *  is a domain decision (e.g. `['role', 'status']`); blocks net-new
+   *  `== .superUser`, `switch viewer.role`, `if case .draft = …` free. */
+  domainDiscriminants?: string[]
+  /** Appended to the discriminant screen's deny. */
+  domainHint?: string
+  /** Give the driving-adapter judge the names declared in `coreGlobs`
+   *  Swift files (views left out). Off by default: a scan per write. */
+  coreExportsInJudge?: boolean
+  /** Cap on the core export list (default 16,000 characters). */
+  coreExportsMaxChars?: number
+  /** For a UI-only app on a core package or framework: `.swiftinterface`
+   *  files or directories holding them, read as the core's public API. */
+  coreApiPaths?: string[]
 }
 
-function swiftEntries(root: string): RuleEntry[] {
+function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
   const glossary = join(root, 'docs/GLOSSARY.md')
+  const tddGlobs: Globs = options.tddGlobs ?? ['App/*.swift', 'App/Sources/**', 'AcceptanceTests/**', 'VPNNetworkExtension/**']
+  const coreGlobs: Globs = options.coreGlobs ?? ['App/Sources/Modules/**', 'App/Sources/Utilities/Providers/**']
+  const adapterGlobs: Globs = options.adapterGlobs ?? [
+    'App/Sources/**/Adapters/**',
+    'App/Sources/**/Services/**',
+    'App/Sources/**/Analytics/**',
+  ]
+  const viewExclusions = (options.drivingAdapterGlobs ?? [])
+    .filter((glob) => !glob.startsWith('!'))
+    .map((glob) => `!${glob}`)
+  // The core minus the views: what the boundary judge covers and what
+  // the driving-adapter judge is told the core exports.
+  const core: Globs = [coreGlobs[0], ...coreGlobs.slice(1), ...viewExclusions]
+  const drivingAdapter = drivingAdapterBlock({
+    globs: options.drivingAdapterGlobs ?? [],
+    coreGlobs: core,
+    excludeCore: false,
+    domainDiscriminants: options.domainDiscriminants,
+    domainHint: options.domainHint,
+    patternsFor: swiftDomainDiscriminantPatterns,
+    coreExports: options.coreExportsInJudge
+      ? { root, language: SWIFT_EXPORTS, maxChars: options.coreExportsMaxChars ?? 16000 }
+      : undefined,
+    publishedApi: options.coreApiPaths?.length
+      ? { paths: options.coreApiPaths, format: SWIFT_INTERFACE, root }
+      : undefined,
+    instructions: (defaults) => defaults + SWIFT_DRIVING_ADAPTER_ADDENDUM,
+  })
 
   // Rule ordering principle: Probity stops at the first violation, so
   // every deterministic screen (pattern match, free, instant) is
@@ -198,13 +265,12 @@ function swiftEntries(root: string): RuleEntry[] {
     // beside App/Sources, not inside it) — audit these globs against
     // your tree with scripts/scope-report.ts; a write no rule matches
     // is a silent free pass.
+    // SwiftUI views must be thin (issue #77). Opt-in; listed before the
+    // TDD block, so a denial costs one AI call, not two.
+    ...(drivingAdapter ? [drivingAdapter] : []),
+
     {
-      files: [
-        'App/*.swift',
-        'App/Sources/**',
-        'AcceptanceTests/**',
-        'VPNNetworkExtension/**',
-      ],
+      files: tddGlobs,
       rules: [
         // The inverse-scenario wrapper changes only the DENY TEXT, and
         // only on the test-control layer (the acceptance composition
@@ -260,7 +326,7 @@ function swiftEntries(root: string): RuleEntry[] {
     // core behavior live (here: module view-models/use-cases and the
     // application-owned provider ports).
     {
-      files: ['App/Sources/Modules/**', 'App/Sources/Utilities/Providers/**'],
+      files: core,
       rules: [enforcePortsBoundary({ glossaryPath: glossary })],
     },
 
@@ -269,11 +335,7 @@ function swiftEntries(root: string): RuleEntry[] {
     // port tap, or span). Delta-based — legacy paths migrate
     // incrementally.
     {
-      files: [
-        'App/Sources/**/Adapters/**',
-        'App/Sources/**/Services/**',
-        'App/Sources/**/Analytics/**',
-      ],
+      files: adapterGlobs,
       rules: [
         withTelemetryFastPath(
           enforceAdapterObservability({

@@ -35,15 +35,17 @@ The rules ship as the [`@jjchill/probity-rules`](https://www.npmjs.com/package/@
 
 ### Driving adapters by project layout
 
-Where the driving adapters live, and where the judge learns what the core already exports, depends on the layout. The JS preset wires the block by default because React apps usually keep UI and domain together. The Kotlin and KMP presets wire it only when `drivingAdapterGlobs` is set: a core-only repo has no UI, and a default glob there would only show up as a `DEAD SCOPE` in `probity-scope-report`.
+Where the driving adapters live, and where the judge learns what the core already exports, depends on the layout. The JS preset wires the block by default because React apps usually keep UI and domain together. The Kotlin, KMP and Swift presets wire it only when `drivingAdapterGlobs` is set: a core-only repo has no UI, and a default glob there would only show up as a `DEAD SCOPE` in `probity-scope-report`.
 
 | Layout | Example | `drivingAdapterGlobs` to start from | Core exports for the judge |
 |---|---|---|---|
 | UI with the core | a React app; a KMP app with `composeApp/` | JS: the default. KMP: `['**/composeApp/src/**', '**/src/*Main/**/ui/**', '!**/*Preview*.kt']` | `coreExportsInJudge: true` (reads `coreGlobs` source) |
 | Core-only SDK with a CLI | mysudo-core | `['cli/src/main/**/commands/**']` (leave out the composition root and config adapters) | `coreExportsInJudge: true` |
 | UI-only app on a core SDK | an Android app depending on the SDK as a library | the app's `ui/` packages | `coreApiPaths: ['path/to/sdk/api']`, the SDK's `.api`/`.klib.api` dumps |
+| SwiftUI with the core (one app, or core and UI targets in one repo) | an iOS app with `App/Sources/Modules/*` | `['App/Sources/**/Views/**', 'App/Sources/**/*View.swift', 'App/Sources/**/*Screen.swift', '!**/*Tests.swift', '!AcceptanceTests/**', '!**/Previews/**']` | `coreExportsInJudge: true` (reads `coreGlobs` Swift source, views left out) |
+| SwiftUI app on a core package or framework | an iOS app depending on the SDK as a Swift package or XCFramework | the app's view layer | `coreApiPaths: ['path/to/Core.xcframework']`, its `.swiftinterface` files (`.private` and `.package` ones are skipped) |
 
-Only Kotlin dump formats are read today; Swift is tracked in #77.
+In the Swift preset, a view inside `coreGlobs` (a module folder holding both views and view models) moves to the driving-adapter judge and out of the ports-boundary judge, so a view write costs one AI call there, not two. View models (`ObservableObject`, `@Observable`) are presenters and stay with the core: the view sends them one intent per user action. `domainDiscriminants` in Swift matches enum cases as well as literals: `viewer.role == .superUser` in either order, `switch viewer.role`, and `if case .draft = timesheet.status`.
 
 ## Language presets
 

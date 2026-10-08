@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.4.27
+
+The Swift preset can now keep SwiftUI views thin (#77), in an app with
+its core in the same repo or in a UI-only app on a core package or
+framework. Opt-in. `swiftRuleEntries` also takes its main code globs as
+options.
+
+- **What was missing.** #72 and #76 wired `enforceThinDrivingAdapter`
+  and `forbidNewDomainDiscriminantChecks` for JS, Kotlin and KMP. In a
+  Swift project, a SwiftUI view could grow permission checks,
+  multi-port handlers or copied domain rules, and only the TDD judge
+  saw it. `swiftRuleEntries` had hard-coded paths and no option for it.
+- **Now:**
+  - **Options with today's paths as defaults:** `tddGlobs`,
+    `coreGlobs` (the ports-boundary judge) and `adapterGlobs` (boundary
+    observability). Existing configs see no change.
+  - **`drivingAdapterGlobs`, off unless set.** When set, the block runs
+    before the TDD judge. Views inside `coreGlobs` (a module folder with
+    views and view models) move to it and out of the ports-boundary
+    judge, so a view write costs one AI call there, not two. View models
+    (`ObservableObject`, `@Observable`) stay core, as presenters.
+  - **`domainDiscriminants`** with Swift patterns: `viewer.role ==
+    .superUser` or `Role.manager != viewer.role`, string literals,
+    `switch viewer.role`, and `if`/`guard`/`while case .draft =
+    timesheet.status`. Look-alikes (`roleName == .x`, `let role: Role =
+    .x`, `viewer.role == other.role`, `role != nil`) don't match.
+  - **Core exports:** `coreExportsInJudge` reads `coreGlobs` Swift
+    source with `swiftExportedNames`. Swift's default visibility is
+    `internal`, so it lists whatever isn't `private`/`fileprivate`:
+    top-level types, functions and constants, plus member and extension
+    functions and extension properties as `Type.name`. Views are left
+    out of the list.
+  - **`coreApiPaths`** for a UI-only app: `.swiftinterface` files or
+    directories holding them (an XCFramework), read by
+    `readSwiftInterface` as `Owner: members` lines. Enum cases are kept;
+    initializers, operators and generated members are dropped.
+    `.private` and `.package` interfaces are skipped.
+  - **`SWIFT_DRIVING_ADAPTER_ADDENDUM`**: layout, modifiers, `@State`,
+    `@Binding`, `@FocusState`, `@Environment`, a `.task {}` starting one
+    load, navigation and sheets, and previews are view state or wiring;
+    one view-model intent or use case per user action is the pattern.
+  - `drivingAdapterBlock` takes `excludeCore: false`, for a preset that
+    takes its views out of the core block instead.
+- **Measured** with Probity's default Claude judge on SwiftUI versions
+  of the #72 cases, through the Swift preset's driving-adapter block
+  with `coreExportsInJudge: true`. 5 runs per case, 40/40 correct.
+  - Blocked: a view running the whole submit use case (save, notify,
+    "a failed notification never fails the submit"); a
+    `role == .superUser || role == .manager` check beside an exported
+    `Viewer.canApprove`; a copied display-name rule beside the exported
+    `Viewer.displayName`; a framework-free bulk-approve use case filed
+    under `Views/`.
+  - Allowed: a pure render change; calling `canApprove(_:)`; one
+    view-model intent; `@State` with a sheet.
+  - The role-check deny named `Viewer.canApprove` from the core export
+    list. With `domainDiscriminants: ['role']`, the free screen blocks
+    that case before any AI call (unit-tested).
+- Starting globs for both layouts are in hooks/PROBITY.md, "Driving
+  adapters by project layout"; the Swift template shows them commented.
+- New exports (`rules/swift`): `swiftExportedNames`, `SWIFT_EXPORTS`,
+  `readSwiftInterface`, `SWIFT_INTERFACE`,
+  `swiftDomainDiscriminantPatterns`, `SWIFT_DRIVING_ADAPTER_ADDENDUM`.
 ## 0.4.26
 
 The Swift preset's TDD judge gets the #80 rules (#85, Swift half). It no
