@@ -110,7 +110,8 @@ chmod +x .kiro/hooks/*.sh .kiro/hooks/*.py
 ```
 
 The shim resolves the repo root from its own location (`.kiro/hooks/../..`)
-and finds `probity` at `node_modules/.bin/probity`, so no path edits are needed.
+and runs `node_modules/.bin/probity-claude` (or `node_modules/.bin/probity` on an
+install without it), so no path edits are needed.
 Once these are installed, `/probity-update` refreshes them automatically whenever
 the package ships changes — you don't need to repeat this step by hand.
 

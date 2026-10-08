@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.23
+
+A shell command run from the main checkout that writes into a sibling
+worktree is now judged by that worktree's config, in Claude Code and in
+Kiro (#92).
+
+- **What was missing.** 0.4.22 picked a sibling worktree's config from the
+  call's cwd, or a leading `cd`/`git -C`. A Bash call keeps the session's
+  cwd, though, so it usually reaches a sibling by path:
+  `sed -i … /abs/sibling/src/A.kt`, `sed -i … ../sibling/src/A.kt`, or a
+  python script that opens the sibling file. Those ran under the main
+  checkout's config, whose shell-write screen skips paths outside the
+  project, and passed with no output. Kiro had the same gap: its shim
+  called the bare `probity` bin, with none of `probity-claude`'s worktree
+  handling.
+- **Now:**
+  - `probity-claude` reads the files a Bash command writes with the
+    shell-write screen's parser (new export `shellWritePaths`) and also
+    runs Probity in each other worktree they lie in, the main checkout
+    included when the session is in a sibling. The first deny stands.
+    The extra run happens only for commands that write into another tree;
+    other calls cost the same as before (282 ms against 291 ms on 0.4.22,
+    median of 5).
+  - The screen resolves a command's relative paths from the session's cwd,
+    which `probity-claude` passes as `PROBITY_SESSION_CWD`. It used the
+    config root before, which got `../sibling/...` right only by
+    coincidence and missed relative paths from a subdirectory.
+  - `sed`/`perl` script arguments (`s/a/b/`, `-e` values, BSD's
+    `-i ''` suffix) are no longer read as file paths.
+  - The Kiro shim runs `probity-claude` (falling back to `probity`), and
+    passes the shell call's cwd, so Kiro gets the same worktree routing and
+    the #81 config-edit guard.
+- **Upgrading.** Re-copy the Kiro shim files (`/probity-update` step 5).
+  No config change.
+
 ## 0.4.22
 
 Probity now judges calls in a git worktree beside the main checkout, in

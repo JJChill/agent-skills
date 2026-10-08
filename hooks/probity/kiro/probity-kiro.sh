@@ -36,18 +36,24 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PROBITY="$ROOT/node_modules/.bin/probity"
+BIN_DIR="$ROOT/node_modules/.bin"
 # A worktree beside the main checkout (`git worktree add ../<name>`) carries
 # this shim but usually no node_modules: run the main worktree's Probity, and
 # let this tree's config import the main worktree's packages through
 # NODE_PATH (consulted only after this tree's own node_modules).
-if [ ! -x "$PROBITY" ] && command -v git >/dev/null 2>&1; then
+if [ ! -x "$BIN_DIR/probity" ] && command -v git >/dev/null 2>&1; then
   MAIN_TREE="$(git -C "$ROOT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
   if [ -n "$MAIN_TREE" ] && [ -x "$MAIN_TREE/node_modules/.bin/probity" ]; then
-    PROBITY="$MAIN_TREE/node_modules/.bin/probity"
+    BIN_DIR="$MAIN_TREE/node_modules/.bin"
     export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$MAIN_TREE/node_modules"
   fi
 fi
+# probity-claude (from @jjchill/probity-rules) runs Probity in the worktree a
+# call targets, including a shell write into another worktree by path, and
+# guards edits to the config; the bare probity bin is the fallback for an
+# install without it.
+PROBITY="$BIN_DIR/probity-claude"
+[ -x "$PROBITY" ] || PROBITY="$BIN_DIR/probity"
 TRANSLATE="$SCRIPT_DIR/probity-kiro-translate.py"
 TRANSDUCER="$SCRIPT_DIR/kiro-transcript-to-claude.py"
 

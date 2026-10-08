@@ -334,6 +334,43 @@ test('end to end: a sibling worktree without node_modules is judged by its own c
   assert.match(runIn(project, sed(project, join(project, 'src/A.kt'))), new RegExp(`root=${project}$`))
 })
 
+// Issue #92: a Bash call keeps the session's cwd (the main checkout) and
+// reaches a sibling worktree by path. The wrapper also runs Probity in
+// each worktree a command writes into, so that worktree's config judges
+// the write.
+const ALLOW_ALL_CONFIG = `import { defineConfig } from '@nizos/probity'
+export default defineConfig({ rules: [] })
+`
+
+const SCREEN_CONFIG = `import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from '@nizos/probity'
+import { forbidShellWritesToScopedFiles } from '${join(HERE, '..', 'rules', 'shell-writes.ts')}'
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default defineConfig({ rules: [forbidShellWritesToScopedFiles({ root: ROOT, scopes: [['src/**']] })] })
+`
+
+test('end to end: a command from the main checkout that writes into a sibling worktree is judged there', (t) => {
+  const { project, sibling } = siblingLayout(t, { siblingConfig: SCREEN_CONFIG })
+  writeFileSync(join(project, 'probity.config.ts'), ALLOW_ALL_CONFIG)
+  symlinkSync(join(HERE, '..', 'node_modules'), join(project, 'node_modules'), 'dir')
+  const bash = (command) => ({ cwd: project, tool_name: 'Bash', tool_input: { command } })
+  const denied = (command) => {
+    const res = spawnSync(process.execPath, [WRAPPER], {
+      cwd: project,
+      input: JSON.stringify({ session_id: 'session-1', transcript_path: '/dev/null', hook_event_name: 'PreToolUse', ...bash(command) }),
+      encoding: 'utf8',
+    })
+    assert.equal(res.status, 0, res.stderr)
+    return res.stdout ? JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason : null
+  }
+  assert.match(denied(`sed -i s/a/b/ ${join(sibling, 'src/A.kt')}`) ?? '', /writes src\/A\.kt/)
+  assert.match(denied(`sed -i s/a/b/ ../project-wt/src/A.kt`) ?? '', /writes src\/A\.kt/)
+  assert.match(denied(`python3 - <<'EOF'\nopen('${join(sibling, 'src/A.kt')}', 'w').write('x')\nEOF`) ?? '', /writes src\/A\.kt/)
+  assert.equal(denied(`sed -i s/a/b/ ${join(sibling, 'docs/notes.md')}`), null, 'an unscoped sibling path passes')
+  assert.equal(denied(`sed -i s/a/b/ ${join(project, 'src/A.kt')}`), null, 'the main checkout keeps its own config')
+})
+
 test('end to end: packages that resolve nowhere deny with an npm ci hint for the tree', (t) => {
   const missing = ROOT_REPORTING_CONFIG.replace("import { defineConfig } from '@nizos/probity'", "import { defineConfig } from '@nizos/probity'\nimport '@jjchill/not-installed-anywhere'")
   const { project, sibling } = siblingLayout(t, { siblingConfig: missing })
