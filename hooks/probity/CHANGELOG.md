@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.22
+
+Probity now judges calls in a git worktree beside the main checkout, in
+Claude Code and in Kiro, and no longer lets calls through when its
+packages aren't installed (#90).
+
+- **What was missing.** A worktree made with `git worktree add ../<name>`
+  sits beside the project, not inside it.
+  - Claude Code: `probity-claude` switches to a worktree's own config only
+    for worktrees nested in the project (#66). For a sibling it stayed on
+    the main checkout's config, whose rules don't cover paths outside the
+    project. So a `sed -i` on a scoped file in the sibling was allowed with
+    no output, and globs anchored at the project root (the spec layer, for
+    one) missed Write and Edit too. Seen in mysudo-core on 0.4.21: a
+    session in a sibling worktree wrote scoped `.feature` files with a
+    `python3` heredoc and nothing blocked it.
+  - Kiro: the shim takes its root from its own location. In a sibling
+    worktree that is the worktree, which usually has no `node_modules`,
+    and the shim then allowed every call ("probity not installed").
+- **Now:**
+  - `probity-claude` finds sibling worktrees of the project's repository
+    through `git worktree list` (run only when the target is outside the
+    project) and starts Probity there when the worktree has its own
+    `probity.config.*`.
+  - Both `probity-claude` and the Kiro shim fall back to the main
+    checkout's packages: the main checkout's `node_modules` is appended to
+    `NODE_PATH`, which Node consults only after the worktree's own. The
+    Kiro shim also runs the main worktree's Probity bin when its own tree
+    has none.
+  - When the packages resolve nowhere, every call is denied with "Run npm
+    ci in <tree>", except a bare install command (`npm ci`, `npm install`,
+    pnpm/yarn/bun install) so the session can recover. For the Kiro shim
+    this replaces the old allow.
+- **Upgrading.** Re-copy the Kiro shim files (`/probity-update` step 5
+  does this). No config change.
+
 ## 0.4.21
 
 Every preset now denies a shell command that writes a file its rules

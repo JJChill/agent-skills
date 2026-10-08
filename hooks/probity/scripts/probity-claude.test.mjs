@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { PROBITY_MAX_TRANSCRIPT_BYTES, activeConfig, afterState, debugArgs, preparePayload, probityDirectory, subagentTranscript, targetsConfig, transcriptTail } from './probity-claude.mjs'
+import { PROBITY_MAX_TRANSCRIPT_BYTES, activeConfig, afterState, debugArgs, isInstallCommand, preparePayload, probityDirectory, subagentTranscript, targetsConfig, transcriptTail } from './probity-claude.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WRAPPER = join(HERE, 'probity-claude.mjs')
@@ -264,6 +264,100 @@ export default defineConfig({ rules: [function whereAmI() { return { kind: 'viol
   assert.match(run(edit(project, join(project, 'src/A.kt'))), new RegExp(`root=${project}$`))
   assert.ok(existsSync(join(project, 'probity-debug.jsonl')), 'debug log stays in the project directory')
   assert.equal(existsSync(join(worktree, 'probity-debug.jsonl')), false)
+})
+
+// Issue #90: a worktree made with `git worktree add ../<name>` sits
+// beside the project, not inside it. The wrapper stayed in the main
+// checkout, whose rules don't cover paths outside it, so a call in the
+// sibling went through unjudged.
+function siblingLayout(t, { siblingConfig = 'export default {}\n' } = {}) {
+  const base = realpathSync(tempDir(t))
+  const project = join(base, 'project')
+  const sibling = join(base, 'project-wt')
+  mkdirSync(project)
+  writeFileSync(join(project, 'probity.config.ts'), 'export default {}\n')
+  writeFileSync(join(project, '.gitignore'), 'node_modules\n*.jsonl\n')
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, stdio: 'ignore' })
+  git(project, 'init', '-q', '-b', 'main')
+  git(project, 'add', '.')
+  git(project, 'commit', '-q', '-m', 'init')
+  git(project, 'worktree', 'add', '-q', sibling, '-b', 'wt')
+  if (siblingConfig === null) rmSync(join(sibling, 'probity.config.ts'))
+  else writeFileSync(join(sibling, 'probity.config.ts'), siblingConfig)
+  mkdirSync(join(sibling, 'src'), { recursive: true })
+  return { base, project, sibling }
+}
+
+test('probityDirectory picks a sibling worktree of the project an edit or command targets', (t) => {
+  const { project, sibling } = siblingLayout(t)
+  assert.equal(probityDirectory({ cwd: project, tool_name: 'Edit', tool_input: { file_path: join(sibling, 'src/A.kt') } }, project), sibling)
+  assert.equal(probityDirectory({ cwd: sibling, tool_name: 'Write', tool_input: { file_path: 'src/A.kt' } }, project), sibling)
+  assert.equal(probityDirectory({ cwd: join(sibling, 'src'), tool_name: 'Bash', tool_input: { command: 'ls' } }, project), sibling)
+  assert.equal(probityDirectory({ cwd: project, tool_name: 'Bash', tool_input: { command: `cd ${sibling} && ls` } }, project), sibling)
+})
+
+test('probityDirectory keeps the project for an unrelated outside path and a sibling without a config', (t) => {
+  const { base, project, sibling } = siblingLayout(t)
+  mkdirSync(join(base, 'unrelated'))
+  assert.equal(probityDirectory({ cwd: project, tool_name: 'Edit', tool_input: { file_path: join(base, 'unrelated/A.kt') } }, project), null)
+  const bare = siblingLayout(t, { siblingConfig: null })
+  assert.equal(probityDirectory({ cwd: bare.sibling, tool_name: 'Edit', tool_input: { file_path: join(bare.sibling, 'src/A.kt') } }, bare.project), null)
+  assert.ok(sibling)
+})
+
+const ROOT_REPORTING_CONFIG = `import { dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig } from '@nizos/probity'
+const ROOT = dirname(fileURLToPath(import.meta.url))
+export default defineConfig({ rules: [function whereAmI() { return { kind: 'violation', reason: 'root=' + ROOT } }] })
+`
+
+function runIn(project, payload) {
+  const res = spawnSync(process.execPath, [WRAPPER], {
+    cwd: project,
+    input: JSON.stringify({ session_id: 'session-1', transcript_path: '/dev/null', hook_event_name: 'PreToolUse', ...payload }),
+    encoding: 'utf8',
+  })
+  assert.equal(res.status, 0, res.stderr)
+  return JSON.parse(res.stdout).hookSpecificOutput.permissionDecisionReason
+}
+
+test('end to end: a sibling worktree without node_modules is judged by its own config, on the project\'s packages', (t) => {
+  const { project, sibling } = siblingLayout(t, { siblingConfig: ROOT_REPORTING_CONFIG })
+  writeFileSync(join(project, 'probity.config.ts'), ROOT_REPORTING_CONFIG)
+  symlinkSync(join(HERE, '..', 'node_modules'), join(project, 'node_modules'), 'dir')
+  assert.equal(existsSync(join(sibling, 'node_modules')), false)
+  const sed = (cwd, file) => ({ cwd, tool_name: 'Bash', tool_input: { command: `sed -i s/a/b/ ${file}` } })
+  assert.match(runIn(project, sed(sibling, join(sibling, 'src/A.kt'))), new RegExp(`root=${sibling}$`))
+  const write = { cwd: project, tool_name: 'Write', tool_input: { file_path: join(sibling, 'src/A.kt'), content: 'class A\n' } }
+  assert.match(runIn(project, write), new RegExp(`root=${sibling}$`))
+  assert.match(runIn(project, sed(project, join(project, 'src/A.kt'))), new RegExp(`root=${project}$`))
+})
+
+test('end to end: packages that resolve nowhere deny with an npm ci hint for the tree', (t) => {
+  const missing = ROOT_REPORTING_CONFIG.replace("import { defineConfig } from '@nizos/probity'", "import { defineConfig } from '@nizos/probity'\nimport '@jjchill/not-installed-anywhere'")
+  const { project, sibling } = siblingLayout(t, { siblingConfig: missing })
+  symlinkSync(join(HERE, '..', 'node_modules'), join(project, 'node_modules'), 'dir')
+  const reason = runIn(project, { cwd: sibling, tool_name: 'Bash', tool_input: { command: 'ls' } })
+  assert.match(reason, /not-installed-anywhere/)
+  assert.match(reason, new RegExp(`npm ci.*${sibling}`))
+  assert.doesNotMatch(reason, /Edit or Write/)
+  const install = spawnSync(process.execPath, [WRAPPER], {
+    cwd: project,
+    input: JSON.stringify({ session_id: 'session-1', transcript_path: '/dev/null', hook_event_name: 'PreToolUse', cwd: sibling, tool_name: 'Bash', tool_input: { command: `cd ${sibling} && npm ci` } }),
+    encoding: 'utf8',
+  })
+  assert.equal(install.status, 0, install.stderr)
+  assert.equal(install.stdout, '', 'the install that fixes it goes through')
+})
+
+test('isInstallCommand accepts a bare package install and nothing chained to it', () => {
+  for (const command of ['npm ci', 'npm install', 'npm i --no-audit', 'cd ../wt && npm ci', 'pnpm install --frozen-lockfile', 'yarn', 'bun install']) {
+    assert.ok(isInstallCommand(command), command)
+  }
+  for (const command of ['npm ci && sed -i s/a/b/ src/A.kt', 'npm test', 'npm install left-pad; rm -rf src', 'echo npm ci']) {
+    assert.equal(isInstallCommand(command), false, command)
+  }
 })
 
 // Issue #81: Probity loads its config on every call and blocks

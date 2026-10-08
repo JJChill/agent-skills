@@ -35,6 +35,13 @@
  * config's imports still resolve from the project's node_modules, one
  * directory level up the tree.
  *
+ * The same goes for a worktree beside the project (`git worktree add
+ * ../<name>`, issue #90), found through `git worktree list`. Its config
+ * can't reach the project's node_modules by walking upward, so the
+ * wrapper adds that directory to NODE_PATH, which Node consults only
+ * after the worktree's own node_modules. When the packages resolve
+ * nowhere, Probity's deny says to run `npm ci` in that tree.
+ *
  * Finally, it keeps a broken config fixable (issue #81). Probity loads
  * probity.config.* on every call and blocks everything when that load
  * throws, including the edit that would fix it. So for an Edit or Write
@@ -52,7 +59,7 @@
  * one is given. Zero dependencies; Probity is resolved from the working
  * directory's node_modules, exactly as the direct bin would be.
  */
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   closeSync,
   existsSync,
@@ -65,9 +72,9 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { createRequire } from 'node:module'
+import Module, { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** The sub-agent transcript for a payload, or null to keep the original. */
@@ -190,12 +197,33 @@ function commandDirectory(command) {
   return target ? unquote(target) : null
 }
 
+/** The roots of every worktree of the repository at `dir`, or [] when git can't say. */
+function worktreeRoots(dir) {
+  try {
+    const listing = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: dir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 5000,
+    })
+    return listing
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => canonical(line.slice('worktree '.length)))
+  } catch {
+    return []
+  }
+}
+
 /**
  * The git worktree to run Probity in for this payload, or null to stay
  * in `projectDir`: the nearest directory holding `.git` above the edited
  * file (for a command, the session's cwd), when it lies below
- * `projectDir` and has its own Probity config. A command's directory is
- * its `git -C <dir>` or leading `cd <dir> &&`, else the session's cwd.
+ * `projectDir` and has its own Probity config. Outside `projectDir`, the
+ * worktree of the project's repository that holds that path (a sibling
+ * made with `git worktree add ../<name>`), when it has its own config. A
+ * command's directory is its `git -C <dir>` or leading `cd <dir> &&`,
+ * else the session's cwd.
  */
 export function probityDirectory(payload, projectDir) {
   const input = payload?.tool_input ?? {}
@@ -208,12 +236,43 @@ export function probityDirectory(payload, projectDir) {
   else if (cwd) start = cwd
   else return null
   const project = canonical(projectDir)
-  for (let dir = canonical(start); isBelow(project, dir); dir = dirname(dir)) {
-    if (existsSync(join(dir, '.git'))) {
-      return CONFIG_NAMES.some((name) => existsSync(join(dir, name))) ? dir : null
-    }
+  const hasConfig = (dir) => CONFIG_NAMES.some((name) => existsSync(join(dir, name)))
+  const target = canonical(start)
+  for (let dir = target; isBelow(project, dir); dir = dirname(dir)) {
+    if (existsSync(join(dir, '.git'))) return hasConfig(dir) ? dir : null
   }
-  return null
+  if (target === project || isBelow(project, target)) return null
+  const sibling = worktreeRoots(project)
+    .filter((root) => root !== project && (root === target || isBelow(root, target)))
+    .sort((a, b) => b.length - a.length)[0]
+  return sibling && hasConfig(sibling) ? sibling : null
+}
+
+/**
+ * `env` with `projectDir`'s node_modules appended to NODE_PATH, so a
+ * config in a worktree without its own packages loads the project's.
+ * Node consults NODE_PATH only after the node_modules directories above
+ * the importing file, so a worktree's own install still wins.
+ */
+export function withPackageFallback(env, projectDir) {
+  const fallback = join(projectDir, 'node_modules')
+  const paths = (env.NODE_PATH ?? '').split(delimiter).filter(Boolean)
+  return paths.includes(fallback) ? env : { ...env, NODE_PATH: [...paths, fallback].join(delimiter) }
+}
+
+const MISSING_PACKAGE = /Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND/
+
+const INSTALL_COMMAND =
+  /^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)?(?:npm\s+(?:ci|install|i)|pnpm\s+(?:install|i)|yarn(?:\s+install)?|bun\s+install)(?:\s+-[\w-]+(?:=\S+)?)*\s*$/
+
+/**
+ * Whether `command` only installs packages, with nothing chained to it.
+ * When a config's packages resolve nowhere, every call is denied but
+ * this one, so the session can install them. Mirrors the Kiro shim's
+ * `install` check (kiro/probity-kiro-translate.py).
+ */
+export function isInstallCommand(command) {
+  return typeof command === 'string' && INSTALL_COMMAND.test(command)
 }
 
 /** `args` with a relative `--debug <path>` anchored to `projectDir`, so the log stays put when Probity runs elsewhere. */
@@ -329,6 +388,22 @@ export function withLockoutHint(response, config) {
   return JSON.stringify(parsed)
 }
 
+/** `response` (Probity's stdout) with an install hint appended to a deny caused by a package that doesn't resolve. */
+export function withInstallHint(response, dir) {
+  let parsed
+  try {
+    parsed = JSON.parse(response)
+  } catch {
+    return response
+  }
+  const output = parsed?.hookSpecificOutput
+  if (output?.permissionDecision !== 'deny' || !MISSING_PACKAGE.test(output.permissionDecisionReason)) return response
+  output.permissionDecisionReason +=
+    `\nProbity's config in ${dir} imports a package that isn't installed, so every tool call is ` +
+    `blocked. Run npm ci in ${dir}.`
+  return JSON.stringify(parsed)
+}
+
 function probityRoot() {
   // @nizos/probity doesn't export its package.json, so resolve the main
   // entry and walk up to the package root.
@@ -361,6 +436,13 @@ async function main() {
   }
   const projectDir = process.cwd()
   const workDir = probityDirectory(payload, projectDir) ?? projectDir
+
+  // In-process config checks load the worktree's config too.
+  const env = withPackageFallback(process.env, projectDir)
+  if (env !== process.env) {
+    process.env.NODE_PATH = env.NODE_PATH
+    Module._initPaths()
+  }
 
   const args = debugArgs(process.argv.slice(2), projectDir)
   if (!args.includes('--agent')) args.unshift('--agent', 'claude-code')
@@ -399,6 +481,7 @@ async function main() {
 
   const child = spawn(process.execPath, [probity.bin, ...args], {
     cwd: workDir,
+    env,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   const out = []
@@ -413,7 +496,9 @@ async function main() {
     // Probity writes `Probity: <reason>` to stderr only when it fails
     // closed outside the rules; confirm it was the config before saying so.
     try {
-      if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
+      const hinted = withInstallHint(stdout, workDir)
+      if (hinted !== stdout) stdout = isInstallCommand(payload?.tool_input?.command) ? '' : hinted
+      else if (config && stderr.startsWith('Probity: ') && (await configLoadError(probity.root, config))) {
         stdout = withLockoutHint(stdout, config)
       }
     } catch {
