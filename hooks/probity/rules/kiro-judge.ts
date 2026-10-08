@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import type { Agent, Verdict } from '@nizos/probity'
@@ -117,7 +117,7 @@ const OUTPUT_EXCERPT = 2_000
  * reported the way Probity reports one ("could not parse verdict from
  * validator output: …"), so the presets ask once more.
  */
-export function kiroJudge(options: KiroJudgeOptions = {}): Agent {
+export function kiroJudge(options: KiroJudgeOptions = {}): NamedJudge {
   const model = options.model ?? 'claude-opus-5.5'
   const effort = options.effort ?? 'high'
   const agent = options.agent ?? KIRO_JUDGE_AGENT
@@ -137,6 +137,7 @@ export function kiroJudge(options: KiroJudgeOptions = {}): Agent {
     '--trust-tools=',
   ]
   return {
+    name: 'kiro',
     reason: async (prompt) => {
       const started = Date.now()
       const meta = () => ({ judge: 'kiro', model, effort, durationMs: Date.now() - started })
@@ -330,9 +331,10 @@ function balancedEnd(text: string, start: number): number | undefined {
  * use. If that fails (a Probity release that moved it), the verdict
  * says "Claude judge unavailable", so a chain moves on.
  */
-export function claudeJudge(): Agent {
+export function claudeJudge(): NamedJudge {
   let loading: Promise<Agent> | undefined
   return {
+    name: 'claude',
     reason: async (prompt) => {
       let agent: Agent
       try {
@@ -359,16 +361,56 @@ async function loadClaudeCodeAgent(): Promise<Agent> {
   return module.claudeCode()
 }
 
+/** A judge with a name `judgeChain` can remember it by across hook runs. */
+export type NamedJudge = Agent & { name?: string }
+
 export type JudgeChainOptions = {
   /**
    * After a judge is unavailable, skip it for this long. A hook run can
    * ask for up to four verdicts (contradiction retry, malformed-answer
    * retry, extraction check), and waiting for a dead judge each time
-   * would overrun the hook timeout. Probity starts a new process per
-   * tool call, so in a hook this lasts at most one run. Default
-   * 300,000 ms.
+   * would overrun the hook timeout. Default 300,000 ms.
    */
   skipUnavailableMs?: number
+  /**
+   * Where a named judge's skip is kept, so it outlasts the hook run
+   * (issue #87): Probity starts a new process per tool call, and a
+   * hanging kiro-cli would otherwise cost every write the full
+   * `timeoutMs`. Default `<tmpdir>/probity-kiro-judge/judge-chain.json`.
+   * `false` keeps it in memory, for one hook run. Unnamed judges are
+   * always kept in memory only.
+   */
+  stateFile?: string | false
+}
+
+type UnavailableUntil = Record<string, number>
+
+function readUnavailable(file: string): UnavailableUntil {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    return parsed && typeof parsed === 'object' ? (parsed as UnavailableUntil) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Records or clears `name`; a state file that can't be written only loses the memory. */
+function writeUnavailable(file: string, name: string, until: number | undefined): void {
+  try {
+    const state = readUnavailable(file)
+    if (until === undefined) {
+      if (!(name in state)) return
+      delete state[name]
+    } else {
+      state[name] = until
+    }
+    mkdirSync(dirname(file), { recursive: true })
+    const scratch = `${file}.${process.pid}`
+    writeFileSync(scratch, JSON.stringify(state))
+    renameSync(scratch, file)
+  } catch {
+    // Fall back to this run's memory.
+  }
 }
 
 /**
@@ -385,22 +427,36 @@ export type JudgeChainOptions = {
  * When every judge is unavailable, the verdict is the first judge's,
  * with each fallback's reason appended.
  */
-export function judgeChain(judges: readonly Agent[], options: JudgeChainOptions = {}): Agent {
+export function judgeChain(judges: readonly NamedJudge[], options: JudgeChainOptions = {}): Agent {
   if (judges.length === 0) throw new Error('judgeChain needs at least one judge')
   const skipMs = options.skipUnavailableMs ?? 300_000
+  const stateFile = options.stateFile === false ? undefined : (options.stateFile ?? join(tmpdir(), 'probity-kiro-judge', 'judge-chain.json'))
   const unavailableUntil = new Map<number, number>()
+  const persisted = (judge: NamedJudge) => (stateFile && judge.name ? judge.name : undefined)
   return {
     reason: async (prompt) => {
       const failures: Verdict[] = []
+      // Why each earlier judge didn't answer (issue #86), for the trace.
+      const fallbackFrom: { judge: string; reason: string }[] = []
+      const remembered = stateFile ? readUnavailable(stateFile) : {}
       for (const [index, judge] of judges.entries()) {
         const last = index === judges.length - 1
-        if (!last && (unavailableUntil.get(index) ?? 0) > Date.now()) continue
+        const name = persisted(judge)
+        const label = judge.name ?? `judge ${index + 1}`
+        const until = Math.max(unavailableUntil.get(index) ?? 0, name ? (remembered[name] ?? 0) : 0)
+        if (!last && until > Date.now()) {
+          fallbackFrom.push({ judge: label, reason: 'skipped: unavailable earlier' })
+          continue
+        }
         const verdict = await judge.reason(prompt)
         if (verdict.kind === 'pass' || !isJudgeUnavailable(verdict.reason)) {
           unavailableUntil.delete(index)
-          return verdict
+          if (name) writeUnavailable(stateFile!, name, undefined)
+          return fallbackFrom.length ? { ...verdict, meta: { ...verdict.meta, fallbackFrom } } : verdict
         }
+        fallbackFrom.push({ judge: label, reason: verdict.reason })
         unavailableUntil.set(index, Date.now() + skipMs)
+        if (name) writeUnavailable(stateFile!, name, Date.now() + skipMs)
         failures.push(verdict)
       }
       const [first, ...rest] = failures

@@ -10,7 +10,7 @@ import test from 'node:test'
 import type { Agent, Rule, RuleContext } from '@nizos/probity'
 
 import { isJudgeUnavailable, withJudgeFailureDiagnostics } from './gates.ts'
-import { KIRO_JUDGE_AGENT, judgeChain, kiroJudge, type KiroRun, type KiroRunResult } from './kiro-judge.ts'
+import { KIRO_JUDGE_AGENT, claudeJudge, judgeChain, kiroJudge, type KiroRun, type KiroRunResult } from './kiro-judge.ts'
 
 const ok = (stdout: string, extra: Partial<KiroRunResult> = {}): KiroRunResult => ({
   exitCode: 0,
@@ -172,6 +172,78 @@ test('judgeChain skips a judge that was just unavailable, then tries it again la
   await new Promise((resolve) => setTimeout(resolve, 60))
   await chain.reason('p')
   assert.equal(down.calls(), 2)
+})
+
+// Issue #87: Probity starts a process per tool call, so the in-memory skip
+// lasted one hook run. A named judge's unavailability is kept in a state
+// file, so a hanging kiro-cli is skipped by later hook runs too.
+function named(name: string, ...verdicts: { kind: 'pass' | 'violation'; reason: string }[]) {
+  const judge = scripted(...verdicts)
+  return { agent: { ...judge.agent, name } as Agent, calls: judge.calls }
+}
+
+test('judgeChain remembers an unavailable named judge across chains (hook runs) through its state file', async () => {
+  const stateFile = join(cwd(), 'judge-chain.json')
+  const hung = named('kiro', { kind: 'violation', reason: 'Kiro judge unavailable: no answer within 60000 ms' })
+  const claude = named('claude', { kind: 'pass', reason: '' })
+  await judgeChain([hung.agent, claude.agent], { stateFile, skipUnavailableMs: 10_000 }).reason('p')
+  assert.equal(hung.calls(), 1)
+  // A new process: a fresh chain, the same state file.
+  await judgeChain([hung.agent, claude.agent], { stateFile, skipUnavailableMs: 10_000 }).reason('p')
+  assert.equal(hung.calls(), 1, 'the next hook run skips the hung judge')
+  assert.equal(claude.calls(), 2)
+  // A different project's chain with Kiro last still asks it: the last judge is always asked.
+  const alone = named('kiro', { kind: 'pass', reason: '' })
+  await judgeChain([alone.agent], { stateFile }).reason('p')
+  assert.equal(alone.calls(), 1)
+})
+
+test('judgeChain asks a remembered judge again once its time is up, and an answer clears it', async () => {
+  const stateFile = join(cwd(), 'judge-chain.json')
+  const down = named('kiro', { kind: 'violation', reason: 'Kiro judge unavailable: kiro-cli exited with code 1' }, { kind: 'pass', reason: '' })
+  const claude = named('claude', { kind: 'pass', reason: '' })
+  await judgeChain([down.agent, claude.agent], { stateFile, skipUnavailableMs: 30 }).reason('p')
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  await judgeChain([down.agent, claude.agent], { stateFile, skipUnavailableMs: 30 }).reason('p')
+  assert.equal(down.calls(), 2, 'asked again after the skip ran out')
+  assert.deepEqual(JSON.parse(readFileSync(stateFile, 'utf8')), {}, 'its answer cleared the entry')
+})
+
+test('judgeChain keeps unnamed judges, and everything with stateFile: false, in memory only', async () => {
+  const stateFile = join(cwd(), 'judge-chain.json')
+  const unnamed = scripted({ kind: 'violation', reason: 'Kiro judge unavailable: no answer within 60000 ms' })
+  const fallback = scripted({ kind: 'pass', reason: '' })
+  await judgeChain([unnamed.agent, fallback.agent], { stateFile }).reason('p')
+  await judgeChain([unnamed.agent, fallback.agent], { stateFile }).reason('p')
+  assert.equal(unnamed.calls(), 2)
+
+  const off = named('kiro', { kind: 'violation', reason: 'Kiro judge unavailable: no answer within 60000 ms' })
+  const claude = named('claude', { kind: 'pass', reason: '' })
+  await judgeChain([off.agent, claude.agent], { stateFile: false }).reason('p')
+  await judgeChain([off.agent, claude.agent], { stateFile: false }).reason('p')
+  assert.equal(off.calls(), 2)
+})
+
+test('kiroJudge and claudeJudge carry the names judgeChain remembers them by', () => {
+  assert.equal((kiroJudge({ cwd: cwd() }) as Agent & { name?: string }).name, 'kiro')
+  assert.equal((claudeJudge() as Agent & { name?: string }).name, 'claude')
+})
+
+// Issue #86: in a nested Kiro session, one verdict fell back to Claude after
+// the Kiro judge's timeout, and nothing recorded why. A verdict that came
+// from a fallback names the judges skipped or unavailable before it.
+test('judgeChain records on a fallback verdict which judge was unavailable and why', async () => {
+  const down = named('kiro', { kind: 'violation', reason: 'Kiro judge unavailable: no answer within 60000 ms' })
+  const claude = named('claude', { kind: 'pass', reason: '', meta: { models: [] } } as never)
+  const chain = judgeChain([down.agent, claude.agent], { stateFile: false })
+  const first = await chain.reason('p')
+  assert.deepEqual(first.meta?.fallbackFrom, [{ judge: 'kiro', reason: 'Kiro judge unavailable: no answer within 60000 ms' }])
+  assert.deepEqual(first.meta?.models, [], 'the answering judge\'s own telemetry is kept')
+  const second = await chain.reason('p')
+  assert.deepEqual(second.meta?.fallbackFrom, [{ judge: 'kiro', reason: 'skipped: unavailable earlier' }])
+
+  const direct = await judgeChain([named('kiro', { kind: 'pass', reason: '' }).agent], { stateFile: false }).reason('p')
+  assert.equal(direct.meta?.fallbackFrom, undefined, 'no fallback, no field')
 })
 
 test('judgeChain reports every judge when none is available, first judge first', async () => {
