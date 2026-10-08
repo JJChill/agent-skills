@@ -436,18 +436,25 @@ export function judgeChain(judges: readonly NamedJudge[], options: JudgeChainOpt
   return {
     reason: async (prompt) => {
       const failures: Verdict[] = []
+      // Why each earlier judge didn't answer (issue #86), for the trace.
+      const fallbackFrom: { judge: string; reason: string }[] = []
       const remembered = stateFile ? readUnavailable(stateFile) : {}
       for (const [index, judge] of judges.entries()) {
         const last = index === judges.length - 1
         const name = persisted(judge)
+        const label = judge.name ?? `judge ${index + 1}`
         const until = Math.max(unavailableUntil.get(index) ?? 0, name ? (remembered[name] ?? 0) : 0)
-        if (!last && until > Date.now()) continue
+        if (!last && until > Date.now()) {
+          fallbackFrom.push({ judge: label, reason: 'skipped: unavailable earlier' })
+          continue
+        }
         const verdict = await judge.reason(prompt)
         if (verdict.kind === 'pass' || !isJudgeUnavailable(verdict.reason)) {
           unavailableUntil.delete(index)
           if (name) writeUnavailable(stateFile!, name, undefined)
-          return verdict
+          return fallbackFrom.length ? { ...verdict, meta: { ...verdict.meta, fallbackFrom } } : verdict
         }
+        fallbackFrom.push({ judge: label, reason: verdict.reason })
         unavailableUntil.set(index, Date.now() + skipMs)
         if (name) writeUnavailable(stateFile!, name, Date.now() + skipMs)
         failures.push(verdict)

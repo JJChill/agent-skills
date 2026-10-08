@@ -229,6 +229,23 @@ test('kiroJudge and claudeJudge carry the names judgeChain remembers them by', (
   assert.equal((claudeJudge() as Agent & { name?: string }).name, 'claude')
 })
 
+// Issue #86: in a nested Kiro session, one verdict fell back to Claude after
+// the Kiro judge's timeout, and nothing recorded why. A verdict that came
+// from a fallback names the judges skipped or unavailable before it.
+test('judgeChain records on a fallback verdict which judge was unavailable and why', async () => {
+  const down = named('kiro', { kind: 'violation', reason: 'Kiro judge unavailable: no answer within 60000 ms' })
+  const claude = named('claude', { kind: 'pass', reason: '', meta: { models: [] } } as never)
+  const chain = judgeChain([down.agent, claude.agent], { stateFile: false })
+  const first = await chain.reason('p')
+  assert.deepEqual(first.meta?.fallbackFrom, [{ judge: 'kiro', reason: 'Kiro judge unavailable: no answer within 60000 ms' }])
+  assert.deepEqual(first.meta?.models, [], 'the answering judge\'s own telemetry is kept')
+  const second = await chain.reason('p')
+  assert.deepEqual(second.meta?.fallbackFrom, [{ judge: 'kiro', reason: 'skipped: unavailable earlier' }])
+
+  const direct = await judgeChain([named('kiro', { kind: 'pass', reason: '' }).agent], { stateFile: false }).reason('p')
+  assert.equal(direct.meta?.fallbackFrom, undefined, 'no fallback, no field')
+})
+
 test('judgeChain reports every judge when none is available, first judge first', async () => {
   const kiro = scripted({ kind: 'violation', reason: 'Kiro judge unavailable: kiro-cli was not found on PATH' })
   const claude = scripted({ kind: 'violation', reason: 'no result message received: stream ended' })
