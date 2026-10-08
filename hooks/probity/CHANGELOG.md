@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.25
+
+Android device tests now count as test runs, including a Gradle call with
+an environment prefix (#95).
+
+- **What was missing.** mysudo-core #183 runs instrumented tests through
+  AGP 9's `com.android.kotlin.multiplatform.library` with
+  `./gradlew :sdk:mysudo:connectedAndroidDeviceTest`, prefixed with
+  `ANDROID_SERIAL=emulator-5554` to keep off an attached phone. Neither
+  the task nor the prefixed call was recognized as a test run. So a
+  device test's compile red went unrecorded, and the TDD gate judged the
+  `TODO()` stub that followed as an extraction under green, and denied it
+  twice. This is the same failure #94 fixed for `iosSimulatorArm64Test`.
+- **Now:**
+  - Android device-test tasks count: `connectedAndroidTest`,
+    `connected<Variant>AndroidTest`, `connectedAndroidDeviceTest`,
+    `connectedCheck`, KMP's `androidConnectedCheck`, and Gradle Managed
+    Device tasks (`atd33AndroidDeviceTest`, `allDevicesAndroidDeviceTest`,
+    `pixel2api30DebugAndroidTest`). Tasks that only build the test APK
+    (`assemble…`, `package…`, `compile…`) still don't.
+  - Environment assignments before `gradlew`, and `env`, are skipped when
+    reading a Gradle call: `ANDROID_SERIAL=… ./gradlew check` counts.
+  - This applies to the commit gate and to the extraction-under-green
+    check alike.
+
 ## 0.4.24
 
 The KMP and Kotlin presets now support adapters that can only be checked

@@ -57,7 +57,7 @@ export const MOCKING_LIBRARY_IMPORTS =
  * builds outputs without running verification.
  */
 export const GRADLE_TEST_COMMAND =
-  /\bgradlew?\b[^\n;&|]*(?:\b(?:build|check|test|allTests|jvmTest)\b|\btest[A-Za-z0-9]*Test\b|\b(?:ios|macos|tvos|watchos|linux|mingw|androidNative|js|wasmJs|wasmWasi|desktop)[A-Za-z0-9]*Test\b)/
+  /\bgradlew?\b[^\n;&|]*(?:\b(?:build|check|test|allTests|jvmTest)\b|\btest[A-Za-z0-9]*Test\b|\b(?:ios|macos|tvos|watchos|linux|mingw|androidNative|js|wasmJs|wasmWasi|desktop)[A-Za-z0-9]*Test\b|\b(?:connected|allDevices)[A-Za-z0-9]*(?:Test|Check)\b|\bandroidConnectedCheck\b|\b[a-z][A-Za-z0-9]*Android(?:Device)?Test\b)/
 
 const STATIC_MOCK_PATTERNS: NamedPattern[] = [
   { label: 'Mockito.mockStatic()', pattern: /\bmockStatic\s*[(<]/g },
@@ -853,6 +853,17 @@ const REDIRECT_WITH_SEPARATE_TARGET = /^(?:\d*|&)(?:>>?|<<?)$/
 const KMP_TARGET_TEST_TASK =
   /^(?:ios|macos|tvos|watchos|linux|mingw|androidNative|js|wasmJs|wasmWasi|desktop)[A-Za-z0-9]*Test$/
 
+/** An Android Gradle Plugin device-test task (issue #95): connected
+ *  devices (`connectedAndroidTest`, `connectedDebugAndroidTest`,
+ *  `connectedAndroidDeviceTest`, `connectedCheck`, KMP's
+ *  `androidConnectedCheck`) and Gradle Managed Devices
+ *  (`atd33AndroidDeviceTest`, `allDevicesAndroidDeviceTest`,
+ *  `pixel2api30DebugAndroidTest`). Tasks that only build the test APK
+ *  (`assemble…`, `package…`, `compile…`) run nothing. */
+const ANDROID_DEVICE_TEST_TASK =
+  /^(?:connected[A-Za-z0-9]*(?:Test|Check)|androidConnectedCheck|allDevices[A-Za-z0-9]*(?:Test|Check)|[a-z][A-Za-z0-9]*Android(?:Device)?Test)$/
+const ANDROID_BUILD_ONLY_TASK = /^(?:assemble|package|compile|bundle|generate|merge|process|lint|extract|install|uninstall)/
+
 function isVerificationTask(word: string): boolean {
   const task = word.replace(/^:+/, '').split(':').pop() ?? ''
   return (
@@ -862,7 +873,8 @@ function isVerificationTask(word: string): boolean {
     task === 'allTests' ||
     task === 'jvmTest' ||
     /^test[A-Za-z0-9]*Test$/.test(task) ||
-    KMP_TARGET_TEST_TASK.test(task)
+    KMP_TARGET_TEST_TASK.test(task) ||
+    (ANDROID_DEVICE_TEST_TASK.test(task) && !ANDROID_BUILD_ONLY_TASK.test(task))
   )
 }
 
@@ -872,6 +884,10 @@ function isVerificationTask(word: string): boolean {
  *  task (not a flag, flag value, or redirect target) on the allowlist. */
 function isGradleVerificationInvocation(simpleCommand: string): boolean {
   const words = simpleCommand.trim().split(/\s+/).filter(Boolean)
+  // `ANDROID_SERIAL=emulator-5554 ./gradlew …` and `env VAR=… ./gradlew …`
+  // (issue #95): the environment prefix is not the command.
+  if (words[0] === 'env') words.shift()
+  while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift()
   if (!/^(?:\.\/|[\w./-]*\/)?gradlew?$/.test(words[0] ?? '')) return false
   if (words.some((word) => word === '--dry-run' || EXCLUDE_TASK_FLAG.test(word))) {
     return false
@@ -957,7 +973,8 @@ export function kotlinGreenRunOptions(command: RegExp = GRADLE_TEST_COMMAND): Gr
 const DEFAULT_GRADLE_GREEN_REASON =
   'Accepted Gradle verification tasks: test/test...Test, build, or check ' +
   '(including module-qualified tasks, allTests/jvmTest and Kotlin ' +
-  'Multiplatform target test tasks such as iosSimulatorArm64Test; not --dry-run ' +
+  'Multiplatform target test tasks such as iosSimulatorArm64Test, and ' +
+  'Android device tests such as connectedAndroidTest; not --dry-run ' +
   'or -x/--exclude-task). Under Kiro, a quiet run with no BUILD ' +
   'SUCCESSFUL text is accepted only when the tool result is the canonical ' +
   '{"exit_status": "exit status: 0", ...} envelope (a zero exit_status) ' +
