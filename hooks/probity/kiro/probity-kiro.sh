@@ -25,15 +25,29 @@
 # (green-gate, TDD) work, then convert a deny response into `exit 2`.
 #
 # Fail-safe posture: a genuine rule violation blocks (exit 2). Shim-internal
-# errors (bad JSON, missing probity) warn on STDERR and ALLOW (exit 0) so a
-# tooling bug never wedges the session; the commit green-gate remains the
-# correctness backstop.
+# errors (bad JSON) warn on STDERR and ALLOW (exit 0) so a tooling bug never
+# wedges the session; the commit green-gate remains the correctness backstop.
+# A missing Probity install is different: allowing would switch every rule off
+# without a trace (issue #90). In a worktree without node_modules the shim
+# uses the main worktree's install; when Probity is installed nowhere it
+# blocks every call except the package install that fixes it.
 
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PROBITY="$ROOT/node_modules/.bin/probity"
+# A worktree beside the main checkout (`git worktree add ../<name>`) carries
+# this shim but usually no node_modules: run the main worktree's Probity, and
+# let this tree's config import the main worktree's packages through
+# NODE_PATH (consulted only after this tree's own node_modules).
+if [ ! -x "$PROBITY" ] && command -v git >/dev/null 2>&1; then
+  MAIN_TREE="$(git -C "$ROOT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
+  if [ -n "$MAIN_TREE" ] && [ -x "$MAIN_TREE/node_modules/.bin/probity" ]; then
+    PROBITY="$MAIN_TREE/node_modules/.bin/probity"
+    export NODE_PATH="${NODE_PATH:+$NODE_PATH:}$MAIN_TREE/node_modules"
+  fi
+fi
 TRANSLATE="$SCRIPT_DIR/probity-kiro-translate.py"
 TRANSDUCER="$SCRIPT_DIR/kiro-transcript-to-claude.py"
 
@@ -41,11 +55,6 @@ EVENT="$(cat)"
 
 # Probity discovers probity.config.ts and node_modules from cwd.
 cd "$ROOT" 2>/dev/null || true
-
-if [ ! -x "$PROBITY" ]; then
-  echo "probity-kiro: probity not installed at $PROBITY (run npm install)" >&2
-  exit 0
-fi
 
 # --- Transcript: transduce Kiro's session JSONL to the Anthropic shape ----
 TRANSCRIPT_TMP=""
@@ -73,6 +82,14 @@ trap cleanup EXIT
 PAYLOAD="$(printf '%s' "$EVENT" | python3 "$TRANSLATE" event)"
 if [ -z "$PAYLOAD" ]; then
   exit 0
+fi
+
+if [ ! -x "$PROBITY" ]; then
+  if printf '%s' "$PAYLOAD" | python3 "$TRANSLATE" install; then
+    exit 0
+  fi
+  echo "Probity: not installed in $ROOT, so no rule can judge this call. Run npm ci in $ROOT." >&2
+  exit 2
 fi
 
 # --- Invoke Probity and translate its response to Kiro's exit codes -------

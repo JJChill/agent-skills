@@ -15,13 +15,25 @@ piped payload on stdin, silently producing empty output = allow):
   reason  Read a Probity claude-code response JSON on stdin. If it is a
           deny, write the permissionDecisionReason on stdout; otherwise
           write nothing. The shim turns a non-empty reason into `exit 2`.
+
+  install Read a claude-code payload JSON on stdin; exit 0 when it is a
+          shell command that only installs packages (`npm ci`, `npm
+          install`, pnpm/yarn/bun install), 1 otherwise. When Probity is
+          installed nowhere the shim blocks every call but this one, so
+          the session can recover (issue #90).
 """
 import json
 import os
+import re
 import sys
 
 WRITE_TOOLS = {"fs_write", "write", "fsWrite"}
 SHELL_TOOLS = {"shell", "execute_bash", "execute_cmd", "executeBash", "executeCmd"}
+INSTALL_COMMAND = re.compile(
+    r"^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)?"
+    r"(?:npm\s+(?:ci|install|i)|pnpm\s+(?:install|i)|yarn(?:\s+install)?|bun\s+install)"
+    r"(?:\s+-[\w-]+(?:=\S+)?)*\s*$"
+)
 
 
 def _insert_result(path, cwd, content, insert_line):
@@ -118,13 +130,24 @@ def cmd_reason():
     return 0
 
 
+def cmd_install():
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return 1
+    command = payload.get("tool_input", {}).get("command") if isinstance(payload, dict) else None
+    return 0 if isinstance(command, str) and INSTALL_COMMAND.match(command) else 1
+
+
 def main(argv):
     mode = argv[1] if len(argv) > 1 else ""
     if mode == "event":
         return cmd_event()
     if mode == "reason":
         return cmd_reason()
-    sys.stderr.write("usage: probity-kiro-translate.py {event|reason}\n")
+    if mode == "install":
+        return cmd_install()
+    sys.stderr.write("usage: probity-kiro-translate.py {event|reason|install}\n")
     return 64
 
 

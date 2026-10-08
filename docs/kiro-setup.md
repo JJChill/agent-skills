@@ -48,10 +48,13 @@ The two agents disagree on the hook contract in three ways the shim reconciles:
    reader expects (mapping `shell` tool calls to `Bash` so the green-gate can
    see `xcodebuild … test` output), and the shim passes it as `transcript_path`.
 
-**Fail-safe posture:** a genuine rule violation blocks (exit 2). Shim-internal
-errors (unparseable event, Probity not installed) warn on stderr and *allow*
-(exit 0), so a tooling bug never wedges a session — the commit green-gate
-remains the correctness backstop.
+**Fail-safe posture:** a genuine rule violation blocks (exit 2). An
+unparseable event warns on stderr and *allows* (exit 0), so a tooling bug never
+wedges a session — the commit green-gate remains the correctness backstop.
+A missing Probity install does not allow: in a worktree without
+`node_modules` the shim uses the main worktree's install, and when Probity is
+installed nowhere it blocks every call except the `npm ci` that fixes it
+(from 0.4.22).
 
 **Alternative considered — a native Kiro vendor in Probity.** Cleaner
 long-term, but it lives in a third-party package (`@nizos/probity`) and would
