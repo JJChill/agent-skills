@@ -871,3 +871,124 @@ export function enforceThinDrivingAdapter(
     return { kind: 'pass', reason: verdict.reason }
   }
 }
+
+const FORWARDING_ONLY_ADAPTER_INSTRUCTIONS = `## Role
+
+You are a forwarding-only validator for vendor adapters whose success
+path cannot run offline. The vendor SDK calls this code back only during
+a live session (a real call, an incoming push, a valid access token), so
+no host or device test can go red on it, and the TDD gate does not judge
+this file. That is acceptable only while the code holds nothing worth
+testing: every decision lives behind the port the adapter forwards to,
+in plain code that host tests drive with fakes. Judge whether the
+pending write keeps this adapter that thin.
+
+## Inputs
+
+1. "Current file content" — what's on disk right now (may be a marker
+   like \`(file does not exist)\`).
+2. "Pending action" — the file path and the file content after the
+   write.
+
+## What you judge
+
+Judge only what this write adds (before → after), never pre-existing
+code. A transient state (an unresolved import, a \`TODO()\` body) is not
+itself a violation. A block recorded earlier in the session is a past
+verdict, not a rule; when the user says to let a change through, treat
+that as authoritative and pass. Because nothing tests this code, a
+branch you cannot classify as a plain one-to-one mapping counts as a
+decision.
+
+## Always pass
+
+  - Forwarding a vendor callback or event to one port method, one to
+    one: \`onConnected(room)\` → \`events.joined(room.sid, …)\`,
+    \`onParticipantDisconnected(room, p)\` → \`events.participantLeft(p.identity)\`.
+  - Reading what the vendor objects already hold and converting it to
+    the port's types: an id to a String, a vendor enum case to the
+    port's case in a plain one-to-one mapping, a vendor error code
+    passed on as a value, a list of vendor objects mapped field by
+    field, the size of a collection the vendor object keeps (the room's
+    current participants). Reading vendor state is not computation.
+  - Forwarding a port call to the vendor SDK: \`leave()\` →
+    \`room.disconnect()\`, \`accept(id)\` → the held invite's
+    \`accept(context, listener)\`.
+  - Holding and releasing the vendor objects the forwarding needs:
+    storing the Room or the CallInvite when it arrives (keyed by its
+    vendor id when there can be several), clearing it when it ends,
+    registering and unregistering listeners, null-safe calls
+    (\`room?.disconnect()\`).
+  - Declarations, imports, constructors and dependency wiring; the
+    boundary event or log line an observability rule asks for at a
+    vendor call; comments; deleting code.
+
+## Block a write that adds any of these
+
+(a) **A decision**: a branch that chooses what happens from state, a
+    value, a count or a vendor error (an \`if\`/\`when\`/\`switch\` beyond a
+    one-to-one value mapping, an early return that skips forwarding on
+    a condition).
+(b) **State beyond the held vendor objects**: counters, flags,
+    collections of anything else, caches, timers, a state machine.
+(c) **Policy**: retries, backoff, timeouts, fallbacks, ordering or
+    de-duplicating events, combining or sequencing several port or
+    vendor calls in one callback.
+(d) **Computation**: a value the adapter works out itself rather than
+    reads from a vendor object: a count or total it keeps across
+    callbacks, a duration, filtering or sorting, display formatting.
+
+## When you block
+
+Name the exact logic the write adds, and say where it goes: behind the
+port, into the plain code the port leads to, where a host test with a
+fake at the port drives it red first. The adapter then forwards to it.`
+
+/**
+ * AI-validated rule for vendor adapters whose success path can't be
+ * tested offline (issue #102): SDK callbacks that fire only during a
+ * live call or with a real push or token. The TDD gate can never see
+ * those lines go red, so a preset takes the files out of its TDD block
+ * and holds them to this rule instead: one-to-one forwarding between
+ * the vendor SDK and a tested port, plus holding the vendor objects
+ * that needs. A decision, extra state, policy or computation is
+ * blocked, with a pointer to move it behind the port. Delta-based.
+ *
+ * Applies to: write actions. Scope it to the vendor adapter files only;
+ * every matching write costs an AI call.
+ *
+ * @param options.instructions — replaces or extends the default rules
+ *   text (string, or `(defaults) => ...`).
+ */
+export function enforceForwardingOnlyAdapter(
+  options: { instructions?: string | ((defaults: string) => string) } = {},
+): Rule {
+  const rules =
+    typeof options.instructions === 'function'
+      ? options.instructions(FORWARDING_ONLY_ADAPTER_INSTRUCTIONS)
+      : (options.instructions ?? FORWARDING_ONLY_ADAPTER_INSTRUCTIONS)
+  return async function enforceForwardingOnlyAdapter(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    if (!ctx?.agent) {
+      return {
+        kind: 'violation',
+        reason:
+          'enforceForwardingOnlyAdapter: no AI agent available; configure Config.ai or use a vendor that ships one.',
+      }
+    }
+    const before: FileContent = (await ctx.readFile?.(action.path)) ?? { kind: 'unknown' }
+    const verdict = await ctx.agent.reason(
+      [
+        rules,
+        `## Current file content\n\n${formatBefore(before)}`,
+        `## Pending action\n\nFile: ${action.path}\n\n${action.content}`,
+        RESPONSE_SPEC,
+      ].join('\n\n'),
+    )
+    if (verdict.kind === 'violation') return { kind: 'violation', reason: verdict.reason }
+    return { kind: 'pass', reason: verdict.reason }
+  }
+}

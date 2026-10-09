@@ -79,6 +79,23 @@ Some adapters can't be tested in a plain test process. The iOS Keychain, for one
 rules: kmpRuleEntries(ROOT, { harnessGlobs: ['harness/**'] }),
 ```
 
+## Vendor adapters only a live session can exercise (`vendorAdapterGlobs`)
+
+Some adapter code can't go red in any offline test. A vendor SDK such as Twilio Voice or Video calls `onConnected`, `onParticipantDisconnected` or a call invite's listener only during a live call, with a valid access token or a real push. Host tests reach the decisions behind the port with fakes, and device tests can reach the failure path (Twilio rejects a bad token), but the success callbacks never fire offline. The TDD gate can never authorize them ([#102](https://github.com/JJChill/agent-skills/issues/102)).
+
+From 0.4.30 the KMP, Kotlin and Swift presets take `vendorAdapterGlobs`, off by default. The files it names leave the TDD block and are held to **`enforceForwardingOnlyAdapter`** instead, an AI judge for adapters that hold nothing worth testing:
+
+- **Passes:** one-to-one forwarding of a vendor callback to a port method, and of a port call to the SDK (`leave()` → `room.disconnect()`). Also reading what the vendor objects hold and converting it to the port's types (ids, error codes, a plain enum mapping, the size of the room's participant list), holding and releasing the vendor objects the forwarding needs (invites keyed by call SID), listeners, wiring, and boundary telemetry.
+- **Blocks:** a decision (a branch on state, a value or a vendor error code), state beyond the held vendor objects (counters, sets, timers), policy (retries, backoff, de-duplication, sequencing several calls), and computation the adapter works out itself. The deny says to move it behind the port, where a host test with a fake drives it red first.
+
+Adapter observability and the shell-write screen still cover these files. Name only the vendor-facing files, and keep tests out:
+
+```ts
+rules: kmpRuleEntries(ROOT, { vendorAdapterGlobs: ['**/src/androidMain/kotlin/**/adapter/Twilio*.kt'] }),
+```
+
+If your project *can* get credentials into a session, a device test that runs against the real service is still the stronger evidence: its failing run is an ordinary red for the TDD gate, and the file needs no `vendorAdapterGlobs`.
+
 ## Shell writes to scoped files (`shellWriteScreen`)
 
 Probity's content rules judge write actions: `Write`, `Edit` and `NotebookEdit` in Claude Code, the write tool in Kiro. A file changed by a shell command (`sed -i`, `cat > file <<EOF`, `tee`, `cp`/`mv`, `git apply`, or a `python3 - <<'EOF' … open(p, 'w')` script) reaches Probity as a command, so none of those rules see it. Scripted edits are an ordinary shell idiom, which makes this an easy bypass to take by accident ([#79](https://github.com/JJChill/agent-skills/issues/79)).
