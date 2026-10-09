@@ -295,8 +295,22 @@ function isDirectory(path: string): boolean {
  * script may name its target through a variable or an argument.
  */
 export function shellWritePaths(command: string, cwd: string): string[] {
+  return scanShellWrites(command, cwd).paths
+}
+
+/** Options of `git worktree add` that take a value (`-b <branch>`, …). */
+const WORKTREE_ADD_VALUE_FLAGS = new Set(['-b', '-B', '--reason'])
+
+/**
+ * {@link shellWritePaths}, plus the roots of the worktrees the command
+ * creates with `git worktree add` (issue #101). A write there lands in a
+ * checkout of the same repository, which doesn't exist yet when the hook
+ * runs.
+ */
+function scanShellWrites(command: string, cwd: string): { paths: string[]; worktrees: string[] } {
   const vars = new Map<string, string[]>()
   const found: string[] = []
+  const worktrees: string[] = []
   const start = cwd
 
   const expand = (text: string): string[] => {
@@ -367,6 +381,21 @@ export function shellWritePaths(command: string, cwd: string): string[] {
       for (const arg of args) if (arg.startsWith('of=')) add(arg.slice(3))
     } else if (name === 'truncate') {
       nonOptions(args).forEach(add)
+    } else if (name === 'git' && args.includes('worktree')) {
+      // `git [-C <dir>] worktree add [options] <path> [<commit-ish>]`
+      const dirFlag = args.indexOf('-C')
+      const base = dirFlag !== -1 && args[dirFlag + 1] ? resolve(cwd, args[dirFlag + 1]!) : cwd
+      const sub = args.slice(args.indexOf('worktree') + 1)
+      if (sub[0] === 'add') {
+        for (let at = 1; at < sub.length; at++) {
+          const arg = sub[at]!
+          if (WORKTREE_ADD_VALUE_FLAGS.has(arg)) at++
+          else if (!arg.startsWith('-')) {
+            for (const path of expand(arg)) worktrees.push(resolve(base, path))
+            break
+          }
+        }
+      }
     } else if (name === 'patch' || (name === 'git' && args[0] === 'apply')) {
       const files = name === 'git' ? nonOptions(args.slice(1)) : []
       const patchFile = args.findIndex((arg) => arg === '-i' || arg === '--input')
@@ -385,18 +414,26 @@ export function shellWritePaths(command: string, cwd: string): string[] {
       for (const values of vars.values()) values.forEach(add)
     }
   }
-  return [...new Set(found)]
+  return { paths: [...new Set(found)], worktrees }
+}
+
+function within(base: string, absolute: string): string | undefined {
+  const rel = relative(base, absolute).split(/[\\/]/).join(posix.sep)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : undefined
 }
 
 /**
  * The `root`-relative POSIX paths a shell command run in `cwd` (default:
- * `root`) writes inside `root`; see {@link shellWritePaths}.
+ * `root`) writes inside `root`; see {@link shellWritePaths}. A path under
+ * a worktree the command creates counts relative to that worktree's
+ * root, since it is a checkout of the same repository (issue #101).
  */
 export function shellWriteTargets(command: string, root: string, cwd: string = root): string[] {
+  const { paths, worktrees } = scanShellWrites(command, cwd)
   const inside: string[] = []
-  for (const absolute of shellWritePaths(command, cwd)) {
-    const rel = relative(root, absolute).split(/[\\/]/).join(posix.sep)
-    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) inside.push(rel)
+  for (const absolute of paths) {
+    const rel = within(root, absolute) ?? worktrees.map((tree) => within(tree, absolute)).find(Boolean)
+    if (rel) inside.push(rel)
   }
   return [...new Set(inside)]
 }
