@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import type { Globs } from '../rules/scoping.js'
 
 import {
@@ -127,6 +128,14 @@ export type SwiftPresetOptions = {
   /** For a UI-only app on a core package or framework: `.swiftinterface`
    *  files or directories holding them, read as the core's public API. */
   coreApiPaths?: string[]
+  /** Vendor adapters whose success path can't be tested offline (issue
+   *  #102): SDK callbacks that fire only during a live call or with a
+   *  real push or token, e.g. `['App/Sources/**\/Adapters/Twilio*.swift']`. They leave the
+   *  TDD block and are held to forwarding-only by
+   *  `enforceForwardingOnlyAdapter`: one-to-one forwarding between the
+   *  SDK and a tested port, and holding the vendor objects that needs.
+   *  Observability and the shell-write screen still apply. Default: none. */
+  vendorAdapterGlobs?: readonly string[]
 }
 
 function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
@@ -138,6 +147,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
     'App/Sources/**/Services/**',
     'App/Sources/**/Analytics/**',
   ]
+  const vendorAdapter = vendorAdapterBlock(options.vendorAdapterGlobs)
   const viewExclusions = (options.drivingAdapterGlobs ?? [])
     .filter((glob) => !glob.startsWith('!'))
     .map((glob) => `!${glob}`)
@@ -268,9 +278,10 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
     // SwiftUI views must be thin (issue #77). Opt-in; listed before the
     // TDD block, so a denial costs one AI call, not two.
     ...(drivingAdapter ? [drivingAdapter] : []),
+    ...(vendorAdapter ? [vendorAdapter] : []),
 
     {
-      files: tddGlobs,
+      files: [tddGlobs[0], ...tddGlobs.slice(1), ...vendorAdapterExclusions(options.vendorAdapterGlobs)],
       rules: [
         // The inverse-scenario wrapper changes only the DENY TEXT, and
         // only on the test-control layer (the acceptance composition

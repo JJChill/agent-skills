@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.4.30
+
+Vendor adapters whose success path only a live session can exercise can
+now land (#102). They are held to forwarding-only instead of the TDD
+gate. Opt-in.
+
+- **What was missing.** mysudo-core #195 puts Twilio Voice and Video
+  behind small ports (`RoomEvents`/`RoomConnection`,
+  `PhoneEvents`/`PhoneConnection`). The decisions are plain Kotlin,
+  driven by 22 host tests, and device tests cover Twilio rejecting a bad
+  token. The rest of `TwilioConnectors.kt` is forwarding:
+  `onConnected` → `events.joined(…)`, `leave()` → `room.disconnect()`,
+  invites held for `accept`/`reject`. Those callbacks fire only during a
+  live call with a valid token or a real push, so no offline test can go
+  red on them, and the TDD gate denied every line. The only ways out
+  were a forbidden workaround or leaving the success path as `TODO()`.
+- **Now:**
+  - **`vendorAdapterGlobs`** (KMP, Kotlin and Swift presets, no default)
+    takes the named files out of the TDD block. A new block, listed
+    before the TDD block, holds them to `enforceForwardingOnlyAdapter`.
+  - **`enforceForwardingOnlyAdapter`** (`rules/ports-and-adapters.ts`)
+    is an AI judge of what a write adds:
+    - **Passes:** one-to-one forwarding between the SDK and a port;
+      reading what vendor objects hold (ids, error codes, a plain enum
+      mapping, the size of the room's participant list); holding and
+      releasing the vendor objects the forwarding needs; listeners;
+      wiring; boundary telemetry.
+    - **Blocks:** a decision, state beyond the held vendor objects,
+      policy (retries, backoff, de-duplication, sequencing), or
+      computation the adapter works out itself. The deny says to move
+      it behind the port, where a host test drives it red first.
+  - Adapter observability and the shell-write screen still cover these
+    files.
+  - `presets/vendor-adapter.ts` builds the block for all three presets.
+- **Measured** on the real `TwilioConnectors.kt` from #195 (its
+  `TODO()` stubs on disk), through the KMP preset's new block, 5 runs
+  per case. 70/70 correct:
+
+  | Case | Expect | Kiro judge (mysudo-core's) | Claude judge (default) |
+  |---|---|---|---|
+  | Room listener stubs filled with forwarding, `leave()` → `disconnect()` | allow | 5/5 | 5/5 |
+  | Voice: `handleMessage`, invites held by call SID, `accept`/`reject`, call listener | allow | 5/5 | 5/5 |
+  | The Room forwarding plus boundary telemetry | allow | 5/5 | 5/5 |
+  | Reconnect retry with backoff on a dropped signalling connection | deny | 0/5 | 0/5 |
+  | Participant set, de-duplication, and leaving once the room is empty | deny | 0/5 | 0/5 |
+  | Treating Twilio's token-expired code as a clean end | deny | 0/5 | 0/5 |
+  | An expiry timer that rejects invites older than 30 s | deny | 0/5 | 0/5 |
+
+  The first prompt listed "aggregates" under computation, and the Claude
+  judge then denied passing `room.remoteParticipants.size` as the port's
+  `remaining` count. The final wording counts reading vendor state as
+  reading. The table is the final wording.
+- **Action needed:** none until you set `vendorAdapterGlobs`. Name only
+  the vendor-facing files; keep tests out. See hooks/PROBITY.md, "Vendor
+  adapters only a live session can exercise".
+- New exports: `enforceForwardingOnlyAdapter`
+  (`rules/ports-and-adapters`), and `vendorAdapterBlock` and
+  `vendorAdapterExclusions` (`presets/vendor-adapter`).
 ## 0.4.29
 
 The shell-write screen now judges a write into a worktree that the same

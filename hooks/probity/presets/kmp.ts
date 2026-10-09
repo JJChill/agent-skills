@@ -32,6 +32,7 @@ import {
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import {
   enforceSpecTestParity,
   requireSpecBackedAcceptanceTest,
@@ -111,6 +112,14 @@ export type KmpPresetOptions = {
    *  shell-write screen. The judge counts their checks' device output as
    *  the red for the adapters they exercise. Default: none. */
   harnessGlobs?: string[]
+  /** Vendor adapters whose success path can't be tested offline (issue
+   *  #102): SDK callbacks that fire only during a live call or with a
+   *  real push or token, e.g. `['**\/adapter/Twilio*.kt']`. They leave the
+   *  TDD block and are held to forwarding-only by
+   *  `enforceForwardingOnlyAdapter`: one-to-one forwarding between the
+   *  SDK and a tested port, and holding the vendor objects that needs.
+   *  Observability and the shell-write screen still apply. Default: none. */
+  vendorAdapterGlobs?: readonly string[]
   /** Deny a shell command (Bash, Kiro's shell) that writes a file any
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
@@ -199,6 +208,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
   const testRoots = options.testRoots ?? [root]
   const baselinePath = options.baselinePath ?? join(root, 'docs/specs/.parity-baseline')
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
+  const vendorAdapter = vendorAdapterBlock(options.vendorAdapterGlobs)
   const harnessExclusions = (options.harnessGlobs ?? []).map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
 
   // Core purity scope — the inside of the hexagon: domain, ports,
@@ -330,6 +340,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // enforceCharacterizationResolution below blocks commits until the
     // marker comes off through a recorded red under a mutation probe.
     ...(drivingAdapter ? [drivingAdapter] : []),
+    ...(vendorAdapter ? [vendorAdapter] : []),
 
     {
       files: [
@@ -338,6 +349,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
         '**/src/main/kotlin/**',
         '**/src/test/kotlin/**',
         ...harnessExclusions,
+        ...vendorAdapterExclusions(options.vendorAdapterGlobs),
       ],
       // Telemetry-only additions (a complete logger.event/breadcrumb
       // line) pass deterministically — instrumentation demanded by the
