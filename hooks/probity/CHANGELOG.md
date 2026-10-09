@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.29
+
+The shell-write screen now judges a write into a worktree that the same
+command creates (#101).
+
+- **What was missing.** In mysudo-core, one Bash call created a worktree
+  and copied a `.feature` file into its `specs` submodule:
+  `git worktree add -b … ../mysudo-core-sdk-198 origin/main; cd
+  ../mysudo-core-sdk-198 && git submodule update --init specs; cd specs &&
+  … && cp …/keeping-up-to-date.feature features/devices/…`. It was allowed
+  with no judgment.
+  - The issue suspected the submodule. A replay showed it wasn't the
+    cause: writes in a submodule, from either checkout and from a session
+    opened inside the submodule, were already denied.
+  - The cause was the new worktree. When the hook ran it didn't exist yet,
+    so `probity-claude` couldn't route the write to it (#92). The main
+    checkout's screen then skipped a path outside its root.
+- **Now:** the screen reads `git [-C <dir>] worktree add [options] <path>`
+  and treats a path under `<path>` as a path in a checkout of the same
+  repository: it's judged against this config's scopes, relative to the
+  new worktree's root. The issue's command is denied, naming
+  `specs/features/devices/keeping-up-to-date.feature`.
+  `git worktree list` and `remove` create nothing and change nothing.
+- **Action needed:** none.
+
 ## 0.4.28
 
 `judgeChain` now remembers an unavailable judge across hook runs (#87),

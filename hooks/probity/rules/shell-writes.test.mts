@@ -111,6 +111,34 @@ test('follows a for loop variable and a cd into the tree', async () => {
   await assertAllowed("cd /tmp && sed -i 's/a/b/' src/a.ts")
 })
 
+// Issue #101: the write went into a worktree the same command created, so no
+// existing worktree held it and the main checkout's screen skipped a path
+// outside its root. A new worktree is a checkout of the same repository:
+// paths under it are judged against this config's scopes, relative to it.
+test('blocks a write into a worktree the same command creates (#101)', async () => {
+  const command = [
+    'git worktree add -b 198-bring-up-to-date ../repo-198 origin/main 2>&1 | tail -1;',
+    'cd ../repo-198 && git submodule update --init specs >/dev/null 2>&1;',
+    'ln -s ../repo/node_modules node_modules;',
+    'cd specs && git fetch -q origin && git checkout -q -b 13-keeping-up-to-date origin/main',
+    '&& cp /tmp/keeping-up-to-date.feature features/devices/keeping-up-to-date.feature && git status --short',
+  ].join(' ')
+  const screen = forbidShellWritesToScopedFiles({ root: ROOT, scopes: [['specs/features/**/*.feature']] })
+  const result = await screen({ kind: 'command', command })
+  assert.equal(result.kind, 'violation')
+  assert.match((result as { reason: string }).reason, /specs\/features\/devices\/keeping-up-to-date\.feature/)
+})
+
+test('reads git worktree add forms: options, -C, --detach, an absolute path', () => {
+  assert.deepEqual(shellWriteTargets("git worktree add --detach -f /base/wt HEAD && sed -i 's/a/b/' /base/wt/src/a.ts", '/repo'), ['src/a.ts'])
+  assert.deepEqual(shellWriteTargets("git -C /repo worktree add ../wt2 -b x; echo x > ../wt2/src/b.ts", '/repo'), ['src/b.ts'])
+  assert.deepEqual(shellWriteTargets("git worktree add -B y ../wt3 main && cd ../wt3 && tee src/c.ts < /tmp/c", '/repo'), ['src/c.ts'])
+  // A path outside the root and outside any new worktree is still not this config's to judge.
+  assert.deepEqual(shellWriteTargets("git worktree add ../wt4 && sed -i 's/a/b/' /elsewhere/src/a.ts", '/repo'), [])
+  // git worktree list/remove create nothing.
+  assert.deepEqual(shellWriteTargets("git worktree remove ../wt5; sed -i 's/a/b/' ../wt5/src/a.ts", '/repo'), [])
+})
+
 test('allows reads, out-of-scope writes and excluded paths', async () => {
   await assertAllowed('cat src/a.ts')
   await assertAllowed("sed -n '1,10p' src/a.ts")
