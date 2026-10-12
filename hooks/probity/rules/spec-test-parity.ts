@@ -354,8 +354,9 @@ function matches(pattern: RegExp, value: string): boolean {
  *   scenarios too (the project's standard driver set).
  * @param options.listCommitFiles — optional staged-file lister for
  *   tests. By default the gate reads Git's pending commit and runs only
- *   when it records the specs path (including a submodule pointer) or
- *   an acceptance-test path. Inspection failures preserve full enforcement.
+ *   when it records the specs path (including a submodule pointer), the
+ *   baseline, or an acceptance-test path. Inspection failures preserve
+ *   full enforcement.
  */
 export function enforceSpecTestParity(options: ScanOptions): Rule {
   const pattern = options.testFilePattern ?? DEFAULT_TEST_FILE_PATTERN
@@ -393,6 +394,9 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           const absolute = resolve(treeRoot, file)
           return (
             pathsIntersect(absolute, specsDir) ||
+            // A baseline outside specsDir changes what the gate exempts
+            // (issue #107).
+            (!!baselinePath && pathsIntersect(absolute, baselinePath)) ||
             matches(pattern, file) ||
             matches(pattern, absolute)
           )
