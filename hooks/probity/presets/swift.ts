@@ -144,6 +144,13 @@ export type SwiftPresetOptions = {
   /** Scenario tags that are not driver scopes in this project (shared
    *  tags another consumer uses). Unlisted unknown tags still block. */
   ignoreTags?: string[]
+  /** This project's spec-parity wip list for a shared spec repository
+   *  (issue #111): same format as the exclusions file, with a required
+   *  note. Default: `docs/spec-wip.txt`. Missing file → no project wip. */
+  wipPath?: string
+  /** `'ignore'` makes the specs' own `@wip` markers informational, so
+   *  `wipPath` is the only wip list. Default `'honor'`. */
+  sharedWip?: 'honor' | 'ignore'
 }
 
 function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
@@ -410,6 +417,8 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
       exclusionsPath: options.exclusionsPath ?? join(root, 'docs/spec-exclusions.txt'),
       ignoreTags: options.ignoreTags,
+      wipPath: options.wipPath ?? join(root, 'docs/spec-wip.txt'),
+      sharedWip: options.sharedWip,
       // driverScopes: [
       //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
       //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },

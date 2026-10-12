@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.34
+
+Work in progress is per project for a shared spec repository (#111).
+Opt-in: nothing changes until a project adds a wip file or sets
+`sharedWip: 'ignore'`.
+
+- **What was missing.** `@wip` lives in the spec file. In a spec
+  repository shared by several consumers, the first consumer to automate
+  a scenario drops `@wip` for everyone, and no consumer can mark a
+  scenario in progress, or blocked on a missing seam, for itself only.
+  The agent can't edit the shared spec either, so the stop-and-ask
+  protocol had nowhere to record the block.
+- **Now:**
+  - **wip file** (`wipPath`, CLI `--wip`; KMP and Swift default
+    `docs/spec-wip.txt`, JS `parityWipPath` with no default): same line
+    format as exclusions (`<spec>.feature :: <title> # <note>` or
+    `@id:<slug> # <note>`), note required. Listed scenarios are exempt
+    like `@wip` ones, skip scope checks, are left out by
+    `--write-baseline`, and are listed with their notes by the CLI.
+  - **`sharedWip: 'honor' | 'ignore'`** (`--shared-wip`): `ignore` makes
+    the specs' own `@wip`/`@planned`/`(wip)` markers informational.
+    Default `honor`, today's behaviour.
+  - **Kept apart from the other lists:** a wip line for a claimed
+    scenario (promoted: delete it), an excluded one, a baselined one, or
+    none fails. The baseline is now documented as a snapshot from
+    adoption that only shrinks; that is a convention, not enforced.
+  - A commit changing only the wip file runs the gate.
+  - The stop-and-ask protocol (`hooks/PROBITY.md`, acceptance-testing
+    skill) says where the record goes in a shared repository.
+
 ## 0.4.33
 
 Scenarios can carry a stable id, so a shared spec repository can reword

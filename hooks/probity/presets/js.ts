@@ -139,6 +139,13 @@ export type JsPresetOptions = {
    *  (issue #105): `<spec>.feature :: <title> # <reason>` per line. No
    *  default, like `parityBaselinePath`. */
   parityExclusionsPath?: string
+  /** This project's spec-parity wip list for a shared spec repository
+   *  (issue #111): same format as the exclusions file, with a required
+   *  note. No default, like `parityBaselinePath`. */
+  parityWipPath?: string
+  /** `'ignore'` makes the specs' own `@wip` markers informational, so
+   *  `parityWipPath` is the only wip list. Default `'honor'`. */
+  sharedWip?: 'honor' | 'ignore'
   /** Scenario tags that are not driver scopes in this project (shared
    *  tags another consumer uses). Unlisted unknown tags still block. */
   ignoreTags?: string[]
@@ -325,6 +332,8 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
         baselinePath: options.parityBaselinePath,
         exclusionsPath: options.parityExclusionsPath,
         ignoreTags: options.ignoreTags,
+        wipPath: options.parityWipPath,
+        sharedWip: options.sharedWip,
         driverScopes: options.driverScopes,
         defaultScopes: options.defaultScopes,
       }),
