@@ -4,7 +4,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
-import { canonical, GIT_COMMIT, gitToplevel, isWithin, nestedCommitTree } from './commit-target.js'
+import { canonical, isGitCommit, gitToplevel, isWithin, nestedCommitTree } from './commit-target.js'
 
 /**
  * Spec↔test traceability for the `acceptance-testing` workflow:
@@ -595,7 +595,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
   )
   return function enforceSpecTestParity(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    if (!isGitCommit(action.command)) return { kind: 'pass' }
     const cwd = process.cwd()
     // A commit made inside a git working tree nested in the project (a
     // linked worktree at .claude/worktrees/<name>) is checked against that

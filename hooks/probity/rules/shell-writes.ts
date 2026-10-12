@@ -32,7 +32,7 @@ const OPERATORS = [
   '&>>', '<<<', '<<-', '&&', '||', '|&', ';;', '&>', '>>', '>|', '>&', '<<', '<>', '<&',
   ';', '|', '&', '(', ')', '>', '<',
 ]
-const COMMAND_PREFIXES = new Set([
+export const COMMAND_PREFIXES = new Set([
   'sudo', 'env', 'command', 'exec', 'time', 'nohup', 'nice', 'builtin',
   'do', 'then', 'else', 'elif', 'if', 'while', 'until', '{', '!',
 ])
@@ -58,13 +58,19 @@ const SCRIPT_WRITE_APIS = [
   /\bfile_put_contents\s*\(/,
 ]
 
-type Token = { kind: 'word'; text: string; heredoc?: { body: string } } | { kind: 'op'; text: string }
+type Heredoc = { body: string; expands: boolean }
+type Token = { kind: 'word'; text: string; heredoc?: Heredoc } | { kind: 'op'; text: string }
 
-type SimpleCommand = {
+export type SimpleCommand = {
   words: string[]
   redirects: { op: string; target: string }[]
   stdin: string[]
+  /** Heredoc bodies the shell expands (unquoted delimiter): `$(…)` and
+   *  backticks in them run (issue #121). */
+  expandingStdin: string[]
   inputFiles: string[]
+  /** The pipeline stage writing to this command's stdin, if any. */
+  pipedFrom?: SimpleCommand
 }
 
 /** Splits a shell command into words and operators, reading heredoc
@@ -72,7 +78,7 @@ type SimpleCommand = {
  *  `$(…)` and backticks stay inside their word as written. */
 function tokenize(command: string): Token[] {
   const tokens: Token[] = []
-  const pending: { delimiter: string; strip: boolean; target: { body: string } }[] = []
+  const pending: { delimiter: string; strip: boolean; target: Heredoc }[] = []
   let word = ''
   let inWord = false
   let quoted = false
@@ -82,7 +88,8 @@ function tokenize(command: string): Token[] {
   const endWord = () => {
     if (!inWord) return
     if (expectDelimiter) {
-      const target = { body: '' }
+      // A quoted delimiter (<<'EOF', <<"EOF", <<\EOF) turns expansion off.
+      const target = { body: '', expands: !quoted }
       pending.push({ delimiter: word, strip: expectDelimiter === '<<-', target })
       tokens.push({ kind: 'word', text: word, heredoc: target })
       expectDelimiter = undefined
@@ -201,10 +208,13 @@ function tokenize(command: string): Token[] {
 
 function parse(tokens: Token[]): SimpleCommand[] {
   const commands: SimpleCommand[] = []
-  let current: SimpleCommand = { words: [], redirects: [], stdin: [], inputFiles: [] }
-  const flush = () => {
-    if (current.words.length || current.redirects.length || current.stdin.length) commands.push(current)
-    current = { words: [], redirects: [], stdin: [], inputFiles: [] }
+  const empty = (): SimpleCommand => ({ words: [], redirects: [], stdin: [], expandingStdin: [], inputFiles: [] })
+  let current = empty()
+  const flush = (pipe: boolean) => {
+    const done = current.words.length || current.redirects.length || current.stdin.length ? current : undefined
+    if (done) commands.push(done)
+    current = empty()
+    if (pipe && done) current.pipedFrom = done
   }
   for (let t = 0; t < tokens.length; t++) {
     const token = tokens[t]!
@@ -213,21 +223,31 @@ function parse(tokens: Token[]): SimpleCommand[] {
       continue
     }
     if (SEPARATORS.has(token.text)) {
-      flush()
+      flush(token.text === '|' || token.text === '|&')
       continue
     }
     const next = tokens[t + 1]
     if (next?.kind !== 'word') continue
     t++
-    if (token.text === '<<' || token.text === '<<-') current.stdin.push(next.heredoc?.body ?? '')
-    else if (token.text === '<<<') current.stdin.push(next.text)
-    else if (token.text === '<') current.inputFiles.push(next.text)
+    if (token.text === '<<' || token.text === '<<-') {
+      current.stdin.push(next.heredoc?.body ?? '')
+      if (next.heredoc?.expands) current.expandingStdin.push(next.heredoc.body)
+    } else if (token.text === '<<<') {
+      current.stdin.push(next.text)
+      current.expandingStdin.push(next.text)
+    } else if (token.text === '<') current.inputFiles.push(next.text)
     else if (token.text === '>&' || token.text === '<&') {
       if (!/^(?:\d+|-)$/.test(next.text)) current.redirects.push({ op: '&>', target: next.text })
     } else if (WRITE_REDIRECTS.has(token.text)) current.redirects.push({ op: token.text, target: next.text })
   }
-  flush()
+  flush(false)
   return commands
+}
+
+/** The simple commands of a shell command line, heredocs read, pipeline
+ *  stages linked (`pipedFrom`). Text only: nothing runs. */
+export function parseShell(command: string): SimpleCommand[] {
+  return parse(tokenize(command))
 }
 
 const ASSIGNMENT = /^([A-Za-z_]\w*)=(.*)$/s

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
-import { GIT_COMMIT, gitToplevel, nestedCommitTree } from './commit-target.js'
+import { isGitCommit, gitToplevel, nestedCommitTree } from './commit-target.js'
 
 /**
  * Language-neutral gate rules. These accumulated in the Kotlin preset
@@ -227,7 +227,7 @@ export function requireGreenTestRun(options: {
     ctx?: RuleContext,
   ): Promise<RuleResult> {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    if (!isGitCommit(action.command)) return { kind: 'pass' }
     // Scope the gate to commits that stage code the suite validates.
     // On any error listing files, fall through and enforce (fail safe).
     if (options.enforceForPaths) {
