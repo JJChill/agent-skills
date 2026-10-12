@@ -11,7 +11,7 @@
  *
  * Zero dependencies; each case builds an isolated temp workspace.
  */
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -182,6 +182,158 @@ const coversTag = (ext) =>
   })
   const { code } = run(d)
   check('scanned root that is a linked worktree -> still scanned (exit 0)', code === 0)
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 13–23. Issue #105: per-project exclusions and ignored tags, for a spec
+// repository shared by several consumers.
+const SHARED = `Feature: F
+
+  Scenario: Ours
+    Given a
+    Then b
+
+  @service
+  Scenario: Backend enforces it
+    Given a
+    Then b
+`
+const oursCovered = '// Covers: sample.feature :: Scenario: Ours\nfunc testOurs() {}\n'
+const EXCLUSION = 'sample.feature :: Backend enforces it # backend enforces the block list\n'
+
+// 13. An excluded scenario passes; the report lists it with its reason.
+// Its @service tag is not checked: excluded scenarios skip scope checks.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered,
+    'parity/exclusions.txt': EXCLUSION,
+  })
+  const { code, out } = run(d, ['--exclusions', join(d, 'parity/exclusions.txt')])
+  check(
+    'exclusion: excluded scenario passes and is reported with its reason',
+    code === 0 &&
+      /1 scenario\(s\) covered/.test(out) &&
+      /1 not this project's/.test(out) &&
+      /Backend enforces it — backend enforces the block list/.test(out),
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 14. A missing exclusions file means no exclusions.
+{
+  const d = workspace({ 'specs/sample.feature': SHARED, [coversMd]: oursCovered })
+  const { code, out } = run(d, ['--exclusions', join(d, 'parity/none.txt')])
+  check('exclusion: missing file -> full enforcement (exit 1)', code === 1 && /Backend enforces it/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 15. Every exclusion needs a reason.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered,
+    'parity/exclusions.txt': 'sample.feature :: Backend enforces it\n',
+  })
+  const { code, out } = run(d, ['--exclusions', join(d, 'parity/exclusions.txt')])
+  check('exclusion: line without a reason -> usage error (exit 2)', code === 2 && /reason/i.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 16. An exclusion matching no scenario fails, like a dangling Covers tag.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered,
+    'parity/exclusions.txt': EXCLUSION + 'sample.feature :: Renamed away # gone\n',
+  })
+  const { code, out } = run(d, ['--exclusions', join(d, 'parity/exclusions.txt')])
+  check('exclusion: dangling exclusion fails (exit 1)', code === 1 && /Renamed away/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 17. An exclusion for a scenario a test now claims is stale.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered + '// Covers: sample.feature :: Scenario: Backend enforces it\n',
+    'parity/exclusions.txt': EXCLUSION,
+  })
+  const { code, out } = run(d, ['--exclusions', join(d, 'parity/exclusions.txt'), '--ignore-tags', 'service'])
+  check('exclusion: excluded but claimed -> stale exclusion (exit 1)', code === 1 && /test now claims/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 18. An excluded scenario also in the baseline is a stale baseline line.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered,
+    'parity/exclusions.txt': EXCLUSION,
+    'parity/baseline': 'sample.feature :: Backend enforces it\n',
+  })
+  const { code, out } = run(d, [
+    '--exclusions', join(d, 'parity/exclusions.txt'),
+    '--baseline', join(d, 'parity/baseline'),
+  ])
+  check('exclusion: excluded and baselined -> stale baseline line (exit 1)', code === 1 && /baseline/i.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 19. --write-baseline leaves excluded scenarios out.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    'parity/exclusions.txt': EXCLUSION,
+  })
+  const baselineFile = join(d, 'parity/baseline')
+  const { code } = run(d, [
+    '--exclusions', join(d, 'parity/exclusions.txt'),
+    '--baseline', baselineFile, '--write-baseline',
+  ])
+  const written = readFileSync(baselineFile, 'utf8')
+  check(
+    'exclusion: --write-baseline skips excluded scenarios',
+    code === 0 && /:: Ours/.test(written) && !/Backend enforces it/.test(written),
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 20. --ignore-tags drops a shared tag the project doesn't use.
+{
+  const d = workspace({
+    'specs/sample.feature': SHARED,
+    [coversMd]: oursCovered + '// Covers: sample.feature :: Scenario: Backend enforces it\n',
+  })
+  const ignored = run(d, ['--ignore-tags', 'service'])
+  const unignored = run(d)
+  check(
+    'ignore-tags: an ignored tag is not a scope; an unlisted one still fails',
+    ignored.code === 0 && unignored.code === 1 && /\[service\]/.test(unignored.out),
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 21. Markdown [tag] markers follow the same ignore rule.
+{
+  const d = workspace({
+    'specs/sample.feature.md': '# F\n\n## Scenario [service]: Thing happens\n\nGiven a\nThen b\n',
+    [coversMd]: coversTag('feature.md'),
+  })
+  const { code } = run(d, ['--ignore-tags', 'service'])
+  check('ignore-tags: markdown [tag] is ignored too (exit 0)', code === 0)
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 22. A tag both declared as a scope and ignored is a contradiction.
+{
+  const d = workspace({ 'specs/sample.feature': SHARED, [coversMd]: oursCovered })
+  const scope = run(d, ['--scope', 'service=tests/', '--ignore-tags', 'service'])
+  const marker = run(d, ['--ignore-tags', 'wip'])
+  check(
+    'ignore-tags: declared scope or wip marker in the list -> usage error (exit 2)',
+    scope.code === 2 && marker.code === 2,
+  )
   rmSync(d, { recursive: true, force: true })
 }
 

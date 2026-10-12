@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.32
+
+Spec parity supports a spec repository shared by several consumers
+(#105). Opt-in: nothing changes until a project adds an exclusions file
+or `ignoreTags`.
+
+- **What was missing.** mysudo-core-sdk reads its scenarios from a
+  shared Gherkin repository (a `specs` submodule), and more consumers
+  are coming. Parity required every scenario without `@wip`/`@planned`.
+  "A blocked number cannot reach the owner" (mysudo-core #241) is
+  enforced by the backend, so no client should be forced to automate it,
+  but it could only stay `@planned`, which is inaccurate. The baseline
+  was the wrong place for it (it is debt meant to empty), and a shared
+  tag such as `@service` failed every consumer that didn't declare it
+  as a driver scope.
+- **Now:**
+  - **Exclusions file** (`exclusionsPath` on `enforceSpecTestParity`,
+    `--exclusions` on the CLI): one `<spec>.feature :: <title> #
+    <reason>` per line, reason required. Excluded scenarios skip the
+    orphan and scope checks; the CLI lists them with their reasons.
+    A malformed line, an exclusion matching no scenario, one for a
+    scenario a test now claims, and one for a baselined scenario all
+    fail. `--write-baseline` leaves excluded scenarios out.
+  - **`ignoreTags`** (`--ignore-tags`): shared tags that are not driver
+    scopes here. Unlisted unknown tags still fail. A tag that is both a
+    declared scope and ignored, or `wip`/`planned`, fails as a
+    contradiction.
+  - **Presets:** KMP and Swift take `exclusionsPath` (default
+    `docs/spec-exclusions.txt`) and `ignoreTags`; JS takes
+    `parityExclusionsPath` (no default) and `ignoreTags`.
+  - A commit that changes only the exclusions file runs the gate.
+- **Differs from the #105 plan:** the plan said a stale exclusion (now
+  claimed, or still baselined) would be reported. The commit gate has
+  no warning channel (a passing rule's reason reaches only the trace),
+  so both fail instead, in the gate and the CLI alike.
+
 ## 0.4.31
 
 The spec-parity commit gate now runs when a commit changes only a

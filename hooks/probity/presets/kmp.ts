@@ -99,8 +99,18 @@ export type KmpPresetOptions = {
   driverScopes?: DriverScope[]
   /** Scope names every scenario must satisfy even untagged. */
   defaultScopes?: string[]
-  /** Incremental-adoption baseline path for the commit-time parity gate. */
+  /** Incremental-adoption baseline path for the commit-time parity gate.
+   *  The default lives inside `docs/specs`; when the specs are a shared
+   *  submodule, point it outside the shared tree. */
   baselinePath?: string
+  /** Per-project spec-parity exclusions for a shared spec repository
+   *  (issue #105): `<spec>.feature :: <title> # <reason>` per line.
+   *  Default: `docs/spec-exclusions.txt`, outside the specs tree.
+   *  Missing file → no exclusions. */
+  exclusionsPath?: string
+  /** Scenario tags that are not driver scopes in this project (shared
+   *  tags another consumer uses). Unlisted unknown tags still block. */
+  ignoreTags?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
@@ -207,6 +217,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
   ]
   const testRoots = options.testRoots ?? [root]
   const baselinePath = options.baselinePath ?? join(root, 'docs/specs/.parity-baseline')
+  const exclusionsPath = options.exclusionsPath ?? join(root, 'docs/spec-exclusions.txt')
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
   const vendorAdapter = vendorAdapterBlock(options.vendorAdapterGlobs)
   const harnessExclusions = (options.harnessGlobs ?? []).map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
@@ -469,6 +480,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       specsDir,
       testRoots,
       baselinePath,
+      exclusionsPath,
+      ignoreTags: options.ignoreTags,
       testFilePattern: options.testFilePattern,
       driverScopes: options.driverScopes,
       defaultScopes: options.defaultScopes,

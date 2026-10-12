@@ -135,6 +135,13 @@ export type JsPresetOptions = {
   defaultScopes?: string[]
   /** Incremental-adoption baseline path for the commit-time parity gate. */
   parityBaselinePath?: string
+  /** Per-project spec-parity exclusions for a shared spec repository
+   *  (issue #105): `<spec>.feature :: <title> # <reason>` per line. No
+   *  default, like `parityBaselinePath`. */
+  parityExclusionsPath?: string
+  /** Scenario tags that are not driver scopes in this project (shared
+   *  tags another consumer uses). Unlisted unknown tags still block. */
+  ignoreTags?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
@@ -312,6 +319,8 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
         testRoots: options.testRoots ?? [process.cwd()],
         testFilePattern: options.testFilePattern,
         baselinePath: options.parityBaselinePath,
+        exclusionsPath: options.parityExclusionsPath,
+        ignoreTags: options.ignoreTags,
         driverScopes: options.driverScopes,
         defaultScopes: options.defaultScopes,
       }),
