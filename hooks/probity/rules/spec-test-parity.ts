@@ -57,6 +57,24 @@ const GHERKIN_SCENARIO = /^Scenario(?:\s+Outline)?:\s*(.+?)\s*$/
 const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^\n]+)/g
 const COVERS_ID = /Covers:\s*@id:([\w.-]+)/g
 const ID_REF = /^@id:([\w.-]+)$/
+/**
+ * Expected-to-fail markers (issue #115): a test carrying one passes only
+ * while its scenario still fails, so its claim is in progress, not
+ * coverage. Kotlin has no built-in, so projects own an `inProgress { }`
+ * helper (written `= inProgress {` or at the start of a line, so a DSL
+ * call such as `.inProgress()` never counts); Jest `test.failing`,
+ * Vitest `test.fails`, Swift Testing `withKnownIssue`, XCTest
+ * `XCTExpectFailure`.
+ */
+export const DEFAULT_IN_PROGRESS_PATTERN =
+  /(?:=|^)\s*inProgress\s*\{|(?<![\w$.])(?:it|test)\.(?:failing|fails)\b|\bwithKnownIssue\b|\bXCTExpectFailure\b/m
+// A test declaration in any supported framework, for finding the test a
+// Covers tag belongs to: Kotlin/Java/Swift Testing `@Test`, XCTest
+// `func test…(`, and `it(`/`test(` with their modifiers.
+const OWNER_DECLARATION =
+  /@Test\b|\bfunc\s+test\w*\s*\(|(?<![\w$.])(?:it|test)(?:\.(?:only|skip|todo|failing|fails|concurrent)\b)?(?:\.each\s*\([^)]*\))?\s*\(/g
+// Lines that may sit between a Covers tag and the test it annotates.
+const COMMENT_OR_ANNOTATION_LINE = /^\s*(?:$|\/\/|\/\*|\*|@\w)/
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -102,7 +120,15 @@ type Scenario = {
  * A `Covers:` tag. By title: `key` is the scenario key. By id: `id` is
  * set and `key` is the raw `@id:<slug>` until resolved against the specs.
  */
-type CoversRef = { key: string; testFile: string; specFile: string; title: string; id?: string }
+type CoversRef = {
+  key: string
+  testFile: string
+  specFile: string
+  title: string
+  id?: string
+  /** The claiming test carries an expected-to-fail marker (issue #115). */
+  inProgress: boolean
+}
 
 const isIdTag = (tag: string): boolean => tag.startsWith('id:')
 
@@ -207,7 +233,32 @@ export function extractScenarios(specFile: string, content: string): Scenario[] 
   return scenarios
 }
 
-export function extractCoversRefs(testFile: string, content: string): CoversRef[] {
+/**
+ * Whether the test a Covers tag at `at` belongs to carries an
+ * expected-to-fail marker. The tag belongs to the next test declaration
+ * when only comments and annotations come between (tag above the test),
+ * otherwise to the declaration it sits inside (tag in the body). The
+ * test runs to the next declaration or the end of the file.
+ */
+function claimIsInProgress(content: string, at: number, marker: RegExp): boolean {
+  const starts = [...content.matchAll(OWNER_DECLARATION)].map((match) => match.index ?? 0)
+  const lineEnd = content.indexOf('\n', at)
+  const afterTag = lineEnd === -1 ? content.length : lineEnd + 1
+  const next = starts.find((start) => start >= afterTag)
+  const above =
+    next !== undefined &&
+    content.slice(afterTag, next).split('\n').slice(0, -1).every((line) => COMMENT_OR_ANNOTATION_LINE.test(line))
+  const owner = above ? next : [...starts].reverse().find((start) => start < at)
+  const from = Math.min(at, owner ?? at)
+  const end = starts.find((start) => start > (owner ?? at)) ?? content.length
+  return new RegExp(marker.source, marker.flags.replace('g', '')).test(content.slice(from, end))
+}
+
+export function extractCoversRefs(
+  testFile: string,
+  content: string,
+  inProgressPattern: RegExp = DEFAULT_IN_PROGRESS_PATTERN,
+): CoversRef[] {
   const refs: CoversRef[] = []
   for (const match of content.matchAll(COVERS_TAG)) {
     const specFile = match[1] ?? ''
@@ -217,11 +268,19 @@ export function extractCoversRefs(testFile: string, content: string): CoversRef[
       testFile,
       specFile,
       title: title.replace(/\s*(?:\*\/|["')\]]+)?\s*$/, '').trim(),
+      inProgress: claimIsInProgress(content, match.index ?? 0, inProgressPattern),
     })
   }
   for (const match of content.matchAll(COVERS_ID)) {
     const id = (match[1] ?? '').toLowerCase()
-    refs.push({ key: `@id:${id}`, testFile, specFile: '', title: '', id })
+    refs.push({
+      key: `@id:${id}`,
+      testFile,
+      specFile: '',
+      title: '',
+      id,
+      inProgress: claimIsInProgress(content, match.index ?? 0, inProgressPattern),
+    })
   }
   return refs
 }
@@ -347,6 +406,14 @@ type ScanOptions = {
    */
   sharedWip?: 'honor' | 'ignore'
   /**
+   * Expected-to-fail marker (issue #115; default
+   * {@link DEFAULT_IN_PROGRESS_PATTERN}). A Covers tag on a test carrying
+   * it is an in-progress claim: not coverage, so the scenario must be
+   * wip. A wip scenario a test without the marker claims is promoted,
+   * and its wip marker or line must go.
+   */
+  inProgressPattern?: RegExp
+  /**
    * Files the pending commit will record, relative to the root of the
    * working tree being committed (`cwd`: the project, or a worktree nested
    * in it). Defaults to Git's staged set plus tracked modifications for
@@ -429,6 +496,7 @@ export function scanSpecs(specsDir: string): Scenario[] {
 export function scanCoversRefs(
   testRoots: string[],
   testFilePattern: RegExp,
+  inProgressPattern?: RegExp,
 ): CoversRef[] {
   return testRoots
     .flatMap((root) => walk(root))
@@ -438,7 +506,7 @@ export function scanCoversRefs(
         !file.endsWith('.feature.md') &&
         !file.endsWith('.feature'),
     )
-    .flatMap((file) => extractCoversRefs(file, readFileSync(file, 'utf8')))
+    .flatMap((file) => extractCoversRefs(file, readFileSync(file, 'utf8'), inProgressPattern))
 }
 
 function formatList(lines: string[], max = 10): string {
@@ -479,10 +547,11 @@ function matches(pattern: RegExp, value: string): boolean {
  * removed). Deterministic filesystem scan — no AI call; milliseconds
  * at typical spec-suite scale.
  *
- * The test claiming a scenario may still be red or quarantined —
- * parity requires the *link*, not a passing run; keeping in-progress
- * specs out of the pipeline is the pipeline's job. Alternatively
- * mark the scenario `## Scenario (wip):` to exempt it entirely.
+ * Parity requires the *link*, not a passing run. An in-progress test
+ * is committed expected-to-fail (issue #115: `inProgress { }`,
+ * `test.failing`, `withKnownIssue`), so the build stays green; its claim
+ * is not coverage, so its scenario stays `(wip)` until the marker comes
+ * off, and a finished claim on a wip scenario means the marker must go.
  *
  * Applies to: command actions matching `git commit`.
  *
@@ -635,9 +704,17 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       }
     }
     const resolveRef = (key: string) => resolveKey(key, byId)
-    const refs = scanCoversRefs(testRoots, pattern).map((ref) => ({ ...ref, key: resolveRef(ref.key) }))
+    const allRefs = scanCoversRefs(testRoots, pattern, options.inProgressPattern).map((ref) => ({
+      ...ref,
+      key: resolveRef(ref.key),
+    }))
+    // Issue #115: an in-progress (expected-to-fail) claim is not coverage.
+    // Coverage, scopes and wip promotion count finished claims only;
+    // dangling tags and exclusion/baseline contradictions count them all.
+    const refs = allRefs.filter((ref) => !ref.inProgress)
     const baseline = new Set([...readBaseline(baselinePath)].map(resolveRef))
     const claimed = new Set(refs.map((ref) => ref.key))
+    const anyClaim = new Set(allRefs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
     // Precedence: claimed > excluded > wip > baseline. A claimed or
     // baselined exclusion blocks below as stale rather than silently winning.
@@ -647,16 +724,21 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const projectWip = new Set(wipLines.map((entry) => entry.key))
     // Issue #111: with sharedWip 'ignore' the specs' own markers are
     // information only; either way, this project's wip lines count as wip.
+    const promotedSpecWip: Scenario[] = []
     for (const s of scenarios) {
-      s.wip = (options.sharedWip !== 'ignore' && s.wip) || projectWip.has(s.key)
+      const specWip = options.sharedWip !== 'ignore' && s.wip
+      if (specWip && claimed.has(s.key)) promotedSpecWip.push(s)
+      s.wip = specWip || projectWip.has(s.key)
     }
-    const orphaned = scenarios.filter(
+    const unclaimed = scenarios.filter(
       (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
     )
-    const dangling = refs.filter((ref) => !known.has(ref.key))
+    const orphaned = unclaimed.filter((s) => !anyClaim.has(s.key))
+    const onlyInProgress = unclaimed.filter((s) => anyClaim.has(s.key))
+    const dangling = allRefs.filter((ref) => !known.has(ref.key))
     const danglingExclusions = exclusions.filter((entry) => !known.has(entry.key))
     const claimedExclusions = exclusions.filter(
-      (entry) => known.has(entry.key) && claimed.has(entry.key),
+      (entry) => known.has(entry.key) && anyClaim.has(entry.key),
     )
     const baselinedExclusions = exclusions.filter(
       (entry) => known.has(entry.key) && baseline.has(entry.key),
@@ -708,6 +790,8 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     }
     if (
       orphaned.length === 0 &&
+      onlyInProgress.length === 0 &&
+      promotedSpecWip.length === 0 &&
       dangling.length === 0 &&
       unknownScopes.length === 0 &&
       missingScopes.length === 0 &&
@@ -724,6 +808,21 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           '`// Covers: <spec>.feature.md :: Scenario: <title>`, or mark ' +
           'the heading `## Scenario (wip):` while driving it):\n' +
           formatList(orphaned.map((s) => `${basename(s.specFile)} :: ${s.title}`)),
+      )
+    }
+    if (onlyInProgress.length > 0) {
+      sections.push(
+        'Scenarios claimed only by in-progress (expected-to-fail) tests — not ' +
+          'covered yet. Mark the scenario wip while driving it, or finish it and ' +
+          'remove the expected-to-fail marker:\n' +
+          formatList(onlyInProgress.map((s) => `${basename(s.specFile)} :: ${s.title}`)),
+      )
+    }
+    if (promotedSpecWip.length > 0) {
+      sections.push(
+        'Wip scenarios a finished test now claims (promoted — remove the ' +
+          '`@wip`/`(wip)` marker, or keep the test expected-to-fail):\n' +
+          formatList(promotedSpecWip.map((s) => `${basename(s.specFile)} :: ${s.title}`)),
       )
     }
     if (dangling.length > 0) {

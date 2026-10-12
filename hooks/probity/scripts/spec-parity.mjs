@@ -12,6 +12,7 @@
  *                        [--scope name=<regex>]... [--default-scopes a,b]
  *                        [--exclusions <file>] [--ignore-tags a,b]
  *                        [--wip <file>] [--shared-wip honor|ignore]
+ *                        [--in-progress <regex>]
  *
  *   --specs    specs directory containing *.feature.md (required)
  *   --tests    root(s) to scan for acceptance tests (repeatable, default .)
@@ -63,6 +64,12 @@
  *   --shared-wip  honor (default) or ignore. `ignore` makes the specs'
  *              own `@wip`/`@planned`/`(wip)` markers informational, so
  *              --wip is this project's only work-in-progress list.
+ *   --in-progress  regex for the expected-to-fail marker (issue #115;
+ *              default: `= inProgress {`, `test.failing`, `test.fails`,
+ *              `withKnownIssue`, `XCTExpectFailure`). A Covers tag on a
+ *              test carrying it is an in-progress claim: not coverage, so
+ *              its scenario must be wip, and a wip scenario a finished
+ *              test claims fails as promoted.
  *
  * Exit codes: 0 parity holds, 1 orphaned scenarios, dangling Covers
  * tags, unmet driver scopes, or dangling/stale exclusion or wip lines,
@@ -105,6 +112,17 @@ const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^
 // Or by stable id (issue #106): Covers: @id:<slug>
 const COVERS_ID = /Covers:\s*@id:([\w.-]+)/g
 const ID_REF = /^@id:([\w.-]+)$/
+// Expected-to-fail markers (issue #115), as in the probity rule: a test
+// carrying one passes only while its scenario still fails, so its claim is
+// in progress, not coverage. `= inProgress {` or a line starting with it
+// (a project-owned Kotlin helper; a DSL call `.inProgress()` never counts),
+// Jest `test.failing`, Vitest `test.fails`, Swift `withKnownIssue`,
+// XCTest `XCTExpectFailure`. Override with --in-progress <regex>.
+const DEFAULT_IN_PROGRESS =
+  /(?:=|^)\s*inProgress\s*\{|(?<![\w$.])(?:it|test)\.(?:failing|fails)\b|\bwithKnownIssue\b|\bXCTExpectFailure\b/m
+const OWNER_DECLARATION =
+  /@Test\b|\bfunc\s+test\w*\s*\(|(?<![\w$.])(?:it|test)(?:\.(?:only|skip|todo|failing|fails|concurrent)\b)?(?:\.each\s*\([^)]*\))?\s*\(/g
+const COMMENT_OR_ANNOTATION_LINE = /^\s*(?:$|\/\/|\/\*|\*|@\w)/
 const SKIP_DIRS = new Set(['node_modules', '.git', 'build', '.gradle', 'out', 'dist', '.idea'])
 
 function parseArgs(argv) {
@@ -120,6 +138,7 @@ function parseArgs(argv) {
     ignoreTags: [],
     wip: undefined,
     sharedWip: 'honor',
+    inProgress: DEFAULT_IN_PROGRESS,
   }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--specs') args.specs = argv[++i]
@@ -142,6 +161,7 @@ function parseArgs(argv) {
         .filter(Boolean)
     } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
     else if (argv[i] === '--wip') args.wip = argv[++i]
+    else if (argv[i] === '--in-progress') args.inProgress = new RegExp(argv[++i] ?? '', 'm')
     else if (argv[i] === '--shared-wip') {
       args.sharedWip = argv[++i]
       if (args.sharedWip !== 'honor' && args.sharedWip !== 'ignore') {
@@ -164,7 +184,7 @@ function parseArgs(argv) {
       'Usage: spec-parity.mjs --specs <dir> [--tests <root>]... [--pattern <regex>] ' +
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
         '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b] ' +
-        '[--wip <file>] [--shared-wip honor|ignore]',
+        '[--wip <file>] [--shared-wip honor|ignore] [--in-progress <regex>]',
     )
     process.exit(2)
   }
@@ -180,6 +200,26 @@ function parseArgs(argv) {
   }
   if (args.tests.length === 0) args.tests = ['.']
   return args
+}
+
+/**
+ * Whether the test the Covers tag at `at` belongs to carries the
+ * expected-to-fail marker: the next declaration when only comments and
+ * annotations come between, otherwise the one the tag sits inside; the
+ * test runs to the next declaration or the end of the file.
+ */
+function claimIsInProgress(content, at, marker) {
+  const starts = [...content.matchAll(OWNER_DECLARATION)].map((m) => m.index)
+  const lineEnd = content.indexOf('\n', at)
+  const afterTag = lineEnd === -1 ? content.length : lineEnd + 1
+  const next = starts.find((start) => start >= afterTag)
+  const above =
+    next !== undefined &&
+    content.slice(afterTag, next).split('\n').slice(0, -1).every((line) => COMMENT_OR_ANNOTATION_LINE.test(line))
+  const owner = above ? next : [...starts].reverse().find((start) => start < at)
+  const from = Math.min(at, owner ?? at)
+  const end = starts.find((start) => start > (owner ?? at)) ?? content.length
+  return marker.test(content.slice(from, end))
 }
 
 function normalizeTitle(title) {
@@ -396,14 +436,7 @@ const wipLines = readReasonedList(args.wip, {
   why: 'saying what is happening or what blocks it',
 }).map((entry) => ({ ...entry, key: resolve(entry.key) }))
 const projectWip = new Map(wipLines.map((entry) => [entry.key, entry]))
-// Issue #111: with --shared-wip ignore, the specs' own markers are
-// information only; either way, this project's wip lines count as wip.
-for (const s of scenarios) {
-  if (args.sharedWip === 'ignore') s.wip = false
-  if (projectWip.has(s.key)) s.wip = true
-}
-
-const refs = args.tests
+const allRefs = args.tests
   .flatMap((root) => walk(root))
   .filter(
     (file) =>
@@ -417,22 +450,38 @@ const refs = args.tests
       key: key(m[1], m[2]),
       testFile: file,
       label: `${m[1]} :: ${m[2].replace(/\s*(?:\*\/|["')\]]+)?\s*$/, '').trim()}`,
+      inProgress: claimIsInProgress(content, m.index, args.inProgress),
     }))
     const byIdRef = [...content.matchAll(COVERS_ID)].map((m) => {
       const ref = `@id:${m[1].toLowerCase()}`
-      return { key: resolve(ref), testFile: file, label: ref }
+      return { key: resolve(ref), testFile: file, label: ref, inProgress: claimIsInProgress(content, m.index, args.inProgress) }
     })
     return [...byTitle, ...byIdRef]
   })
-
+// Issue #115: an in-progress (expected-to-fail) claim is not coverage.
+// Coverage, scopes and wip promotion count finished claims only; dangling
+// tags and exclusion contradictions count them all.
+const refs = allRefs.filter((ref) => !ref.inProgress)
 const claimed = new Set(refs.map((ref) => ref.key))
+const anyClaim = new Set(allRefs.map((ref) => ref.key))
+
+// Issue #111: with --shared-wip ignore, the specs' own markers are
+// information only; either way, this project's wip lines count as wip.
+// A spec-marked wip scenario a finished test claims is promoted.
+const promotedSpecWip = []
+for (const s of scenarios) {
+  if (args.sharedWip === 'ignore') s.wip = false
+  if (s.wip && claimed.has(s.key)) promotedSpecWip.push(s)
+  if (projectWip.has(s.key)) s.wip = true
+}
+
 const known = new Set(scenarios.map((scenario) => scenario.key))
 // Precedence: claimed > excluded > wip > baseline. A claimed or
 // baselined exclusion is reported below as stale rather than silently won.
 const unclaimed = scenarios.filter(
   (s) => !s.wip && !claimed.has(s.key) && !excluded.has(s.key),
 )
-const dangling = refs.filter((ref) => !known.has(ref.key))
+const dangling = allRefs.filter((ref) => !known.has(ref.key))
 
 if (args.writeBaseline) {
   const header =
@@ -467,10 +516,11 @@ const baseline = new Set(
         })
     : [],
 )
-const orphaned = unclaimed.filter((s) => !baseline.has(s.key))
+const orphaned = unclaimed.filter((s) => !baseline.has(s.key) && !anyClaim.has(s.key))
+const onlyInProgress = unclaimed.filter((s) => !baseline.has(s.key) && anyClaim.has(s.key))
 const danglingExclusions = exclusions.filter((entry) => !known.has(entry.key))
 const claimedExclusions = exclusions.filter(
-  (entry) => known.has(entry.key) && claimed.has(entry.key),
+  (entry) => known.has(entry.key) && anyClaim.has(entry.key),
 )
 const baselinedExclusions = exclusions.filter(
   (entry) => known.has(entry.key) && baseline.has(entry.key),
@@ -504,6 +554,8 @@ for (const s of scenarios) {
 
 if (
   orphaned.length === 0 &&
+  onlyInProgress.length === 0 &&
+  promotedSpecWip.length === 0 &&
   dangling.length === 0 &&
   unknownScopes.length === 0 &&
   missingScopes.length === 0 &&
@@ -539,6 +591,17 @@ if (
 if (orphaned.length > 0) {
   console.error('Scenarios with no covering acceptance test:')
   for (const s of orphaned) console.error(`  ${s.specFile} :: ${s.title}`)
+}
+if (onlyInProgress.length > 0) {
+  console.error(
+    'Scenarios claimed only by in-progress (expected-to-fail) tests — not covered yet ' +
+      '(mark the scenario wip while driving it, or finish it and remove the marker):',
+  )
+  for (const s of onlyInProgress) console.error(`  ${s.specFile} :: ${s.title}`)
+}
+if (promotedSpecWip.length > 0) {
+  console.error('Wip scenarios a finished test now claims (promoted — remove the @wip/(wip) marker):')
+  for (const s of promotedSpecWip) console.error(`  ${s.specFile} :: ${s.title}`)
 }
 if (dangling.length > 0) {
   console.error('Covers tags pointing at no existing scenario:')

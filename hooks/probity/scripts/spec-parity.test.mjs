@@ -530,5 +530,69 @@ const wipArgs = (d) => ['--wip', join(d, 'parity/wip.txt')]
   rmSync(d, { recursive: true, force: true })
 }
 
+// 36–39. Issue #115: in-progress (expected-to-fail) claims, as in the rule.
+const IN_PROGRESS = '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun drivingNow() = inProgress {\n  then.theUpload.inProgress()\n}\n'
+const FINISHED = '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun drivingNowDone() {\n}\n'
+const SPEC_WIP = TWO.replace('  Scenario: Driving now', '  @wip\n  Scenario: Driving now')
+const parityRun = (files, args = []) => {
+  const d = workspace(files)
+  const res = run(d, [...wipArgs(d), ...args])
+  rmSync(d, { recursive: true, force: true })
+  return res
+}
+
+// 36. Claimed only in progress: fails unless the scenario is wip.
+{
+  const notWip = parityRun({ 'specs/sample.feature': TWO, 'tests/T.kt': oursCovered + IN_PROGRESS })
+  const wipLine = parityRun({ 'specs/sample.feature': TWO, 'tests/T.kt': oursCovered + IN_PROGRESS, 'parity/wip.txt': WIP_LINE })
+  const specWip = parityRun({ 'specs/sample.feature': SPEC_WIP, 'tests/T.kt': oursCovered + IN_PROGRESS })
+  check(
+    'in progress: claimed only in progress fails (exit 1) unless wip',
+    notWip.code === 1 && /in-progress/.test(notWip.out) && /Driving now/.test(notWip.out) &&
+      wipLine.code === 0 && specWip.code === 0,
+  )
+}
+
+// 37. A spec @wip scenario a finished test claims is promoted.
+{
+  const honored = parityRun({ 'specs/sample.feature': SPEC_WIP, 'tests/T.kt': oursCovered + FINISHED })
+  const ignored = parityRun(
+    { 'specs/sample.feature': SPEC_WIP, 'tests/T.kt': oursCovered + FINISHED, 'parity/wip.txt': 'sample.feature :: Shared wip # not ours yet\n' },
+    ['--shared-wip', 'ignore'],
+  )
+  check(
+    'in progress: spec @wip claimed by a finished test fails (exit 1); --shared-wip ignore passes',
+    honored.code === 1 && /promoted/i.test(honored.out) && /Driving now/.test(honored.out) && ignored.code === 0,
+  )
+}
+
+// 38. A wip line is stale only once a finished test claims it.
+{
+  const inProgressOnly = parityRun({ 'specs/sample.feature': TWO, 'tests/T.kt': oursCovered + IN_PROGRESS, 'parity/wip.txt': WIP_LINE })
+  const promoted = parityRun({ 'specs/sample.feature': TWO, 'tests/T.kt': oursCovered + IN_PROGRESS + FINISHED, 'parity/wip.txt': WIP_LINE })
+  check(
+    'in progress: wip line claimed only in progress passes; by a finished test fails',
+    inProgressOnly.code === 0 && promoted.code === 1 && /wip line/.test(promoted.out),
+  )
+}
+
+// 39. Scopes count finished claims only; --in-progress overrides the marker.
+{
+  const scoped = 'Feature: F\n\n  @system\n  Scenario: Ours\n    Given a\n'
+  const system = '// Covers: sample.feature :: Scenario: Ours\n@Test\nfun ours() = inProgress {\n}\n'
+  const scopeRun = parityRun(
+    { 'specs/sample.feature': scoped, 'tests/default/T.kt': oursCovered, 'tests/system/T.kt': system },
+    ['--scope', 'system=tests/system/'],
+  )
+  const custom = parityRun(
+    { 'specs/sample.feature': TWO, 'tests/T.kt': oursCovered + IN_PROGRESS.replace('inProgress {', 'pending {') },
+    ['--in-progress', '=\\s*pending\\s*\\{'],
+  )
+  check(
+    'in progress: an in-progress test does not meet a scope; --in-progress sets the marker',
+    scopeRun.code === 1 && /\[system\]/.test(scopeRun.out) && custom.code === 1 && /in-progress/.test(custom.out),
+  )
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

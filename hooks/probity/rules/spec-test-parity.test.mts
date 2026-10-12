@@ -554,5 +554,89 @@ async function parityWip(files: Record<string, string>, extra: Record<string, un
   }
 }
 
+// 29–33. Issue #115: in-progress (expected-to-fail) acceptance tests.
+// 29. A Covers tag belongs to the test it sits on or inside; that test's
+// expected-to-fail marker makes the claim in progress.
+{
+  const kotlin =
+    '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun `driving now`() = inProgress {\n  given.x()\n}\n\n' +
+    '// Covers: sample.feature :: Scenario: Ours\n@Test\nfun `ours`() {\n  then.theUploadIs.inProgress()\n}\n'
+  const [driving, ours] = extractCoversRefs('T.kt', kotlin)
+  const jest = extractCoversRefs('t.test.ts', "// Covers: sample.feature :: Scenario: Ours\ntest.failing('ours', () => {})\n")[0]
+  const vitest = extractCoversRefs('t.test.ts', "test.fails('ours', () => {\n  // Covers: sample.feature :: Scenario: Ours\n})\n")[0]
+  const swift = extractCoversRefs(
+    'T.swift',
+    '// Covers: sample.feature :: Scenario: Ours\n@MainActor\nfunc testOurs() {\n  withKnownIssue { dsl.run() }\n}\nfunc testOther() {}\n',
+  )[0]
+  const xctest = extractCoversRefs('T.swift', 'func testOurs() {\n  // Covers: sample.feature :: Scenario: Ours\n  XCTExpectFailure("wip")\n}\n')[0]
+  const bare = extractCoversRefs('T.swift', OURS_ONLY)[0]
+  check(
+    'in progress: marker on the owning test only; DSL calls named inProgress do not count',
+    driving?.inProgress === true && ours?.inProgress === false &&
+      jest?.inProgress === true && vitest?.inProgress === true &&
+      swift?.inProgress === true && xctest?.inProgress === true && bare?.inProgress === false,
+  )
+  const custom = extractCoversRefs('T.kt', '// Covers: sample.feature :: Scenario: Ours\n@Test\nfun ours() = pending {\n}\n', /=\s*pending\s*\{/)[0]
+  check('in progress: inProgressPattern overrides the marker', custom?.inProgress === true)
+}
+
+const IN_PROGRESS = '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun drivingNow() = inProgress {\n}\n'
+// 30. An in-progress claim is not coverage: the scenario must be wip.
+{
+  const notWip = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.kt': OURS + IN_PROGRESS })
+  const wipLine = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.kt': OURS + IN_PROGRESS, 'parity/wip.txt': WIP_LINE })
+  const specWip = await parityWip({
+    'specs/sample.feature': TWO.replace('  Scenario: Driving now', '  @wip\n  Scenario: Driving now'),
+    'tests/T.kt': OURS + IN_PROGRESS,
+  })
+  check(
+    'in progress: claimed only in progress -> violation unless wip (spec marker or wip line)',
+    notWip.kind === 'violation' && /in-progress/.test(notWip.reason ?? '') && /Driving now/.test(notWip.reason ?? '') &&
+      wipLine.kind === 'pass' && specWip.kind === 'pass',
+  )
+}
+
+// 31. A wip scenario a finished test claims is promoted: the spec's own
+// marker must go too (with sharedWip 'honor').
+{
+  const specWip = TWO.replace('  Scenario: Driving now', '  @wip\n  Scenario: Driving now')
+  const finished = OURS + '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun drivingNow() {\n}\n'
+  const honored = await parityWip({ 'specs/sample.feature': specWip, 'tests/T.kt': finished })
+  const ignored = await parityWip(
+    { 'specs/sample.feature': specWip, 'tests/T.kt': finished, 'parity/wip.txt': 'sample.feature :: Shared wip # not ours yet\n' },
+    { sharedWip: 'ignore' },
+  )
+  check(
+    'in progress: spec @wip claimed by a finished test -> violation; sharedWip ignore -> pass',
+    honored.kind === 'violation' && /promoted/i.test(honored.reason ?? '') && /Driving now/.test(honored.reason ?? '') &&
+      ignored.kind === 'pass',
+  )
+}
+
+// 32. A wip line stays valid while only in-progress tests claim it.
+{
+  const both = OURS + IN_PROGRESS + '// Covers: sample.feature :: Scenario: Driving now\n@Test\nfun drivingNowToo() {\n}\n'
+  const inProgressOnly = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.kt': OURS + IN_PROGRESS, 'parity/wip.txt': WIP_LINE })
+  const promoted = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.kt': both, 'parity/wip.txt': WIP_LINE })
+  check(
+    'in progress: wip line claimed only in progress -> pass; also by a finished test -> stale',
+    inProgressOnly.kind === 'pass' && promoted.kind === 'violation' && /wip line/.test(promoted.reason ?? ''),
+  )
+}
+
+// 33. Scope coverage counts only finished tests.
+{
+  const scoped = 'Feature: F\n\n  @system\n  Scenario: Ours\n    Given a\n'
+  const res = await parityWip(
+    {
+      'specs/sample.feature': scoped,
+      'tests/default/T.kt': OURS_ONLY,
+      'tests/system/T.kt': '// Covers: sample.feature :: Scenario: Ours\n@Test\nfun ours() = inProgress {\n}\n',
+    },
+    { driverScopes: [{ name: 'system', filePattern: /tests[/\\]system[/\\]/ }] },
+  )
+  check('in progress: an in-progress test does not meet a driver scope', res.kind === 'violation' && /\[system\]/.test(res.reason ?? ''))
+}
+
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)
