@@ -136,6 +136,14 @@ export type SwiftPresetOptions = {
    *  SDK and a tested port, and holding the vendor objects that needs.
    *  Observability and the shell-write screen still apply. Default: none. */
   vendorAdapterGlobs?: readonly string[]
+  /** Per-project spec-parity exclusions for a shared spec repository
+   *  (issue #105): `<spec>.feature :: <title> # <reason>` per line.
+   *  Default: `docs/spec-exclusions.txt`, outside the specs tree.
+   *  Missing file → no exclusions. */
+  exclusionsPath?: string
+  /** Scenario tags that are not driver scopes in this project (shared
+   *  tags another consumer uses). Unlisted unknown tags still block. */
+  ignoreTags?: string[]
 }
 
 function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
@@ -399,6 +407,8 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
       testRoots: [root],
       testFilePattern: ACCEPTANCE_TEST_FILES,
       baselinePath: join(root, 'docs/specs/.parity-baseline'),
+      exclusionsPath: options.exclusionsPath ?? join(root, 'docs/spec-exclusions.txt'),
+      ignoreTags: options.ignoreTags,
       // driverScopes: [
       //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
       //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },

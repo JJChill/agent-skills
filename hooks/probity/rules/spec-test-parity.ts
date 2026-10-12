@@ -236,6 +236,28 @@ type ScanOptions = {
    */
   baselinePath?: string
   /**
+   * Scenarios this project is not responsible for (optional), for a
+   * spec repository shared by several consumers (issue #105). Path to
+   * a text file, one `<spec>.feature :: <title> # <reason>` per line,
+   * `#` comments allowed; the reason is required and should name the
+   * owner (`# backend enforces the block list`). Excluded scenarios
+   * skip the orphan and scope checks. Unlike the baseline (debt to burn
+   * down), exclusions are standing decisions, so the gate keeps them
+   * honest: a malformed line, an exclusion matching no scenario, one
+   * for a scenario a test now claims, and one for a baselined scenario
+   * all block. Missing file → no exclusions. Keep it outside `specsDir`
+   * when the specs are a shared submodule.
+   */
+  exclusionsPath?: string
+  /**
+   * Scenario tags this project does not treat as driver scopes —
+   * shared tags another consumer uses (optional). Applies to Gherkin
+   * `@tags` and Markdown `[tags]`. Unlisted unknown tags still block
+   * (misspelling protection). A name that is also in `driverScopes` or
+   * `defaultScopes`, or `wip`/`planned`, blocks as a contradiction.
+   */
+  ignoreTags?: string[]
+  /**
    * Files the pending commit will record, relative to the root of the
    * working tree being committed (`cwd`: the project, or a worktree nested
    * in it). Defaults to Git's staged set plus tracked modifications for
@@ -260,6 +282,37 @@ export function readBaseline(path: string | undefined): Set<string> {
         return [scenarioKey(spec, title)]
       }),
   )
+}
+
+type Exclusion = { key: string; specFile: string; title: string; reason: string }
+
+/**
+ * Parses an exclusions file (`<spec> :: <title> # <reason>` per line).
+ * Missing file → none. A line without the separator or a reason lands
+ * in `malformed`: unlike the baseline, an exclusion must say why.
+ */
+export function readExclusions(path: string | undefined): {
+  entries: Exclusion[]
+  malformed: string[]
+} {
+  const entries: Exclusion[] = []
+  const malformed: string[] = []
+  if (!path || !existsSync(path)) return { entries, malformed }
+  for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const sep = line.indexOf(' :: ')
+    const hash = sep === -1 ? -1 : line.indexOf(' # ', sep + 4)
+    const reason = hash === -1 ? '' : line.slice(hash + 3).trim()
+    if (sep === -1 || !reason) {
+      malformed.push(line)
+      continue
+    }
+    const specFile = line.slice(0, sep).trim()
+    const title = line.slice(sep + 4, hash).trim()
+    entries.push({ key: scenarioKey(specFile, title), specFile, title, reason })
+  }
+  return { entries, malformed }
 }
 
 /** All spec files (either extension) under a directory. */
@@ -346,6 +399,10 @@ function matches(pattern: RegExp, value: string): boolean {
  * @param options.baselinePath — optional incremental-adoption
  *   baseline; scenarios listed there are exempt from the orphan
  *   check (see {@link readBaseline}). Missing file → full enforcement.
+ * @param options.exclusionsPath — optional per-project exclusions for a
+ *   shared spec repository (see {@link readExclusions}).
+ * @param options.ignoreTags — optional scenario tags that are not
+ *   driver scopes in this project.
  * @param options.driverScopes — optional per-scenario driver mapping;
  *   see {@link DriverScope}. Scenarios tagged `[scope]` (and every
  *   scenario, for `defaultScopes` entries) must be covered by a test
@@ -355,7 +412,7 @@ function matches(pattern: RegExp, value: string): boolean {
  * @param options.listCommitFiles — optional staged-file lister for
  *   tests. By default the gate reads Git's pending commit and runs only
  *   when it records the specs path (including a submodule pointer), the
- *   baseline, or an acceptance-test path. Inspection failures preserve
+ *   baseline, the exclusions file, or an acceptance-test path. Inspection failures preserve
  *   full enforcement.
  */
 export function enforceSpecTestParity(options: ScanOptions): Rule {
@@ -365,6 +422,10 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     (options.driverScopes ?? []).map((scope) => [scope.name.toLowerCase(), scope]),
   )
   const defaultScopes = (options.defaultScopes ?? []).map((name) => name.toLowerCase())
+  const ignoredTags = new Set((options.ignoreTags ?? []).map((tag) => tag.toLowerCase()))
+  const tagConflicts = [...ignoredTags].filter(
+    (tag) => tag === 'wip' || tag === 'planned' || scopes.has(tag) || defaultScopes.includes(tag),
+  )
   return function enforceSpecTestParity(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
     if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
@@ -385,6 +446,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const specsDir = inTree(options.specsDir)
     const testRoots = options.testRoots.map(inTree)
     const baselinePath = options.baselinePath && inTree(options.baselinePath)
+    const exclusionsPath = options.exclusionsPath && inTree(options.exclusionsPath)
     // Hook processes are anchored to the project root. Scope only when that
     // relationship is known (or a test injects the lister); otherwise retain
     // the historical fail-safe full scan.
@@ -397,6 +459,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
             // A baseline outside specsDir changes what the gate exempts
             // (issue #107).
             (!!baselinePath && pathsIntersect(absolute, baselinePath)) ||
+            (!!exclusionsPath && pathsIntersect(absolute, exclusionsPath)) ||
             matches(pattern, file) ||
             matches(pattern, absolute)
           )
@@ -407,6 +470,27 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       }
     }
     if (!existsSync(specsDir)) return { kind: 'pass' }
+    if (tagConflicts.length > 0) {
+      return {
+        kind: 'violation',
+        reason:
+          'Spec↔test parity is misconfigured: `ignoreTags` lists ' +
+          tagConflicts.map((tag) => `"${tag}"`).join(', ') +
+          ', which is a driver scope or a wip/planned marker. ' +
+          'A tag is either a scope this project checks or one it ignores — pick one.',
+      }
+    }
+    const exclusionFile = readExclusions(exclusionsPath)
+    if (exclusionFile.malformed.length > 0) {
+      return {
+        kind: 'violation',
+        reason:
+          `Spec↔test parity: exclusion lines in ${exclusionsPath} must read ` +
+          '`<spec>.feature :: <title> # <reason>`, and every exclusion needs ' +
+          'a reason naming who owns the scenario:\n' +
+          formatList(exclusionFile.malformed),
+      }
+    }
     // During the .feature.md -> .feature migration a spec is one extension
     // or the other; the same stem in both forms double-counts scenarios and
     // masks a half-finished rename.
@@ -426,21 +510,32 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       }
       byStem.set(stem, file)
     }
-    const scenarios = specFiles.flatMap((file) =>
-      extractScenarios(file, readFileSync(file, 'utf8')),
-    )
+    const scenarios = specFiles
+      .flatMap((file) => extractScenarios(file, readFileSync(file, 'utf8')))
+      .map((s) => ({ ...s, scopes: s.scopes.filter((tag) => !ignoredTags.has(tag)) }))
     const refs = scanCoversRefs(testRoots, pattern)
     const baseline = readBaseline(baselinePath)
     const claimed = new Set(refs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
+    // Precedence: claimed > excluded > wip > baseline. A claimed or
+    // baselined exclusion blocks below as stale rather than silently winning.
+    const exclusions = exclusionFile.entries
+    const excluded = new Set(exclusions.map((entry) => entry.key))
     const orphaned = scenarios.filter(
-      (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key),
+      (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
     )
     const dangling = refs.filter((ref) => !known.has(ref.key))
+    const danglingExclusions = exclusions.filter((entry) => !known.has(entry.key))
+    const claimedExclusions = exclusions.filter(
+      (entry) => known.has(entry.key) && claimed.has(entry.key),
+    )
+    const baselinedExclusions = exclusions.filter(
+      (entry) => known.has(entry.key) && baseline.has(entry.key),
+    )
     const unknownScopes: string[] = []
     const missingScopes: string[] = []
     for (const scenario of scenarios) {
-      if (scenario.wip || baseline.has(scenario.key)) continue
+      if (scenario.wip || baseline.has(scenario.key) || excluded.has(scenario.key)) continue
       const required = [...new Set([...defaultScopes, ...scenario.scopes])]
       for (const name of required) {
         const scope = scopes.get(name)
@@ -464,7 +559,10 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       orphaned.length === 0 &&
       dangling.length === 0 &&
       unknownScopes.length === 0 &&
-      missingScopes.length === 0
+      missingScopes.length === 0 &&
+      danglingExclusions.length === 0 &&
+      claimedExclusions.length === 0 &&
+      baselinedExclusions.length === 0
     )
       return { kind: 'pass' }
     const sections: string[] = ['Spec↔test parity check failed.']
@@ -498,6 +596,26 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           `(known scopes: ${scopes.size > 0 ? [...scopes.keys()].join(', ') : 'none configured'} — ` +
           'fix the tag or add the scope to `driverScopes`):\n' +
           formatList(unknownScopes),
+      )
+    }
+    const exclusionLines = (entries: Exclusion[]) =>
+      formatList(entries.map((e) => `${e.specFile} :: ${e.title}`))
+    if (danglingExclusions.length > 0) {
+      sections.push(
+        'Exclusions matching no scenario (renamed or removed — update or delete them):\n' +
+          exclusionLines(danglingExclusions),
+      )
+    }
+    if (claimedExclusions.length > 0) {
+      sections.push(
+        'Excluded scenarios a test now claims (delete the exclusion):\n' +
+          exclusionLines(claimedExclusions),
+      )
+    }
+    if (baselinedExclusions.length > 0) {
+      sections.push(
+        'Excluded scenarios still in the baseline (delete the baseline line):\n' +
+          exclusionLines(baselinedExclusions),
       )
     }
     return { kind: 'violation', reason: sections.join('\n') }

@@ -233,5 +233,126 @@ const commit = { kind: 'command', command: 'git commit -m x' } as const
   rmSync(dir, { recursive: true, force: true })
 }
 
+// 12–18. Issue #105: per-project exclusions and ignored tags.
+const SHARED = 'Feature: F\n\n  Scenario: Ours\n    Given a\n    Then b\n\n  @service\n  Scenario: Backend enforces it\n    Given a\n    Then b\n'
+const OURS = '// Covers: sample.feature :: Scenario: Ours\nfunc testOurs(){}\n'
+const THEIRS = '// Covers: sample.feature :: Scenario: Backend enforces it\n'
+const EXCLUSION = 'sample.feature :: Backend enforces it # backend enforces the block list\n'
+async function parity(files: Record<string, string>, extra: Record<string, unknown> = {}) {
+  const dir = workspace(files)
+  try {
+    const rule = enforceSpecTestParity({
+      specsDir: join(dir, 'specs'),
+      testRoots: [dir],
+      testFilePattern: /tests/,
+      exclusionsPath: join(dir, 'parity/exclusions.txt'),
+      baselinePath: join(dir, 'parity/baseline'),
+      ...extra,
+    } as any)
+    return (await rule(commit as any)) as { kind: string; reason?: string }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 12. An excluded scenario passes and skips its scope check.
+{
+  const res = await parity({ 'specs/sample.feature': SHARED, 'tests/T.swift': OURS, 'parity/exclusions.txt': EXCLUSION })
+  const none = await parity({ 'specs/sample.feature': SHARED, 'tests/T.swift': OURS })
+  check('rule exclusion: excluded scenario passes; missing file enforces', res.kind === 'pass' && none.kind === 'violation')
+}
+
+// 13. Every exclusion needs a reason.
+{
+  const res = await parity({
+    'specs/sample.feature': SHARED,
+    'tests/T.swift': OURS,
+    'parity/exclusions.txt': 'sample.feature :: Backend enforces it\n',
+  })
+  check('rule exclusion: line without a reason -> violation', res.kind === 'violation' && /reason/i.test(res.reason ?? ''))
+}
+
+// 14. Dangling, claimed and baselined exclusions all fail.
+{
+  const dangling = await parity({
+    'specs/sample.feature': SHARED,
+    'tests/T.swift': OURS,
+    'parity/exclusions.txt': EXCLUSION + 'sample.feature :: Renamed away # gone\n',
+  })
+  const claimed = await parity(
+    { 'specs/sample.feature': SHARED, 'tests/T.swift': OURS + THEIRS, 'parity/exclusions.txt': EXCLUSION },
+    { ignoreTags: ['service'] },
+  )
+  const baselined = await parity({
+    'specs/sample.feature': SHARED,
+    'tests/T.swift': OURS,
+    'parity/exclusions.txt': EXCLUSION,
+    'parity/baseline': 'sample.feature :: Backend enforces it\n',
+  })
+  check(
+    'rule exclusion: dangling, claimed and baselined exclusions -> violations',
+    dangling.kind === 'violation' && /Renamed away/.test(dangling.reason ?? '') &&
+      claimed.kind === 'violation' && /test now claims/.test(claimed.reason ?? '') &&
+      baselined.kind === 'violation' && /baseline/i.test(baselined.reason ?? ''),
+  )
+}
+
+// 15. ignoreTags drops a shared tag; an unlisted unknown tag still fails.
+{
+  const files = { 'specs/sample.feature': SHARED, 'tests/T.swift': OURS + THEIRS }
+  const ignored = await parity(files, { ignoreTags: ['service'] })
+  const unignored = await parity(files)
+  const markdown = await parity(
+    { 'specs/sample.feature.md': '## Scenario [service]: Plain\nGiven a\nThen b\n', 'tests/T.swift': '// Covers: sample.feature.md :: Scenario: Plain\n' },
+    { ignoreTags: ['service'] },
+  )
+  check(
+    'rule ignoreTags: ignored tag is not a scope (Gherkin and Markdown); unlisted still fails',
+    ignored.kind === 'pass' && markdown.kind === 'pass' &&
+      unignored.kind === 'violation' && /\[service\]/.test(unignored.reason ?? ''),
+  )
+}
+
+// 16. A tag both declared as a scope and ignored, or wip/planned, is a contradiction.
+{
+  const files = { 'specs/sample.feature': SHARED, 'tests/T.swift': OURS + THEIRS }
+  const scope = await parity(files, {
+    ignoreTags: ['service'],
+    driverScopes: [{ name: 'service', filePattern: /tests/ }],
+  })
+  const marker = await parity(files, { ignoreTags: ['wip'] })
+  check(
+    'rule ignoreTags: declared scope or wip marker in the list -> violation',
+    scope.kind === 'violation' && /ignoreTags/.test(scope.reason ?? '') &&
+      marker.kind === 'violation' && /ignoreTags/.test(marker.reason ?? ''),
+  )
+}
+
+// 17. A commit changing only the exclusions file runs the gate.
+{
+  const dir = workspace({
+    'specs/sample.feature': SHARED,
+    'tests/T.swift': OURS,
+    'parity/exclusions.txt': 'sample.feature :: Renamed away # gone\n' + EXCLUSION,
+  })
+  const originalCwd = process.cwd()
+  process.chdir(dir)
+  try {
+    const root = process.cwd()
+    const rule = enforceSpecTestParity({
+      specsDir: join(root, 'specs'),
+      testRoots: [root],
+      testFilePattern: /tests/,
+      exclusionsPath: join(root, 'parity/exclusions.txt'),
+      listCommitFiles: () => ['parity/exclusions.txt'],
+    } as any)
+    const res = await rule(commit as any)
+    check('rule exclusion: an exclusions-only commit runs the gate', res.kind === 'violation')
+  } finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

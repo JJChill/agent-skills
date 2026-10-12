@@ -10,6 +10,7 @@
  *   node spec-parity.mjs --specs docs/specs [--tests .] [--pattern acceptance]
  *                        [--baseline <file>] [--write-baseline]
  *                        [--scope name=<regex>]... [--default-scopes a,b]
+ *                        [--exclusions <file>] [--ignore-tags a,b]
  *
  *   --specs    specs directory containing *.feature.md (required)
  *   --tests    root(s) to scan for acceptance tests (repeatable, default .)
@@ -35,9 +36,24 @@
  *   --default-scopes  comma-separated scope names required of every
  *              non-wip, non-baselined scenario even without a tag —
  *              the project's standard driver set.
+ *   --exclusions  scenarios this project is not responsible for, for a
+ *              spec repository shared by several consumers (issue #105):
+ *              one `<spec>.feature :: <title> # <reason>` per line, `#`
+ *              comments allowed, reason required (name the owner, e.g.
+ *              `# backend enforces the block list`). Excluded scenarios
+ *              skip the orphan and scope checks and are reported with
+ *              their reason. An exclusion matching no scenario, one for
+ *              a scenario a test now claims, and one for a baselined
+ *              scenario all fail. Missing file → no exclusions.
+ *   --ignore-tags  comma-separated scenario tags this project does not
+ *              treat as driver scopes (shared tags from other
+ *              consumers). Unlisted unknown tags still fail. A name
+ *              that is also a declared scope, or `wip`/`planned`, is a
+ *              usage error.
  *
  * Exit codes: 0 parity holds, 1 orphaned scenarios, dangling Covers
- * tags, or unmet driver scopes, 2 usage error.
+ * tags, unmet driver scopes, or dangling/stale exclusions, 2 usage
+ * error (including a malformed exclusions file).
  *
  * Conventions (shared with the probity rule):
  *   spec heading:  ## Scenario: <title>     (## Scenario (wip): exempt)
@@ -77,6 +93,8 @@ function parseArgs(argv) {
     writeBaseline: false,
     scopes: new Map(),
     defaultScopes: [],
+    exclusions: undefined,
+    ignoreTags: [],
   }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--specs') args.specs = argv[++i]
@@ -97,6 +115,12 @@ function parseArgs(argv) {
         .split(',')
         .map((name) => name.trim().toLowerCase())
         .filter(Boolean)
+    } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
+    else if (argv[i] === '--ignore-tags') {
+      args.ignoreTags = (argv[++i] ?? '')
+        .split(',')
+        .map((name) => name.trim().toLowerCase())
+        .filter(Boolean)
     } else {
       console.error(`Unknown argument: ${argv[i]}`)
       process.exit(2)
@@ -106,9 +130,19 @@ function parseArgs(argv) {
     console.error(
       'Usage: spec-parity.mjs --specs <dir> [--tests <root>]... [--pattern <regex>] ' +
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
-        '[--default-scopes a,b]',
+        '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b]',
     )
     process.exit(2)
+  }
+  for (const tag of args.ignoreTags) {
+    if (tag === 'wip' || tag === 'planned') {
+      console.error(`--ignore-tags: "${tag}" is a work-in-progress marker, not a tag to ignore.`)
+      process.exit(2)
+    }
+    if (args.scopes.has(tag) || args.defaultScopes.includes(tag)) {
+      console.error(`--ignore-tags: "${tag}" is also a declared driver scope — pick one.`)
+      process.exit(2)
+    }
   }
   if (args.tests.length === 0) args.tests = ['.']
   return args
@@ -217,6 +251,36 @@ function parseScenarios(file) {
   return scenarios
 }
 
+/**
+ * Parse the exclusions file: `<spec> :: <title> # <reason>` per line.
+ * Unlike the baseline, a malformed line is an error, not skipped — an
+ * exclusion is a standing decision and must say why.
+ */
+function readExclusions(path) {
+  if (!path || !existsSync(path)) return []
+  const entries = []
+  const lines = readFileSync(path, 'utf8').split(/\r?\n/)
+  lines.forEach((raw, index) => {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) return
+    const sep = line.indexOf(' :: ')
+    const hash = sep === -1 ? -1 : line.indexOf(' # ', sep + 4)
+    const reason = hash === -1 ? '' : line.slice(hash + 3).trim()
+    if (sep === -1 || !reason) {
+      console.error(
+        `${path}:${index + 1}: exclusions read \`<spec>.feature :: <title> # <reason>\`, ` +
+          'and every exclusion needs a reason naming who owns the scenario:',
+      )
+      console.error(`  ${line}`)
+      process.exit(2)
+    }
+    const specFile = line.slice(0, sep).trim()
+    const title = line.slice(sep + 4, hash).trim()
+    entries.push({ key: key(specFile, title), specFile, title, reason })
+  })
+  return entries
+}
+
 const args = parseArgs(process.argv.slice(2))
 if (!existsSync(args.specs)) {
   console.log(`No specs directory at ${args.specs} — nothing to enforce.`)
@@ -245,7 +309,12 @@ for (const file of specFiles) {
   seenStems.set(stem, file)
 }
 
-const scenarios = specFiles.flatMap(parseScenarios)
+const ignoredTags = new Set(args.ignoreTags)
+const scenarios = specFiles
+  .flatMap(parseScenarios)
+  .map((s) => ({ ...s, scopes: s.scopes.filter((tag) => !ignoredTags.has(tag)) }))
+const exclusions = readExclusions(args.exclusions)
+const excluded = new Map(exclusions.map((entry) => [entry.key, entry]))
 
 const refs = args.tests
   .flatMap((root) => walk(root))
@@ -266,7 +335,11 @@ const refs = args.tests
 
 const claimed = new Set(refs.map((ref) => ref.key))
 const known = new Set(scenarios.map((scenario) => scenario.key))
-const unclaimed = scenarios.filter((s) => !s.wip && !claimed.has(s.key))
+// Precedence: claimed > excluded > wip > baseline. A claimed or
+// baselined exclusion is reported below as stale rather than silently won.
+const unclaimed = scenarios.filter(
+  (s) => !s.wip && !claimed.has(s.key) && !excluded.has(s.key),
+)
 const dangling = refs.filter((ref) => !known.has(ref.key))
 
 if (args.writeBaseline) {
@@ -300,11 +373,18 @@ const baseline = new Set(
     : [],
 )
 const orphaned = unclaimed.filter((s) => !baseline.has(s.key))
+const danglingExclusions = exclusions.filter((entry) => !known.has(entry.key))
+const claimedExclusions = exclusions.filter(
+  (entry) => known.has(entry.key) && claimed.has(entry.key),
+)
+const baselinedExclusions = exclusions.filter(
+  (entry) => known.has(entry.key) && baseline.has(entry.key),
+)
 
 const unknownScopes = []
 const missingScopes = []
 for (const s of scenarios) {
-  if (s.wip || baseline.has(s.key)) continue
+  if (s.wip || baseline.has(s.key) || excluded.has(s.key)) continue
   const required = [...new Set([...args.defaultScopes, ...s.scopes])]
   for (const name of required) {
     const scopePattern = args.scopes.get(name)
@@ -322,16 +402,27 @@ if (
   orphaned.length === 0 &&
   dangling.length === 0 &&
   unknownScopes.length === 0 &&
-  missingScopes.length === 0
+  missingScopes.length === 0 &&
+  danglingExclusions.length === 0 &&
+  claimedExclusions.length === 0 &&
+  baselinedExclusions.length === 0
 ) {
-  const wip = scenarios.filter((s) => s.wip).length
+  const notOurs = scenarios.filter((s) => excluded.has(s.key))
+  const wip = scenarios.filter((s) => s.wip && !excluded.has(s.key)).length
   const baselined = unclaimed.length
   console.log(
-    `Spec↔test parity holds: ${scenarios.length - wip - baselined} scenario(s) covered` +
+    `Spec↔test parity holds: ${scenarios.length - wip - baselined - notOurs.length} scenario(s) covered` +
       (wip > 0 ? `, ${wip} wip` : '') +
       (baselined > 0 ? `, ${baselined} baselined (burn-down)` : '') +
+      (notOurs.length > 0 ? `, ${notOurs.length} not this project's` : '') +
       `, ${refs.length} Covers tag(s) resolved.`,
   )
+  if (notOurs.length > 0) {
+    console.log("Not this project's:")
+    for (const s of notOurs) {
+      console.log(`  ${s.specFile} :: ${s.title} — ${excluded.get(s.key).reason}`)
+    }
+  }
   process.exit(0)
 }
 if (orphaned.length > 0) {
@@ -354,5 +445,17 @@ if (unknownScopes.length > 0) {
     }):`,
   )
   for (const line of unknownScopes) console.error(`  ${line}`)
+}
+if (danglingExclusions.length > 0) {
+  console.error('Exclusions matching no scenario (renamed or removed — update or delete them):')
+  for (const e of danglingExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
+}
+if (claimedExclusions.length > 0) {
+  console.error('Excluded scenarios a test now claims (delete the exclusion):')
+  for (const e of claimedExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
+}
+if (baselinedExclusions.length > 0) {
+  console.error('Excluded scenarios still in the baseline (delete the baseline line):')
+  for (const e of baselinedExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
 }
 process.exit(1)
