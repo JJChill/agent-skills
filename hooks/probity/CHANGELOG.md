@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.31
+
+The spec-parity commit gate now runs when a commit changes only a
+baseline file outside the specs directory (#107).
+
+- **What was missing.** `enforceSpecTestParity` ran only for commits
+  recording the specs path or an acceptance-test path. A baseline inside
+  `docs/specs` (the KMP default) was covered by that, but one elsewhere
+  was not: the JS preset's `parityBaselinePath` has no default, and a
+  project consuming a shared spec repository as a submodule should keep
+  its baseline outside the shared tree (#105). Deleting a baseline line
+  for a scenario that still had no claiming test committed cleanly, and
+  the failure surfaced later on an unrelated specs or acceptance-test
+  commit.
+- **Now:** a commit recording the configured `baselinePath` runs the
+  gate. The CLI (`probity-spec-parity`) has no commit scoping and is
+  unchanged.
+
 ## 0.4.30
 
 Vendor adapters whose success path only a live session can exercise can

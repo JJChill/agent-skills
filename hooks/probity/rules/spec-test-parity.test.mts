@@ -124,6 +124,39 @@ const commit = { kind: 'command', command: 'git commit -m x' } as const
   }
 }
 
+// 7b. A commit changing only a baseline outside specsDir still runs the gate
+// (issue #107): deleting a line for a still-uncovered scenario must block
+// here, not on a later, unrelated specs commit.
+{
+  const dir = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  Scenario: Uncovered\n    Given a\n    Then b\n',
+    'parity/baseline': '# burn-down\n',
+  })
+  const originalCwd = process.cwd()
+  let commitFiles = ['parity/baseline']
+  process.chdir(dir)
+  try {
+    const root = process.cwd()
+    const rule = enforceSpecTestParity({
+      specsDir: join(root, 'specs'),
+      testRoots: [root],
+      testFilePattern: /[/\\]acceptance[/\\]/,
+      baselinePath: join(root, 'parity/baseline'),
+      listCommitFiles: () => commitFiles,
+    })
+    const baselineOnly = await rule(commit as any)
+    commitFiles = ['parity/unrelated.txt']
+    const unrelated = await rule(commit as any)
+    check(
+      'rule: a commit changing only a baseline outside specsDir runs the gate',
+      baselineOnly.kind === 'violation' && unrelated.kind === 'pass',
+    )
+  } finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // 8. Git inspection failure must retain full parity enforcement.
 {
   const dir = workspace({
