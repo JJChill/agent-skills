@@ -12,7 +12,7 @@ import {
   type GreenRunOptions,
   type NamedPattern,
 } from './gates.js'
-import { GIT_COMMIT, nestedCommitTree } from './commit-target.js'
+import { isGitCommit, nestedCommitTree } from './commit-target.js'
 import type { ApiDumpFormat, ExportLanguage } from './ports-and-adapters.js'
 
 /**
@@ -1341,7 +1341,7 @@ export function enforceProbeReversion(options: {
   const filePattern = options.filePattern ?? DEFAULT_PROBE_FILE_PATTERN
   return function enforceProbeReversion(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    if (!isGitCommit(action.command)) return { kind: 'pass' }
     const outstanding = markedFiles(
       options.roots,
       action.command,
@@ -1585,7 +1585,7 @@ export function enforceCharacterizationResolution(options: {
     action: Action,
   ): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    if (!GIT_COMMIT.test(action.command)) return { kind: 'pass' }
+    if (!isGitCommit(action.command)) return { kind: 'pass' }
     const outstanding = markedFiles(
       options.roots,
       action.command,

@@ -1,6 +1,8 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
+
+import { COMMAND_PREFIXES, parseShell, type SimpleCommand } from './shell-writes.js'
 
 /**
  * Which git working tree a `git commit` command records into, so commit
@@ -11,9 +13,62 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
  */
 
 // `git commit`, including global options before the subcommand
-// (`git -C <dir> commit`, `git -c key=value commit`), but not plumbing
-// that merely starts with the word (`git commit-tree`, `git commit-graph`).
-export const GIT_COMMIT = /\bgit(?:\s+-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+))*\s+commit(?![\w-])/
+// (`git -C <dir> commit`, `git -c key=value commit`, `git --no-pager
+// commit`), but not plumbing that merely starts with the word
+// (`git commit-tree`, `git commit-graph`).
+export const GIT_COMMIT =
+  /\bgit(?:\s+(?:-[Cc]\s+(?:"[^"]*"|'[^']*'|\S+)|--?[\w-]+(?:=\S+)?))*\s+commit(?![\w-])/
+
+// Commands that treat their arguments and stdin as data, never as code:
+// `git commit` in an issue body, an echo or a heredoc written to a file
+// is not a commit (issue #121). Every other command might run the text
+// (a shell, `eval`, `xargs`, `find -exec`, an interpreter), so for those
+// the words still count wherever they appear.
+const DATA_COMMANDS = new Set([
+  'cat', 'echo', 'printf', 'tee', 'gh', 'glab', 'grep', 'egrep', 'fgrep', 'rg', 'head', 'tail',
+  'wc', 'jq', 'yq', 'ls', 'mkdir', 'touch', 'cd', 'pushd', 'popd', 'test', '[', 'true', 'false',
+  'sort', 'uniq', 'cut', 'tr', 'diff', 'column', 'base64', 'pbcopy',
+])
+// git's global options that take a separate value (`git -C <dir> commit`).
+const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
+const SUBSTITUTION = /\$\(|`/
+
+function gitSubcommand(args: string[]): string | undefined {
+  for (let k = 0; k < args.length; k++) {
+    const arg = args[k]!
+    if (GIT_VALUE_OPTIONS.has(arg)) k++
+    else if (!arg.startsWith('-')) return arg
+  }
+  return undefined
+}
+
+function runsGitCommit(command: SimpleCommand): boolean {
+  // `$(…)` and backticks run wherever the shell expands them.
+  const expanded = [...command.words, ...command.expandingStdin]
+  if (expanded.some((text) => SUBSTITUTION.test(text) && GIT_COMMIT.test(text))) return true
+  let k = 0
+  while (k < command.words.length && (/^[A-Za-z_]\w*=/.test(command.words[k]!) || COMMAND_PREFIXES.has(command.words[k]!))) k++
+  const name = basename(command.words[k] ?? '')
+  if (name === 'git') return gitSubcommand(command.words.slice(k + 1)) === 'commit'
+  if (name === '' || DATA_COMMANDS.has(name)) return false
+  // A command that may execute text: its words, its stdin, and whatever a
+  // pipeline feeds it.
+  const texts = [...command.words, ...command.stdin]
+  for (let from = command.pipedFrom; from; from = from.pipedFrom) texts.push(...from.words, ...from.stdin)
+  return GIT_COMMIT.test(texts.join('\n'))
+}
+
+/**
+ * Whether a shell command runs `git commit` (issue #121): `git` with
+ * `commit` as its subcommand, or the words reaching a command that might
+ * execute them. Text that is only data (a heredoc written to a file with
+ * `cat`, an `echo`, a `gh` issue body) does not count. When in doubt it
+ * counts, so the commit gates fail closed.
+ */
+export function isGitCommit(command: string): boolean {
+  if (!GIT_COMMIT.test(command)) return false
+  return parseShell(command).some(runsGitCommit)
+}
 
 export function canonical(path: string): string {
   try {

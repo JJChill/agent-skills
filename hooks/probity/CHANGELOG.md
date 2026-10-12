@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.36
+
+The commit gates recognise a commit by what a command runs, not by the
+words it contains (#121).
+
+- **What was wrong.** Every commit gate tested the raw command text for
+  `git … commit`, so a command that only wrote a Markdown file whose
+  text mentioned a commit (a heredoc to `cat`, an issue body for `gh`, a
+  `grep` pattern) was treated as one, and `requireGreenTestRun` blocked
+  it. The regex also missed `git --no-pager commit`.
+- **Now:** `isGitCommit` parses the command with the shell-write
+  screen's parser. A command is a commit when `git` runs with `commit` as
+  its subcommand, after any global options, or when the words reach a
+  command that might execute them: a shell, `eval`, `xargs`,
+  `find -exec`, an interpreter, a pipeline into one, or a `$(…)`/backtick
+  substitution the shell expands (including in an unquoted heredoc).
+  Data commands (`cat`, `echo`, `printf`, `tee`, `gh`, `glab`, `grep`,
+  `rg`, …) don't count. An unknown command still counts, so the gates
+  fail closed. `requireGreenTestRun`, `enforceSpecTestParity`,
+  `enforceProbeReversion` and `enforceCharacterizationResolution` all
+  use it. `GIT_COMMIT` now also accepts any global option before
+  `commit`.
+
 ## 0.4.35
 
 In-progress acceptance tests are committed expected-to-fail (#115).
