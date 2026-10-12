@@ -111,6 +111,13 @@ export type KmpPresetOptions = {
   /** Scenario tags that are not driver scopes in this project (shared
    *  tags another consumer uses). Unlisted unknown tags still block. */
   ignoreTags?: string[]
+  /** This project's spec-parity wip list for a shared spec repository
+   *  (issue #111): same format as the exclusions file, with a required
+   *  note. Default: `docs/spec-wip.txt`. Missing file → no project wip. */
+  wipPath?: string
+  /** `'ignore'` makes the specs' own `@wip` markers informational, so
+   *  `wipPath` is the only wip list. Default `'honor'`. */
+  sharedWip?: 'honor' | 'ignore'
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
@@ -218,6 +225,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
   const testRoots = options.testRoots ?? [root]
   const baselinePath = options.baselinePath ?? join(root, 'docs/specs/.parity-baseline')
   const exclusionsPath = options.exclusionsPath ?? join(root, 'docs/spec-exclusions.txt')
+  const wipPath = options.wipPath ?? join(root, 'docs/spec-wip.txt')
   const excludeGlobs = options.excludeGlobs ?? ['spikes/**', '**/build/**']
   const vendorAdapter = vendorAdapterBlock(options.vendorAdapterGlobs)
   const harnessExclusions = (options.harnessGlobs ?? []).map((glob) => (glob.startsWith('!') ? glob : `!${glob}`))
@@ -482,6 +490,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       baselinePath,
       exclusionsPath,
       ignoreTags: options.ignoreTags,
+      wipPath,
+      sharedWip: options.sharedWip,
       testFilePattern: options.testFilePattern,
       driverScopes: options.driverScopes,
       defaultScopes: options.defaultScopes,

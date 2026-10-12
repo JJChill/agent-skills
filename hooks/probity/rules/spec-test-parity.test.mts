@@ -474,5 +474,85 @@ const COVERS_ID = '// Covers: @id:blocked-number\nfunc testBlocked(){}\n'
   }
 }
 
+// 25–28. Issue #111: per-project wip.
+const TWO = 'Feature: F\n\n  Scenario: Ours\n    Given a\n\n  @wip @system\n  Scenario: Shared wip\n    Given a\n\n  Scenario: Driving now\n    Given a\n'
+const OURS_ONLY = '// Covers: sample.feature :: Scenario: Ours\n'
+const WIP_LINE = 'sample.feature :: Driving now # outside-in, no clock port yet\n'
+// Like parity(), plus a project wip file at parity/wip.txt.
+async function parityWip(files: Record<string, string>, extra: Record<string, unknown> = {}) {
+  const dir = workspace(files)
+  try {
+    const rule = enforceSpecTestParity({
+      specsDir: join(dir, 'specs'),
+      testRoots: [dir],
+      testFilePattern: /tests/,
+      exclusionsPath: join(dir, 'parity/exclusions.txt'),
+      baselinePath: join(dir, 'parity/baseline'),
+      wipPath: join(dir, 'parity/wip.txt'),
+      ...extra,
+    } as any)
+    return (await rule(commit as any)) as { kind: string; reason?: string }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+// 25. A wip line exempts; a line without a note blocks.
+{
+  const ok = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.swift': OURS_ONLY, 'parity/wip.txt': WIP_LINE })
+  const bad = await parityWip({ 'specs/sample.feature': TWO, 'tests/T.swift': OURS_ONLY, 'parity/wip.txt': 'sample.feature :: Driving now\n' })
+  check('rule wip: line exempts; missing note -> violation', ok.kind === 'pass' && bad.kind === 'violation' && /note/.test(bad.reason ?? ''))
+}
+
+// 26. sharedWip: 'ignore' makes spec markers informational.
+{
+  const files = { 'specs/sample.feature': TWO, 'tests/T.swift': OURS_ONLY, 'parity/wip.txt': WIP_LINE }
+  const ignored = await parityWip(files, { sharedWip: 'ignore' })
+  const listed = await parityWip(
+    { ...files, 'parity/wip.txt': WIP_LINE + 'sample.feature :: Shared wip # not started here\n' },
+    { sharedWip: 'ignore' },
+  )
+  check(
+    'rule wip: sharedWip ignore requires the spec @wip scenario unless listed',
+    ignored.kind === 'violation' && /Shared wip/.test(ignored.reason ?? '') && listed.kind === 'pass',
+  )
+}
+
+// 27. Stale wip lines block: claimed, excluded, baselined, dangling.
+{
+  const base = { 'specs/sample.feature': TWO, 'tests/T.swift': OURS_ONLY, 'parity/wip.txt': WIP_LINE }
+  const claimed = await parityWip({ ...base, 'tests/T.swift': OURS_ONLY + '// Covers: sample.feature :: Scenario: Driving now\n' })
+  const excluded = await parityWip({ ...base, 'parity/exclusions.txt': 'sample.feature :: Driving now # backend\n' })
+  const baselined = await parityWip({ ...base, 'parity/baseline': 'sample.feature :: Driving now\n' })
+  const dangling = await parityWip({ ...base, 'parity/wip.txt': WIP_LINE + 'sample.feature :: Gone # old\n' })
+  check(
+    'rule wip: claimed, excluded, baselined and dangling wip lines -> violations',
+    claimed.kind === 'violation' && /wip line/.test(claimed.reason ?? '') &&
+      excluded.kind === 'violation' && /excluded/i.test(excluded.reason ?? '') &&
+      baselined.kind === 'violation' && /only shrinks/.test(baselined.reason ?? '') &&
+      dangling.kind === 'violation' && /Gone/.test(dangling.reason ?? ''),
+  )
+}
+
+// 28. A commit changing only the wip file runs the gate.
+{
+  const dir = workspace({ 'specs/sample.feature': TWO, 'tests/T.swift': OURS_ONLY, 'parity/wip.txt': WIP_LINE + 'sample.feature :: Gone # old\n' })
+  const originalCwd = process.cwd()
+  process.chdir(dir)
+  try {
+    const root = process.cwd()
+    const rule = enforceSpecTestParity({
+      specsDir: join(root, 'specs'),
+      testRoots: [root],
+      testFilePattern: /tests/,
+      wipPath: join(root, 'parity/wip.txt'),
+      listCommitFiles: () => ['parity/wip.txt'],
+    } as any)
+    check('rule wip: a wip-only commit runs the gate', (await rule(commit as any)).kind === 'violation')
+  } finally {
+    process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

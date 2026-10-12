@@ -11,6 +11,7 @@
  *                        [--baseline <file>] [--write-baseline]
  *                        [--scope name=<regex>]... [--default-scopes a,b]
  *                        [--exclusions <file>] [--ignore-tags a,b]
+ *                        [--wip <file>] [--shared-wip honor|ignore]
  *
  *   --specs    specs directory containing *.feature.md (required)
  *   --tests    root(s) to scan for acceptance tests (repeatable, default .)
@@ -50,10 +51,22 @@
  *              consumers). Unlisted unknown tags still fail. A name
  *              that is also a declared scope, or `wip`/`planned`, is a
  *              usage error.
+ *   --wip      this project's work in progress, for a shared spec
+ *              repository whose `@wip` markers other consumers control
+ *              (issue #111): same line format as --exclusions, with a
+ *              required note on what is happening or what blocks it
+ *              (the stop-and-ask record for a missing seam). Listed
+ *              scenarios are exempt like `@wip` ones and are reported
+ *              with their notes. A wip line for a claimed, excluded or
+ *              baselined scenario, or matching none, fails. Missing
+ *              file → no project wip.
+ *   --shared-wip  honor (default) or ignore. `ignore` makes the specs'
+ *              own `@wip`/`@planned`/`(wip)` markers informational, so
+ *              --wip is this project's only work-in-progress list.
  *
  * Exit codes: 0 parity holds, 1 orphaned scenarios, dangling Covers
- * tags, unmet driver scopes, or dangling/stale exclusions, 2 usage
- * error (including a malformed exclusions file).
+ * tags, unmet driver scopes, or dangling/stale exclusion or wip lines,
+ * 2 usage error (including a malformed exclusions or wip file).
  *
  * Conventions (shared with the probity rule):
  *   spec heading:  ## Scenario: <title>     (## Scenario (wip): exempt)
@@ -105,6 +118,8 @@ function parseArgs(argv) {
     defaultScopes: [],
     exclusions: undefined,
     ignoreTags: [],
+    wip: undefined,
+    sharedWip: 'honor',
   }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--specs') args.specs = argv[++i]
@@ -126,6 +141,14 @@ function parseArgs(argv) {
         .map((name) => name.trim().toLowerCase())
         .filter(Boolean)
     } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
+    else if (argv[i] === '--wip') args.wip = argv[++i]
+    else if (argv[i] === '--shared-wip') {
+      args.sharedWip = argv[++i]
+      if (args.sharedWip !== 'honor' && args.sharedWip !== 'ignore') {
+        console.error(`--shared-wip expects honor or ignore, got: ${args.sharedWip}`)
+        process.exit(2)
+      }
+    }
     else if (argv[i] === '--ignore-tags') {
       args.ignoreTags = (argv[++i] ?? '')
         .split(',')
@@ -140,7 +163,8 @@ function parseArgs(argv) {
     console.error(
       'Usage: spec-parity.mjs --specs <dir> [--tests <root>]... [--pattern <regex>] ' +
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
-        '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b]',
+        '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b] ' +
+        '[--wip <file>] [--shared-wip honor|ignore]',
     )
     process.exit(2)
   }
@@ -267,11 +291,11 @@ function parseScenarios(file) {
 }
 
 /**
- * Parse the exclusions file: `<spec> :: <title> # <reason>` per line.
- * Unlike the baseline, a malformed line is an error, not skipped — an
- * exclusion is a standing decision and must say why.
+ * Parse an exclusions or wip file: `<spec> :: <title> # <reason>` or
+ * `@id:<slug> # <reason>` per line. Unlike the baseline, a malformed line
+ * is an error, not skipped — every entry must say why.
  */
-function readExclusions(path) {
+function readReasonedList(path, { noun, field, why }) {
   if (!path || !existsSync(path)) return []
   const entries = []
   const lines = readFileSync(path, 'utf8').split(/\r?\n/)
@@ -284,9 +308,8 @@ function readExclusions(path) {
     const id = hash === -1 ? null : line.slice(0, hash).trim().toLowerCase().match(ID_REF)
     if ((sep === -1 && !id) || !reason) {
       console.error(
-        `${path}:${index + 1}: exclusions read \`<spec>.feature :: <title> # <reason>\` ` +
-          'or `@id:<slug> # <reason>`, and every exclusion needs a reason naming who ' +
-          'owns the scenario:',
+        `${path}:${index + 1}: ${noun} read \`<spec>.feature :: <title> # <${field}>\` ` +
+          `or \`@id:<slug> # <${field}>\`, and every line needs a ${field} ${why}:`,
       )
       console.error(`  ${line}`)
       process.exit(2)
@@ -361,11 +384,24 @@ const resolve = (ref) => {
   return id ? (byId.get(id[1])?.key ?? ref) : ref
 }
 
-const exclusions = readExclusions(args.exclusions).map((entry) => ({
-  ...entry,
-  key: resolve(entry.key),
-}))
+const exclusions = readReasonedList(args.exclusions, {
+  noun: 'exclusions',
+  field: 'reason',
+  why: 'naming who owns the scenario',
+}).map((entry) => ({ ...entry, key: resolve(entry.key) }))
 const excluded = new Map(exclusions.map((entry) => [entry.key, entry]))
+const wipLines = readReasonedList(args.wip, {
+  noun: 'wip lines',
+  field: 'note',
+  why: 'saying what is happening or what blocks it',
+}).map((entry) => ({ ...entry, key: resolve(entry.key) }))
+const projectWip = new Map(wipLines.map((entry) => [entry.key, entry]))
+// Issue #111: with --shared-wip ignore, the specs' own markers are
+// information only; either way, this project's wip lines count as wip.
+for (const s of scenarios) {
+  if (args.sharedWip === 'ignore') s.wip = false
+  if (projectWip.has(s.key)) s.wip = true
+}
 
 const refs = args.tests
   .flatMap((root) => walk(root))
@@ -439,6 +475,15 @@ const claimedExclusions = exclusions.filter(
 const baselinedExclusions = exclusions.filter(
   (entry) => known.has(entry.key) && baseline.has(entry.key),
 )
+const danglingWip = wipLines.filter((entry) => !known.has(entry.key))
+const claimedWip = wipLines.filter((entry) => known.has(entry.key) && claimed.has(entry.key))
+const excludedWip = wipLines.filter((entry) => excluded.has(entry.key))
+// The baseline is a snapshot from adoption that only shrinks: a scenario
+// that became wip later leaves it.
+const baselinedWip = wipLines.filter(
+  (entry) => known.has(entry.key) && !excluded.has(entry.key) && baseline.has(entry.key),
+)
+const staleWip = danglingWip.length + claimedWip.length + excludedWip.length + baselinedWip.length
 
 const unknownScopes = []
 const missingScopes = []
@@ -464,7 +509,8 @@ if (
   missingScopes.length === 0 &&
   danglingExclusions.length === 0 &&
   claimedExclusions.length === 0 &&
-  baselinedExclusions.length === 0
+  baselinedExclusions.length === 0 &&
+  staleWip === 0
 ) {
   const notOurs = scenarios.filter((s) => excluded.has(s.key))
   const wip = scenarios.filter((s) => s.wip && !excluded.has(s.key)).length
@@ -476,6 +522,12 @@ if (
       (notOurs.length > 0 ? `, ${notOurs.length} not this project's` : '') +
       `, ${refs.length} Covers tag(s) resolved.`,
   )
+  if (wipLines.length > 0) {
+    console.log("This project's wip:")
+    for (const s of scenarios.filter((s) => projectWip.has(s.key))) {
+      console.log(`  ${s.specFile} :: ${s.title} — ${projectWip.get(s.key).reason}`)
+    }
+  }
   if (notOurs.length > 0) {
     console.log("Not this project's:")
     for (const s of notOurs) {
@@ -516,5 +568,16 @@ if (claimedExclusions.length > 0) {
 if (baselinedExclusions.length > 0) {
   console.error('Excluded scenarios still in the baseline (delete the baseline line):')
   for (const e of baselinedExclusions) console.error(`  ${e.label}`)
+}
+const wipSections = [
+  ['Wip lines matching no scenario (renamed or removed — update or delete them):', danglingWip],
+  ['Wip lines for scenarios a test now claims (promoted — delete the wip line):', claimedWip],
+  ['Wip lines for excluded scenarios (a scenario is ours or not — keep one line):', excludedWip],
+  ['Wip scenarios still in the baseline (the baseline only shrinks — delete the baseline line):', baselinedWip],
+]
+for (const [heading, entries] of wipSections) {
+  if (entries.length === 0) continue
+  console.error(heading)
+  for (const e of entries) console.error(`  ${e.label}`)
 }
 process.exit(1)

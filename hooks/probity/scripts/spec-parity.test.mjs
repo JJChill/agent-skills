@@ -435,5 +435,100 @@ const coversId = '// Covers: @id:blocked-number\nfunc testBlocked() {}\n'
   rmSync(d, { recursive: true, force: true })
 }
 
+// 30–35. Issue #111: per-project wip for a shared spec repository.
+const TWO = `Feature: F
+
+  Scenario: Ours
+    Given a
+
+  @wip @system
+  Scenario: Shared wip
+    Given a
+
+  Scenario: Driving now
+    Given a
+`
+const ours = '// Covers: sample.feature :: Scenario: Ours\n'
+const WIP_LINE = 'sample.feature :: Driving now # outside-in, no clock port yet\n'
+const wipArgs = (d) => ['--wip', join(d, 'parity/wip.txt')]
+
+// 30. A wip line exempts the scenario; the report lists it with its note.
+{
+  const d = workspace({ 'specs/sample.feature': TWO, [coversMd]: ours, 'parity/wip.txt': WIP_LINE })
+  const { code, out } = run(d, wipArgs(d))
+  const noNote = workspace({ 'specs/sample.feature': TWO, [coversMd]: ours, 'parity/wip.txt': 'sample.feature :: Driving now\n' })
+  const bad = run(noNote, wipArgs(noNote))
+  check(
+    'wip file: line exempts and is listed with its note; a line without a note -> exit 2',
+    code === 0 && /2 wip/.test(out) && /Driving now — outside-in, no clock port yet/.test(out) && bad.code === 2,
+  )
+  rmSync(d, { recursive: true, force: true })
+  rmSync(noNote, { recursive: true, force: true })
+}
+
+// 31. --shared-wip ignore makes spec markers informational.
+{
+  const d = workspace({ 'specs/sample.feature': TWO, [coversMd]: ours, 'parity/wip.txt': WIP_LINE })
+  const honored = run(d, wipArgs(d))
+  const ignored = run(d, [...wipArgs(d), '--shared-wip', 'ignore'])
+  writeFileSync(join(d, 'parity/wip.txt'), WIP_LINE + 'sample.feature :: Shared wip # not started here\n')
+  const listed = run(d, [...wipArgs(d), '--shared-wip', 'ignore'])
+  check(
+    'shared-wip ignore: spec @wip no longer exempts; a project wip line does',
+    honored.code === 0 && ignored.code === 1 && /Shared wip/.test(ignored.out) && listed.code === 0,
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 32. Stale wip lines fail: claimed, excluded, baselined, or matching nothing.
+{
+  const base = { 'specs/sample.feature': TWO, [coversMd]: ours, 'parity/wip.txt': WIP_LINE }
+  const claimed = workspace({ ...base, [coversMd]: ours + '// Covers: sample.feature :: Scenario: Driving now\n' })
+  const excluded = workspace({ ...base, 'parity/ex.txt': 'sample.feature :: Driving now # backend\n' })
+  const baselined = workspace({ ...base, 'parity/baseline': 'sample.feature :: Driving now\n' })
+  const dangling = workspace({ ...base, 'parity/wip.txt': WIP_LINE + 'sample.feature :: Gone # old\n' })
+  const a = run(claimed, wipArgs(claimed))
+  const b = run(excluded, [...wipArgs(excluded), '--exclusions', join(excluded, 'parity/ex.txt')])
+  const c = run(baselined, [...wipArgs(baselined), '--baseline', join(baselined, 'parity/baseline')])
+  const e = run(dangling, wipArgs(dangling))
+  check(
+    'wip file: claimed, excluded, baselined and dangling wip lines fail (exit 1)',
+    a.code === 1 && /wip line/.test(a.out) &&
+      b.code === 1 && /excluded/i.test(b.out) &&
+      c.code === 1 && /baseline/i.test(c.out) &&
+      e.code === 1 && /Gone/.test(e.out),
+  )
+  for (const dir of [claimed, excluded, baselined, dangling]) rmSync(dir, { recursive: true, force: true })
+}
+
+// 33. --write-baseline leaves wip-listed scenarios out.
+{
+  const d = workspace({ 'specs/sample.feature': TWO, 'parity/wip.txt': WIP_LINE })
+  const file = join(d, 'parity/baseline')
+  const { code } = run(d, [...wipArgs(d), '--baseline', file, '--write-baseline'])
+  const written = readFileSync(file, 'utf8')
+  check('wip file: --write-baseline skips wip lines', code === 0 && /:: Ours/.test(written) && !/Driving now/.test(written))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 34. --shared-wip takes honor or ignore.
+{
+  const d = workspace({ 'specs/sample.feature': TWO, [coversMd]: ours })
+  const { code } = run(d, ['--shared-wip', 'sometimes'])
+  check('shared-wip: unknown value -> usage error (exit 2)', code === 2)
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 35. A wip-listed scenario skips scope checks, like a spec @wip.
+{
+  const d = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  @system\n  Scenario: Driving now\n    Given a\n',
+    'parity/wip.txt': WIP_LINE,
+  })
+  const { code } = run(d, wipArgs(d))
+  check('wip file: listed scenario skips its scope check (exit 0)', code === 0)
+  rmSync(d, { recursive: true, force: true })
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

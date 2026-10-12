@@ -329,6 +329,24 @@ type ScanOptions = {
    */
   ignoreTags?: string[]
   /**
+   * This project's work in progress (optional), for a shared spec
+   * repository whose `@wip` markers other consumers control (issue
+   * #111). Same line format as `exclusionsPath`, with a required note on
+   * what is happening or what blocks it — in a shared repository this is
+   * where the stop-and-ask record for a missing seam goes. Listed
+   * scenarios are exempt like `@wip` ones. A wip line for a claimed
+   * scenario (promoted: delete the line), an excluded one, a baselined
+   * one (the baseline is a snapshot from adoption that only shrinks), or
+   * none blocks. Missing file → no project wip.
+   */
+  wipPath?: string
+  /**
+   * How the specs' own `@wip`/`@planned`/`(wip)` markers count here:
+   * `'honor'` (default) exempts them as before; `'ignore'` makes them
+   * information only, so `wipPath` is this project's only wip list.
+   */
+  sharedWip?: 'honor' | 'ignore'
+  /**
    * Files the pending commit will record, relative to the root of the
    * working tree being committed (`cwd`: the project, or a worktree nested
    * in it). Defaults to Git's staged set plus tracked modifications for
@@ -361,8 +379,8 @@ export function readBaseline(path: string | undefined): Set<string> {
 type Exclusion = { key: string; label: string; reason: string }
 
 /**
- * Parses an exclusions file (`<spec> :: <title> # <reason>` or
- * `@id:<slug> # <reason>` per line).
+ * Parses an exclusions or wip file (`<spec> :: <title> # <reason>` or
+ * `@id:<slug> # <reason>` per line; the same format serves both).
  * Missing file → none. A line without the separator or a reason lands
  * in `malformed`: unlike the baseline, an exclusion must say why.
  */
@@ -527,6 +545,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const testRoots = options.testRoots.map(inTree)
     const baselinePath = options.baselinePath && inTree(options.baselinePath)
     const exclusionsPath = options.exclusionsPath && inTree(options.exclusionsPath)
+    const wipPath = options.wipPath && inTree(options.wipPath)
     // Hook processes are anchored to the project root. Scope only when that
     // relationship is known (or a test injects the lister); otherwise retain
     // the historical fail-safe full scan.
@@ -540,6 +559,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
             // (issue #107).
             (!!baselinePath && pathsIntersect(absolute, baselinePath)) ||
             (!!exclusionsPath && pathsIntersect(absolute, exclusionsPath)) ||
+            (!!wipPath && pathsIntersect(absolute, wipPath)) ||
             matches(pattern, file) ||
             matches(pattern, absolute)
           )
@@ -570,6 +590,17 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           'and every exclusion needs ' +
           'a reason naming who owns the scenario:\n' +
           formatList(exclusionFile.malformed),
+      }
+    }
+    const wipFile = readExclusions(wipPath)
+    if (wipFile.malformed.length > 0) {
+      return {
+        kind: 'violation',
+        reason:
+          `Spec↔test parity: wip lines in ${wipPath} must read ` +
+          '`<spec>.feature :: <title> # <note>` or `@id:<slug> # <note>`, ' +
+          'and every wip line needs a note saying what is happening or what blocks it:\n' +
+          formatList(wipFile.malformed),
       }
     }
     // During the .feature.md -> .feature migration a spec is one extension
@@ -612,6 +643,13 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     // baselined exclusion blocks below as stale rather than silently winning.
     const exclusions = exclusionFile.entries.map((entry) => ({ ...entry, key: resolveRef(entry.key) }))
     const excluded = new Set(exclusions.map((entry) => entry.key))
+    const wipLines = wipFile.entries.map((entry) => ({ ...entry, key: resolveRef(entry.key) }))
+    const projectWip = new Set(wipLines.map((entry) => entry.key))
+    // Issue #111: with sharedWip 'ignore' the specs' own markers are
+    // information only; either way, this project's wip lines count as wip.
+    for (const s of scenarios) {
+      s.wip = (options.sharedWip !== 'ignore' && s.wip) || projectWip.has(s.key)
+    }
     const orphaned = scenarios.filter(
       (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
     )
@@ -623,6 +661,28 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const baselinedExclusions = exclusions.filter(
       (entry) => known.has(entry.key) && baseline.has(entry.key),
     )
+    const wipProblems: [string, Exclusion[]][] = [
+      [
+        'Wip lines matching no scenario (renamed or removed — update or delete them)',
+        wipLines.filter((entry) => !known.has(entry.key)),
+      ],
+      [
+        'Wip lines for scenarios a test now claims (promoted — delete the wip line)',
+        wipLines.filter((entry) => known.has(entry.key) && claimed.has(entry.key)),
+      ],
+      [
+        'Wip lines for excluded scenarios (a scenario is ours or not — keep one line)',
+        wipLines.filter((entry) => excluded.has(entry.key)),
+      ],
+      [
+        'Wip scenarios still in the baseline (the baseline is a snapshot from ' +
+          'adoption that only shrinks — delete the baseline line)',
+        wipLines.filter(
+          (entry) => known.has(entry.key) && !excluded.has(entry.key) && baseline.has(entry.key),
+        ),
+      ],
+    ]
+    const staleWip = wipProblems.some(([, entries]) => entries.length > 0)
     const unknownScopes: string[] = []
     const missingScopes: string[] = []
     for (const scenario of scenarios) {
@@ -653,7 +713,8 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       missingScopes.length === 0 &&
       danglingExclusions.length === 0 &&
       claimedExclusions.length === 0 &&
-      baselinedExclusions.length === 0
+      baselinedExclusions.length === 0 &&
+      !staleWip
     )
       return { kind: 'pass' }
     const sections: string[] = ['Spec↔test parity check failed.']
@@ -707,6 +768,9 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         'Excluded scenarios still in the baseline (delete the baseline line):\n' +
           exclusionLines(baselinedExclusions),
       )
+    }
+    for (const [heading, entries] of wipProblems) {
+      if (entries.length > 0) sections.push(`${heading}:\n` + exclusionLines(entries))
     }
     return { kind: 'violation', reason: sections.join('\n') }
   }
