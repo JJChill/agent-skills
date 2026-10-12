@@ -149,7 +149,22 @@ Trustworthy tests control all the variables.
 
 - **Commit stage** (minutes): unit tests from TDD plus tactical integration tests.
 - **Acceptance stage** (under an hour): the full executable-specification suite against a production-like deployment, alongside the other releasability tests (performance, security, resilience). Passing means releasable.
-- **In-progress features:** a new spec fails until the feature is built. Keep it out of the main pipeline (tagged/quarantined) while it drives development; enable it the moment it passes. Store acceptance tests in the same repository and commits as the code they specify.
+- **In-progress features:** a new spec fails until the feature is built, but it is still committed with the code, in small steps. Mark it **expected-to-fail**: it runs on every build and passes only while its scenario still fails, so the pipeline stays green, and the build goes red the moment the feature works, saying to remove the marker. Promotion can't be forgotten. Use the framework's own marker where there is one (Jest `test.failing`, Vitest `test.fails`, Swift Testing `withKnownIssue`, XCTest `XCTExpectFailure`). kotlin.test has none (and no tags, so neither skipping nor tag filtering works in `commonTest`), so own a small helper beside the DSL:
+
+  ```kotlin
+  // Expected-to-fail: passes while the scenario fails, fails once it passes.
+  inline fun inProgress(scenario: () -> Unit) {
+      val failure = runCatching(scenario).exceptionOrNull()
+          ?: fail("This scenario now passes: remove inProgress and its scenario's wip marker.")
+      println("In progress, failing as expected: ${failure.message}")
+  }
+
+  // Covers: invoicing.feature :: Scenario: A submitted invoice awaits authorisation
+  @Test
+  fun `a submitted invoice awaits authorisation`() = inProgress { … }
+  ```
+
+  The scenario stays `(wip)` until the marker comes off: an expected-to-fail test does not cover its scenario. Store acceptance tests in the same repository and commits as the code they specify.
 - A failing acceptance test means a bug in the code or the test infrastructure — developers own the infrastructure and the fix. The specification itself changes only when the need changes.
 
 ## Common Rationalizations
@@ -197,4 +212,4 @@ After writing or changing acceptance tests, confirm:
 - [ ] Each test creates its own isolated data; the suite passes when run in parallel and when run twice in a row
 - [ ] Every Given is established by the test (fixture, programmed stub, substituted port) — no precondition is satisfied only by the ambient environment; where a control fixture had no red to drive it, the inverse scenario exists and drove it
 - [ ] No sleeps — concluding events are polled with timeouts
-- [ ] The suite runs in the pipeline's acceptance stage against a production-like deployment; in-progress specs are quarantined, completed ones enabled
+- [ ] The suite runs in the pipeline's acceptance stage against a production-like deployment; in-progress specs are committed expected-to-fail with their scenario `(wip)`, and the marker and the wip come off together when they pass

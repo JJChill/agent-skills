@@ -118,6 +118,10 @@ export type KmpPresetOptions = {
   /** `'ignore'` makes the specs' own `@wip` markers informational, so
    *  `wipPath` is the only wip list. Default `'honor'`. */
   sharedWip?: 'honor' | 'ignore'
+  /** Expected-to-fail marker for in-progress acceptance tests (issue #115);
+   *  default `DEFAULT_IN_PROGRESS_PATTERN` (`= inProgress {`, `test.failing`,
+   *  `test.fails`, `withKnownIssue`, `XCTExpectFailure`). */
+  inProgressPattern?: RegExp
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
@@ -492,6 +496,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       ignoreTags: options.ignoreTags,
       wipPath,
       sharedWip: options.sharedWip,
+      inProgressPattern: options.inProgressPattern,
       testFilePattern: options.testFilePattern,
       driverScopes: options.driverScopes,
       defaultScopes: options.defaultScopes,

@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.35
+
+In-progress acceptance tests are committed expected-to-fail (#115).
+
+- **What was missing.** A spec that drives a feature fails until the
+  feature works, and `requireGreenTestRun` blocks any commit after a red
+  run. `@Ignore` sends the write to the judge as a disabling control, and
+  parity left "keeping in-progress specs out of the pipeline" to a
+  pipeline nothing configured. So the spec, DSL, driver and code landed in
+  one green commit, the opposite of committing in small steps.
+- **Now:**
+  - A test carrying an **expected-to-fail marker** passes only while its
+    scenario fails: `= inProgress {` (a project-owned Kotlin helper; the
+    acceptance-testing skill gives it), Jest `test.failing`, Vitest
+    `test.fails`, Swift Testing `withKnownIssue`, XCTest
+    `XCTExpectFailure`. The build stays green; the green gate is
+    unchanged.
+  - **Parity** (`inProgressPattern`, CLI `--in-progress`; default
+    `DEFAULT_IN_PROGRESS_PATTERN`; presets pass `inProgressPattern`): a
+    `Covers:` tag belongs to the test it sits on or inside, and a claim
+    from a marked test is in progress. It is not coverage, so a scenario
+    claimed only in progress must be wip, or the gate blocks.
+  - **Behaviour change:** a wip scenario a finished test claims now
+    blocks as promoted for the spec's own `@wip`/`(wip)` marker too (under
+    `sharedWip: 'honor'`), not only for wip-file lines. Remove the marker
+    in the change that finishes the test.
+  - Scope checks count finished claims only; dangling tags and exclusion
+    contradictions count every claim.
+  - The Kotlin, Swift and JS **TDD judges** are told that an
+    expected-to-fail test's green run is no evidence and no red, that
+    adding a new one is allowed, that removing the marker makes it an
+    ordinary test, and that adding the marker to an existing test disables
+    it.
+
 ## 0.4.34
 
 Work in progress is per project for a shared spec repository (#111).

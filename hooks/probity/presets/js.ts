@@ -146,6 +146,10 @@ export type JsPresetOptions = {
   /** `'ignore'` makes the specs' own `@wip` markers informational, so
    *  `parityWipPath` is the only wip list. Default `'honor'`. */
   sharedWip?: 'honor' | 'ignore'
+  /** Expected-to-fail marker for in-progress acceptance tests (issue #115);
+   *  default `DEFAULT_IN_PROGRESS_PATTERN` (`= inProgress {`, `test.failing`,
+   *  `test.fails`, `withKnownIssue`, `XCTExpectFailure`). */
+  inProgressPattern?: RegExp
   /** Scenario tags that are not driver scopes in this project (shared
    *  tags another consumer uses). Unlisted unknown tags still block. */
   ignoreTags?: string[]
@@ -334,6 +338,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
         ignoreTags: options.ignoreTags,
         wipPath: options.parityWipPath,
         sharedWip: options.sharedWip,
+      inProgressPattern: options.inProgressPattern,
         driverScopes: options.driverScopes,
         defaultScopes: options.defaultScopes,
       }),

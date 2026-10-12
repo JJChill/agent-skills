@@ -151,6 +151,10 @@ export type SwiftPresetOptions = {
   /** `'ignore'` makes the specs' own `@wip` markers informational, so
    *  `wipPath` is the only wip list. Default `'honor'`. */
   sharedWip?: 'honor' | 'ignore'
+  /** Expected-to-fail marker for in-progress acceptance tests (issue #115);
+   *  default `DEFAULT_IN_PROGRESS_PATTERN` (`= inProgress {`, `test.failing`,
+   *  `test.fails`, `withKnownIssue`, `XCTExpectFailure`). */
+  inProgressPattern?: RegExp
 }
 
 function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
@@ -419,6 +423,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
       ignoreTags: options.ignoreTags,
       wipPath: options.wipPath ?? join(root, 'docs/spec-wip.txt'),
       sharedWip: options.sharedWip,
+      inProgressPattern: options.inProgressPattern,
       // driverScopes: [
       //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
       //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },
