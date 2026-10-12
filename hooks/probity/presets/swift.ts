@@ -255,6 +255,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
         surfaceScenarioLinkBreakage({
           testRoots: [root],
           testFilePattern: ACCEPTANCE_TEST_FILES,
+          specsDir: join(root, 'docs/specs'),
         }),
       ],
     },

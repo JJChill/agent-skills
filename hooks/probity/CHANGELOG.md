@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.33
+
+Scenarios can carry a stable id, so a shared spec repository can reword
+a title without breaking every consumer's references (#106). Opt-in per
+scenario; title references keep working.
+
+- **What was missing.** Scenario keys were titles. With one consumer, a
+  rename is one guided change. With a spec repository shared by several
+  projects (#105), rewording a title in the shared repository broke every
+  consumer's `Covers:` tags, baseline lines and exclusions at their next
+  submodule bump, and nothing in the shared repository could see them.
+- **Now:**
+  - **Declaring an id:** a Gherkin `@id:<slug>` tag, or `id:<slug>` in
+    the Markdown bracket list (`## Scenario [system, id:<slug>]: …`).
+    Optional, unique across the specs directory, one per scenario;
+    duplicates and double ids fail the commit gate and the CLI (exit 2).
+    An id is never a driver scope.
+  - **Citing an id:** `// Covers: @id:<slug>`, a baseline line
+    `@id:<slug>`, an exclusion line `@id:<slug> # <reason>`. An unknown
+    id is dangling, like a stale title. `--write-baseline` writes the id
+    form for scenarios that have one.
+  - **Write-time rules:** `requireSpecBackedAcceptanceTest` accepts a
+    `Covers:` tag by id. `surfaceScenarioLinkBreakage` passes a reworded
+    title claimed only by id, blocks dropping an id tests still cite, and
+    with its new optional `specsDir` (the KMP, Swift and JS presets pass
+    it) lets an id move to another spec file.
+- **Not done** (from the issue): ids are written by hand, not generated;
+  they are not mandatory for shared repositories; retired ids are not
+  tracked, so reuse is not detected. The rename-detection fallback was
+  only needed if ids were rejected.
+
 ## 0.4.32
 
 Spec parity supports a spec repository shared by several consumers

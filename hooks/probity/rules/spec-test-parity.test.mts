@@ -13,6 +13,8 @@ import {
   extractScenarios,
   extractCoversRefs,
   enforceSpecTestParity,
+  requireSpecBackedAcceptanceTest,
+  surfaceScenarioLinkBreakage,
 } from './spec-test-parity.ts'
 
 let passed = 0
@@ -350,6 +352,124 @@ async function parity(files: Record<string, string>, extra: Record<string, unkno
     check('rule exclusion: an exclusions-only commit runs the gate', res.kind === 'violation')
   } finally {
     process.chdir(originalCwd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 18–23. Issue #106: stable scenario ids.
+const withId = (title: string) =>
+  `Feature: F\n\n  @id:blocked-number\n  Scenario: ${title}\n    Given a\n    Then b\n`
+const COVERS_ID = '// Covers: @id:blocked-number\nfunc testBlocked(){}\n'
+
+// 18. Gherkin and Markdown ids parse; an id is not a scope.
+{
+  const g = extractScenarios('a.feature', withId('Blocked'))[0]
+  const m = extractScenarios('b.feature.md', '## Scenario [system, id:blocked-number]: Blocked\n')[0]
+  const ref = extractCoversRefs('T.swift', COVERS_ID)[0]
+  check(
+    'ids: parsed from @id:/[id:], not scopes; Covers by id parsed',
+    g?.id === 'blocked-number' && g.scopes.length === 0 &&
+      m?.id === 'blocked-number' && m.scopes.join(',') === 'system' &&
+      ref?.id === 'blocked-number',
+  )
+}
+
+// 19. The gate resolves id references; a retitled scenario keeps them.
+{
+  const byId = await parity({ 'specs/sample.feature': withId('A blocked number never reaches the owner'), 'tests/T.swift': COVERS_ID })
+  const byStaleTitle = await parity({
+    'specs/sample.feature': withId('A blocked number never reaches the owner'),
+    'tests/T.swift': '// Covers: sample.feature :: Scenario: Blocked\n',
+  })
+  const unknown = await parity({ 'specs/sample.feature': withId('Blocked'), 'tests/T.swift': COVERS_ID + '// Covers: @id:nope\n' })
+  check(
+    'ids: gate resolves by id; stale title and unknown id dangle',
+    byId.kind === 'pass' && byStaleTitle.kind === 'violation' &&
+      unknown.kind === 'violation' && /@id:nope/.test(unknown.reason ?? ''),
+  )
+}
+
+// 20. Duplicate ids, and two ids on one scenario, block.
+{
+  const dup = await parity({ 'specs/a.feature': withId('One'), 'specs/b.feature': withId('Two'), 'tests/T.swift': COVERS_ID })
+  const two = await parity({ 'specs/a.feature': 'Feature: F\n\n  @id:one @id:two\n  Scenario: Both\n    Given a\n' })
+  check('ids: duplicate or double id -> violation', dup.kind === 'violation' && /twice/.test(dup.reason ?? '') && two.kind === 'violation')
+}
+
+// 21. Baseline and exclusion lines resolve ids.
+{
+  const res = await parity({
+    'specs/sample.feature': withId('Blocked') + '\n  @id:ours\n  Scenario: Ours\n    Given a\n',
+    'parity/baseline': '@id:ours\n',
+    'parity/exclusions.txt': '@id:blocked-number # backend enforces the block list\n',
+  })
+  const dangling = await parity({
+    'specs/sample.feature': withId('Blocked'),
+    'tests/T.swift': COVERS_ID,
+    'parity/exclusions.txt': '@id:gone # removed upstream\n',
+  })
+  check(
+    'ids: baseline and exclusions by id; unknown id exclusion dangles',
+    res.kind === 'pass' && dangling.kind === 'violation' && /@id:gone/.test(dangling.reason ?? ''),
+  )
+}
+
+// 22. Spec-first write gate accepts a Covers tag by id.
+{
+  const dir = workspace({ 'specs/sample.feature': withId('Blocked') })
+  try {
+    const rule = requireSpecBackedAcceptanceTest({ specsDir: join(dir, 'specs') })
+    const ctx = { readFile: async () => ({ kind: 'absent' as const }) } as any
+    const write = (content: string) => ({ kind: 'write', path: join(dir, 'tests/T.swift'), content }) as any
+    const known = await rule(write(COVERS_ID), ctx)
+    const unknown = await rule(write('// Covers: @id:nope\nfunc testNope(){}\n'), ctx)
+    check(
+      'ids: spec-first write gate resolves an id; unknown id blocks',
+      known.kind === 'pass' && unknown.kind === 'violation' && /@id:nope/.test((unknown as any).reason),
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 23. Link breakage: rewording a title claimed by id passes; removing the
+// id, or rewording a title claimed by title, blocks.
+{
+  const dir = workspace({ 'tests/T.swift': COVERS_ID, 'tests/U.swift': '// Covers: sample.feature :: Scenario: Ours\n' })
+  try {
+    const rule = surfaceScenarioLinkBreakage({ testRoots: [dir], testFilePattern: /tests/ })
+    const before = withId('Blocked') + '\n  Scenario: Ours\n    Given a\n'
+    const ctx = { readFile: async () => ({ kind: 'present' as const, content: before }) } as any
+    const write = (content: string) => ({ kind: 'write', path: join(dir, 'specs/sample.feature'), content }) as any
+    const retitled = await rule(write(before.replace('Scenario: Blocked', 'Scenario: Never reaches the owner')), ctx)
+    const idRemoved = await rule(write(before.replace('@id:blocked-number', '@system')), ctx)
+    const titleRef = await rule(write(before.replace('Scenario: Ours', 'Scenario: Mine')), ctx)
+    check(
+      'ids: retitle claimed by id passes; dropping the id or retitling a title claim blocks',
+      retitled.kind === 'pass' && idRemoved.kind === 'violation' && titleRef.kind === 'violation',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 24. Moving an id'd scenario to another spec file is not breakage.
+{
+  const dir = workspace({
+    'tests/T.swift': COVERS_ID,
+    'specs/sample.feature': withId('Blocked'),
+    'specs/blocking.feature': withId('Blocked'),
+  })
+  try {
+    const ctx = { readFile: async () => ({ kind: 'present' as const, content: withId('Blocked') }) } as any
+    const write = { kind: 'write', path: join(dir, 'specs/sample.feature'), content: 'Feature: F\n' } as any
+    const withSpecs = surfaceScenarioLinkBreakage({ testRoots: [dir], testFilePattern: /tests/, specsDir: join(dir, 'specs') })
+    const without = surfaceScenarioLinkBreakage({ testRoots: [dir], testFilePattern: /tests/ })
+    check(
+      'ids: removing an id another spec now carries passes (with specsDir)',
+      (await withSpecs(write, ctx)).kind === 'pass' && (await without(write, ctx)).kind === 'violation',
+    )
+  } finally {
     rmSync(dir, { recursive: true, force: true })
   }
 }
