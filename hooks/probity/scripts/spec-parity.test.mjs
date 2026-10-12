@@ -337,5 +337,103 @@ const EXCLUSION = 'sample.feature :: Backend enforces it # backend enforces the 
   rmSync(d, { recursive: true, force: true })
 }
 
+// 23–29. Issue #106: stable scenario ids, so a shared spec repository can
+// reword titles without breaking every consumer's references.
+const withId = (title) =>
+  `Feature: F\n\n  @id:blocked-number\n  Scenario: ${title}\n    Given a\n    Then b\n`
+const coversId = '// Covers: @id:blocked-number\nfunc testBlocked() {}\n'
+
+// 23. A Covers tag can cite a scenario by id; the id tag is not a scope.
+{
+  const d = workspace({ 'specs/sample.feature': withId('Blocked number cannot reach the owner'), [coversMd]: coversId })
+  const { code, out } = run(d)
+  check('ids: Covers by id resolves; @id is not a driver scope (exit 0)', code === 0 && /1 scenario\(s\) covered/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 24. Rewording the title keeps id references; title references break.
+{
+  const d = workspace({
+    'specs/sample.feature': withId('A blocked number never reaches the owner'),
+    [coversMd]: coversId,
+  })
+  const byId = run(d)
+  writeFileSync(join(d, coversMd), '// Covers: sample.feature :: Scenario: Blocked number cannot reach the owner\n')
+  const byTitle = run(d)
+  check('ids: retitled scenario still claimed by id; stale title tag dangles', byId.code === 0 && byTitle.code === 1)
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 25. Markdown carries the id in the bracket list, beside scopes.
+{
+  const d = workspace({
+    'specs/sample.feature.md': '# F\n\n## Scenario [system, id:blocked-number]: Blocked\n\nGiven a\nThen b\n',
+    [coversMd]: coversId,
+  })
+  const { code } = run(d, ['--scope', 'system=tests/'])
+  check('ids: markdown [scope, id:x] resolves by id and keeps the scope (exit 0)', code === 0)
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 26. A Covers tag citing an unknown id dangles.
+{
+  const d = workspace({ 'specs/sample.feature': withId('Blocked'), [coversMd]: coversId + '// Covers: @id:no-such-thing\n' })
+  const { code, out } = run(d)
+  check('ids: unknown id is a dangling Covers tag (exit 1)', code === 1 && /@id:no-such-thing/.test(out))
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 27. Ids are unique across the spec directory; one id per scenario.
+{
+  const dup = workspace({
+    'specs/a.feature': withId('One'),
+    'specs/b.feature': withId('Two'),
+    [coversMd]: coversId,
+  })
+  const two = workspace({
+    'specs/sample.feature': 'Feature: F\n\n  @id:one @id:two\n  Scenario: Both\n    Given a\n',
+  })
+  const a = run(dup)
+  const b = run(two)
+  check(
+    'ids: duplicate id or two ids on one scenario -> usage error (exit 2)',
+    a.code === 2 && /blocked-number/.test(a.out) && b.code === 2,
+  )
+  rmSync(dup, { recursive: true, force: true })
+  rmSync(two, { recursive: true, force: true })
+}
+
+// 28. Baseline and exclusion lines can cite ids.
+{
+  const d = workspace({
+    'specs/sample.feature': withId('Blocked') + '\n  @id:ours\n  Scenario: Ours\n    Given a\n',
+    'parity/baseline': '@id:ours\n',
+    'parity/exclusions.txt': '@id:blocked-number # backend enforces the block list\n',
+  })
+  const { code, out } = run(d, [
+    '--baseline', join(d, 'parity/baseline'),
+    '--exclusions', join(d, 'parity/exclusions.txt'),
+  ])
+  check(
+    'ids: baseline and exclusion lines resolve by id (exit 0)',
+    code === 0 && /1 baselined/.test(out) && /1 not this project's/.test(out),
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
+// 29. --write-baseline writes the id form for scenarios that have one.
+{
+  const d = workspace({ 'specs/sample.feature': withId('Blocked') + '\n  Scenario: Plain\n    Given a\n' })
+  const file = join(d, 'parity/baseline')
+  mkdirSync(join(d, 'parity'), { recursive: true })
+  const { code } = run(d, ['--baseline', file, '--write-baseline'])
+  const written = readFileSync(file, 'utf8')
+  check(
+    'ids: --write-baseline writes @id:<slug> where a scenario has one',
+    code === 0 && /^@id:blocked-number$/m.test(written) && /^sample\.feature :: Plain$/m.test(written),
+  )
+  rmSync(d, { recursive: true, force: true })
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

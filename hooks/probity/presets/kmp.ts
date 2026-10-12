@@ -307,7 +307,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     {
       files: specGlobs,
       rules: [
-        surfaceScenarioLinkBreakage({ testRoots, testFilePattern: options.testFilePattern }),
+        surfaceScenarioLinkBreakage({ testRoots, testFilePattern: options.testFilePattern, specsDir }),
       ],
     },
 

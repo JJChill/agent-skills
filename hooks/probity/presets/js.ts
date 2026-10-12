@@ -248,7 +248,11 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
     entries.push({
       files: specGlobs,
       rules: [
-        surfaceScenarioLinkBreakage({ testRoots, testFilePattern: options.testFilePattern }),
+        surfaceScenarioLinkBreakage({
+          testRoots,
+          testFilePattern: options.testFilePattern,
+          specsDir: options.specsDir,
+        }),
       ],
     })
 

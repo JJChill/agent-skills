@@ -43,7 +43,7 @@ The examples live in a durable, human-readable spec artifact — a Gherkin `.fea
 // Covers: onboarding.feature.md :: Scenario: New user completes onboarding
 ```
 
-An acceptance test with no feature file behind it is not a specification — it's a test someone will reverse-engineer intent from later. The order is mechanical: scenario heading first, then the test that claims it. The tags make traceability checkable in both directions (every scenario covered, every tag resolving to a real scenario); mark scenarios still being driven outside-in `## Scenario (wip):`. Teams enforcing this with hooks can use the `requireSpecBackedAcceptanceTest` / `enforceSpecTestParity` rules in the Probity templates (`hooks/PROBITY.md`).
+An acceptance test with no feature file behind it is not a specification — it's a test someone will reverse-engineer intent from later. The order is mechanical: scenario heading first, then the test that claims it. The tags make traceability checkable in both directions (every scenario covered, every tag resolving to a real scenario); mark scenarios still being driven outside-in `## Scenario (wip):`. When several projects share one spec repository, give the scenario a stable id (`@id:<slug>`) and claim it with `// Covers: @id:<slug>`, so the title can be reworded without breaking every project's tests. Teams enforcing this with hooks can use the `requireSpecBackedAcceptanceTest` / `enforceSpecTestParity` rules in the Probity templates (`hooks/PROBITY.md`).
 
 ### The Language Test
 

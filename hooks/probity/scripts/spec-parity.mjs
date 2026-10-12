@@ -61,6 +61,13 @@
  *   scope tag:     ## Scenario [system]: <title>   (after any (wip) marker)
  *                  or a Gherkin `@system` tag on the scenario
  *   test tag:      Covers: <spec>.feature[.md] :: Scenario: <title>
+ *   stable id:     Gherkin `@id:<slug>` tag, or `id:<slug>` in the Markdown
+ *                  bracket list (`## Scenario [system, id:<slug>]: <title>`).
+ *                  Optional, unique across the specs directory, one per
+ *                  scenario (issue #106). Tests then cite `Covers: @id:<slug>`,
+ *                  baseline lines `@id:<slug>`, exclusion lines
+ *                  `@id:<slug> # <reason>`, and the title can be reworded
+ *                  without breaking them. Title references keep working.
  *
  * Spec files may be either <name>.feature.md (Markdown) or <name>.feature
  * (Gherkin); the two extensions are interchangeable (matched by stem) so a
@@ -82,6 +89,9 @@ const GHERKIN_SCENARIO = /^Scenario(?:\s+Outline)?:\s*(.+?)\s*$/
 // Covers tags accept either extension so a tag survives its spec's
 // conversion unchanged: Covers: <spec>.feature[.md] :: Scenario: <title>
 const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^\n]+)/g
+// Or by stable id (issue #106): Covers: @id:<slug>
+const COVERS_ID = /Covers:\s*@id:([\w.-]+)/g
+const ID_REF = /^@id:([\w.-]+)$/
 const SKIP_DIRS = new Set(['node_modules', '.git', 'build', '.gradle', 'out', 'dist', '.idea'])
 
 function parseArgs(argv) {
@@ -199,6 +209,9 @@ const splitScopeList = (raw) =>
     .map((scope) => scope.trim().toLowerCase())
     .filter(Boolean)
 
+// `id:<slug>` entries in a tag list are stable ids, not scopes or markers.
+const isIdTag = (tag) => tag.startsWith('id:')
+
 /**
  * Parse one spec file (Markdown `## Scenario:` or Gherkin `Scenario:`)
  * into scenario records. Gherkin `@tags` on the lines preceding a
@@ -217,7 +230,8 @@ function parseScenarios(file) {
         specFile: basename(file),
         title: md[4].trim(),
         wip: md[1] !== undefined,
-        scopes: splitScopeList(md[3]),
+        scopes: splitScopeList(md[3]).filter((tag) => !isIdTag(tag)),
+        ids: splitScopeList(md[3]).filter(isIdTag).map((tag) => tag.slice(3)),
       })
       tags = []
       continue
@@ -239,7 +253,8 @@ function parseScenarios(file) {
         specFile: basename(file),
         title: gherkin[1].trim(),
         wip: tags.includes('wip') || tags.includes('planned'),
-        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned'),
+        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned' && !isIdTag(tag)),
+        ids: tags.filter(isIdTag).map((tag) => tag.slice(3)),
       })
       tags = []
       continue
@@ -264,19 +279,25 @@ function readExclusions(path) {
     const line = raw.trim()
     if (!line || line.startsWith('#')) return
     const sep = line.indexOf(' :: ')
-    const hash = sep === -1 ? -1 : line.indexOf(' # ', sep + 4)
+    const hash = line.indexOf(' # ', sep === -1 ? 0 : sep + 4)
     const reason = hash === -1 ? '' : line.slice(hash + 3).trim()
-    if (sep === -1 || !reason) {
+    const id = hash === -1 ? null : line.slice(0, hash).trim().toLowerCase().match(ID_REF)
+    if ((sep === -1 && !id) || !reason) {
       console.error(
-        `${path}:${index + 1}: exclusions read \`<spec>.feature :: <title> # <reason>\`, ` +
-          'and every exclusion needs a reason naming who owns the scenario:',
+        `${path}:${index + 1}: exclusions read \`<spec>.feature :: <title> # <reason>\` ` +
+          'or `@id:<slug> # <reason>`, and every exclusion needs a reason naming who ' +
+          'owns the scenario:',
       )
       console.error(`  ${line}`)
       process.exit(2)
     }
+    if (id) {
+      entries.push({ key: `@id:${id[1]}`, label: `@id:${id[1]}`, reason })
+      return
+    }
     const specFile = line.slice(0, sep).trim()
     const title = line.slice(sep + 4, hash).trim()
-    entries.push({ key: key(specFile, title), specFile, title, reason })
+    entries.push({ key: key(specFile, title), label: `${specFile} :: ${title}`, reason })
   })
   return entries
 }
@@ -313,7 +334,37 @@ const ignoredTags = new Set(args.ignoreTags)
 const scenarios = specFiles
   .flatMap(parseScenarios)
   .map((s) => ({ ...s, scopes: s.scopes.filter((tag) => !ignoredTags.has(tag)) }))
-const exclusions = readExclusions(args.exclusions)
+
+// Stable ids (issue #106): unique across the specs directory, at most one
+// per scenario. A reference `@id:<slug>` resolves to its scenario's key;
+// an unknown id stays unresolved and so reads as dangling.
+const byId = new Map()
+for (const s of scenarios) {
+  if (s.ids.length > 1 || s.ids.some((id) => id === '')) {
+    console.error(`${s.specFile} :: ${s.title} — a scenario carries one non-empty id, got: ${s.ids.map((id) => `@id:${id}`).join(' ')}`)
+    process.exit(2)
+  }
+  const [id] = s.ids
+  if (id === undefined) continue
+  const other = byId.get(id)
+  if (other) {
+    console.error(`Scenario id @id:${id} is used twice — ids are unique across the specs directory:`)
+    console.error(`  ${other.specFile} :: ${other.title}`)
+    console.error(`  ${s.specFile} :: ${s.title}`)
+    process.exit(2)
+  }
+  byId.set(id, s)
+  s.id = id
+}
+const resolve = (ref) => {
+  const id = ref.match(ID_REF)
+  return id ? (byId.get(id[1])?.key ?? ref) : ref
+}
+
+const exclusions = readExclusions(args.exclusions).map((entry) => ({
+  ...entry,
+  key: resolve(entry.key),
+}))
 const excluded = new Map(exclusions.map((entry) => [entry.key, entry]))
 
 const refs = args.tests
@@ -324,14 +375,19 @@ const refs = args.tests
       !file.endsWith('.feature.md') &&
       !file.endsWith('.feature'),
   )
-  .flatMap((file) =>
-    [...readFileSync(file, 'utf8').matchAll(COVERS_TAG)].map((m) => ({
+  .flatMap((file) => {
+    const content = readFileSync(file, 'utf8')
+    const byTitle = [...content.matchAll(COVERS_TAG)].map((m) => ({
       key: key(m[1], m[2]),
       testFile: file,
-      specFile: m[1],
-      title: m[2].replace(/\s*(?:\*\/|["')\]]+)?\s*$/, '').trim(),
-    })),
-  )
+      label: `${m[1]} :: ${m[2].replace(/\s*(?:\*\/|["')\]]+)?\s*$/, '').trim()}`,
+    }))
+    const byIdRef = [...content.matchAll(COVERS_ID)].map((m) => {
+      const ref = `@id:${m[1].toLowerCase()}`
+      return { key: resolve(ref), testFile: file, label: ref }
+    })
+    return [...byTitle, ...byIdRef]
+  })
 
 const claimed = new Set(refs.map((ref) => ref.key))
 const known = new Set(scenarios.map((scenario) => scenario.key))
@@ -349,12 +405,14 @@ if (args.writeBaseline) {
     `# Generated by spec-parity.mjs --write-baseline (${unclaimed.length} scenario(s)).\n`
   writeFileSync(
     args.baseline,
-    header + unclaimed.map((s) => `${s.specFile} :: ${s.title}`).join('\n') + '\n',
+    header +
+      unclaimed.map((s) => (s.id ? `@id:${s.id}` : `${s.specFile} :: ${s.title}`)).join('\n') +
+      '\n',
   )
   console.log(`Wrote ${unclaimed.length} baseline entr(ies) to ${args.baseline}.`)
   if (dangling.length > 0) {
     console.error('Dangling Covers tags are never baselined — fix these:')
-    for (const r of dangling) console.error(`  ${r.testFile} → ${r.specFile} :: ${r.title}`)
+    for (const r of dangling) console.error(`  ${r.testFile} → ${r.label}`)
     process.exit(1)
   }
   process.exit(0)
@@ -367,6 +425,7 @@ const baseline = new Set(
         .map((line) => line.trim())
         .filter((line) => line && !line.startsWith('#'))
         .flatMap((line) => {
+          if (ID_REF.test(line.toLowerCase())) return [resolve(line.toLowerCase())]
           const idx = line.indexOf(' :: ')
           return idx === -1 ? [] : [key(line.slice(0, idx).trim(), line.slice(idx + 4))]
         })
@@ -431,7 +490,7 @@ if (orphaned.length > 0) {
 }
 if (dangling.length > 0) {
   console.error('Covers tags pointing at no existing scenario:')
-  for (const r of dangling) console.error(`  ${r.testFile} → ${r.specFile} :: ${r.title}`)
+  for (const r of dangling) console.error(`  ${r.testFile} → ${r.label}`)
 }
 if (missingScopes.length > 0) {
   console.error('Scenarios not covered by every driver scope they require:')
@@ -448,14 +507,14 @@ if (unknownScopes.length > 0) {
 }
 if (danglingExclusions.length > 0) {
   console.error('Exclusions matching no scenario (renamed or removed — update or delete them):')
-  for (const e of danglingExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
+  for (const e of danglingExclusions) console.error(`  ${e.label}`)
 }
 if (claimedExclusions.length > 0) {
   console.error('Excluded scenarios a test now claims (delete the exclusion):')
-  for (const e of claimedExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
+  for (const e of claimedExclusions) console.error(`  ${e.label}`)
 }
 if (baselinedExclusions.length > 0) {
   console.error('Excluded scenarios still in the baseline (delete the baseline line):')
-  for (const e of baselinedExclusions) console.error(`  ${e.specFile} :: ${e.title}`)
+  for (const e of baselinedExclusions) console.error(`  ${e.label}`)
 }
 process.exit(1)

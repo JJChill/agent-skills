@@ -36,6 +36,15 @@ import { canonical, GIT_COMMIT, gitToplevel, isWithin, nestedCommitTree } from '
  * system"), not mechanisms; the mapping from scope name to test files
  * is the `driverScopes` option. Tags never change the scenario key,
  * so Covers tags and baselines are unaffected by adding one.
+ *
+ * A scenario may also carry a **stable id** (issue #106) — a Gherkin
+ * `@id:<slug>` tag, or `id:<slug>` in the Markdown bracket list
+ * (`## Scenario [system, id:<slug>]: …`). Optional, unique across the
+ * specs directory, one per scenario. References may then cite the id
+ * instead of the title — `// Covers: @id:<slug>`, a baseline line
+ * `@id:<slug>`, an exclusion line `@id:<slug> # <reason>` — so a spec
+ * repository shared by several consumers can reword a title without
+ * breaking every consumer's references. Title references keep working.
  */
 
 // Two spec formats during the .feature.md -> .feature migration:
@@ -46,6 +55,8 @@ const MD_SCENARIO =
   /^##\s*Scenario(\s*\((?:wip|planned)\))?(\s*\[([^\]]+)\])?\s*:\s*(.+?)\s*$/
 const GHERKIN_SCENARIO = /^Scenario(?:\s+Outline)?:\s*(.+?)\s*$/
 const COVERS_TAG = /Covers:\s*([\w.-]+\.feature(?:\.md)?)\s*::\s*Scenario:\s*([^\n]+)/g
+const COVERS_ID = /Covers:\s*@id:([\w.-]+)/g
+const ID_REF = /^@id:([\w.-]+)$/
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -82,8 +93,57 @@ type Scenario = {
   wip: boolean
   /** Driver scopes the heading declares, e.g. `[system]` → ['system']. */
   scopes: string[]
+  /** Stable id (`@id:<slug>`), if the scenario declares exactly one. */
+  id?: string
+  /** Every id the scenario declares; more than one is an error. */
+  ids: string[]
 }
-type CoversRef = { key: string; testFile: string; specFile: string; title: string }
+/**
+ * A `Covers:` tag. By title: `key` is the scenario key. By id: `id` is
+ * set and `key` is the raw `@id:<slug>` until resolved against the specs.
+ */
+type CoversRef = { key: string; testFile: string; specFile: string; title: string; id?: string }
+
+const isIdTag = (tag: string): boolean => tag.startsWith('id:')
+
+function refLabel(ref: CoversRef): string {
+  return ref.id ? `@id:${ref.id}` : `${ref.specFile} :: ${ref.title}`
+}
+
+/**
+ * Indexes scenarios by stable id. `problems` lists duplicate ids and
+ * scenarios with more than one (or an empty) id.
+ */
+function indexIds(scenarios: Scenario[]): { byId: Map<string, Scenario>; problems: string[] } {
+  const byId = new Map<string, Scenario>()
+  const problems: string[] = []
+  for (const s of scenarios) {
+    if (s.ids.length > 1 || s.ids.includes('')) {
+      problems.push(
+        `${basename(s.specFile)} :: ${s.title} — one non-empty id per scenario, got ` +
+          s.ids.map((id) => `@id:${id}`).join(' '),
+      )
+      continue
+    }
+    if (!s.id) continue
+    const other = byId.get(s.id)
+    if (other) {
+      problems.push(
+        `@id:${s.id} is used twice: ${basename(other.specFile)} :: ${other.title} ` +
+          `and ${basename(s.specFile)} :: ${s.title}`,
+      )
+      continue
+    }
+    byId.set(s.id, s)
+  }
+  return { byId, problems }
+}
+
+/** Resolves an `@id:<slug>` reference to its scenario key; anything else is returned as is. */
+function resolveKey(key: string, byId: Map<string, Scenario>): string {
+  const id = key.match(ID_REF)?.[1]
+  return id ? (byId.get(id)?.key ?? key) : key
+}
 
 function parseScopes(tag: string | undefined): string[] {
   if (!tag) return []
@@ -100,12 +160,16 @@ export function extractScenarios(specFile: string, content: string): Scenario[] 
     const md = line.match(MD_SCENARIO)
     if (md) {
       const title = md[4] ?? ''
+      const list = parseScopes(md[3])
+      const ids = list.filter(isIdTag).map((tag) => tag.slice(3))
       scenarios.push({
         key: scenarioKey(specFile, title),
         specFile,
         title: title.trim(),
         wip: md[1] !== undefined,
-        scopes: parseScopes(md[3]),
+        scopes: list.filter((tag) => !isIdTag(tag)),
+        ids,
+        id: ids.length === 1 ? ids[0] : undefined,
       })
       tags = []
       continue
@@ -123,12 +187,15 @@ export function extractScenarios(specFile: string, content: string): Scenario[] 
     const gherkin = trimmed.match(GHERKIN_SCENARIO)
     if (gherkin) {
       const title = gherkin[1] ?? ''
+      const ids = tags.filter(isIdTag).map((tag) => tag.slice(3))
       scenarios.push({
         key: scenarioKey(specFile, title),
         specFile,
         title: title.trim(),
         wip: tags.includes('wip') || tags.includes('planned'),
-        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned'),
+        scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned' && !isIdTag(tag)),
+        ids,
+        id: ids.length === 1 ? ids[0] : undefined,
       })
       tags = []
       continue
@@ -151,6 +218,10 @@ export function extractCoversRefs(testFile: string, content: string): CoversRef[
       specFile,
       title: title.replace(/\s*(?:\*\/|["')\]]+)?\s*$/, '').trim(),
     })
+  }
+  for (const match of content.matchAll(COVERS_ID)) {
+    const id = (match[1] ?? '').toLowerCase()
+    refs.push({ key: `@id:${id}`, testFile, specFile: '', title: '', id })
   }
   return refs
 }
@@ -275,6 +346,8 @@ export function readBaseline(path: string | undefined): Set<string> {
       .map((line) => line.trim())
       .filter((line) => line && !line.startsWith('#'))
       .flatMap((line) => {
+        // `@id:<slug>` stays raw here; the gate resolves it against the specs.
+        if (ID_REF.test(line.toLowerCase())) return [line.toLowerCase()]
         const idx = line.indexOf(' :: ')
         if (idx === -1) return []
         const spec = line.slice(0, idx).trim()
@@ -284,10 +357,12 @@ export function readBaseline(path: string | undefined): Set<string> {
   )
 }
 
-type Exclusion = { key: string; specFile: string; title: string; reason: string }
+/** `key` is a scenario key, or a raw `@id:<slug>` until resolved. */
+type Exclusion = { key: string; label: string; reason: string }
 
 /**
- * Parses an exclusions file (`<spec> :: <title> # <reason>` per line).
+ * Parses an exclusions file (`<spec> :: <title> # <reason>` or
+ * `@id:<slug> # <reason>` per line).
  * Missing file → none. A line without the separator or a reason lands
  * in `malformed`: unlike the baseline, an exclusion must say why.
  */
@@ -302,15 +377,20 @@ export function readExclusions(path: string | undefined): {
     const line = raw.trim()
     if (!line || line.startsWith('#')) continue
     const sep = line.indexOf(' :: ')
-    const hash = sep === -1 ? -1 : line.indexOf(' # ', sep + 4)
+    const hash = line.indexOf(' # ', sep === -1 ? 0 : sep + 4)
     const reason = hash === -1 ? '' : line.slice(hash + 3).trim()
-    if (sep === -1 || !reason) {
+    const id = hash === -1 ? undefined : line.slice(0, hash).trim().toLowerCase().match(ID_REF)?.[1]
+    if ((sep === -1 && !id) || !reason) {
       malformed.push(line)
+      continue
+    }
+    if (id) {
+      entries.push({ key: `@id:${id}`, label: `@id:${id}`, reason })
       continue
     }
     const specFile = line.slice(0, sep).trim()
     const title = line.slice(sep + 4, hash).trim()
-    entries.push({ key: scenarioKey(specFile, title), specFile, title, reason })
+    entries.push({ key: scenarioKey(specFile, title), label: `${specFile} :: ${title}`, reason })
   }
   return { entries, malformed }
 }
@@ -486,7 +566,8 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         kind: 'violation',
         reason:
           `Spec↔test parity: exclusion lines in ${exclusionsPath} must read ` +
-          '`<spec>.feature :: <title> # <reason>`, and every exclusion needs ' +
+          '`<spec>.feature :: <title> # <reason>` or `@id:<slug> # <reason>`, ' +
+          'and every exclusion needs ' +
           'a reason naming who owns the scenario:\n' +
           formatList(exclusionFile.malformed),
       }
@@ -513,13 +594,23 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const scenarios = specFiles
       .flatMap((file) => extractScenarios(file, readFileSync(file, 'utf8')))
       .map((s) => ({ ...s, scopes: s.scopes.filter((tag) => !ignoredTags.has(tag)) }))
-    const refs = scanCoversRefs(testRoots, pattern)
-    const baseline = readBaseline(baselinePath)
+    const { byId, problems } = indexIds(scenarios)
+    if (problems.length > 0) {
+      return {
+        kind: 'violation',
+        reason:
+          'Scenario ids must be unique across the specs directory, one per scenario:\n' +
+          formatList(problems),
+      }
+    }
+    const resolveRef = (key: string) => resolveKey(key, byId)
+    const refs = scanCoversRefs(testRoots, pattern).map((ref) => ({ ...ref, key: resolveRef(ref.key) }))
+    const baseline = new Set([...readBaseline(baselinePath)].map(resolveRef))
     const claimed = new Set(refs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
     // Precedence: claimed > excluded > wip > baseline. A claimed or
     // baselined exclusion blocks below as stale rather than silently winning.
-    const exclusions = exclusionFile.entries
+    const exclusions = exclusionFile.entries.map((entry) => ({ ...entry, key: resolveRef(entry.key) }))
     const excluded = new Set(exclusions.map((entry) => entry.key))
     const orphaned = scenarios.filter(
       (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
@@ -578,7 +669,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       sections.push(
         'Covers tags pointing at no existing scenario (spec renamed or ' +
           'removed — update or delete these tests):\n' +
-          formatList(dangling.map((r) => `${r.testFile} → ${r.specFile} :: ${r.title}`)),
+          formatList(dangling.map((r) => `${r.testFile} → ${refLabel(r)}`)),
       )
     }
     if (missingScopes.length > 0) {
@@ -598,8 +689,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           formatList(unknownScopes),
       )
     }
-    const exclusionLines = (entries: Exclusion[]) =>
-      formatList(entries.map((e) => `${e.specFile} :: ${e.title}`))
+    const exclusionLines = (entries: Exclusion[]) => formatList(entries.map((e) => e.label))
     if (danglingExclusions.length > 0) {
       sections.push(
         'Exclusions matching no scenario (renamed or removed — update or delete them):\n' +
@@ -706,7 +796,11 @@ export function requireSpecBackedAcceptanceTest(options: {
     )
     const afterRefs = extractCoversRefs(action.path, action.content)
     const newRefs = afterRefs.filter((ref) => !beforeKeys.has(ref.key))
-    const known = new Set(scanSpecs(options.specsDir).map((s) => s.key))
+    const specs = scanSpecs(options.specsDir)
+    // Duplicate ids are the commit gate's to report; here any match resolves.
+    const ids = new Set(specs.flatMap((s) => s.ids))
+    const titles = new Set(specs.map((s) => s.key))
+    const known = { has: (key: string) => titles.has(key) || ids.has(key.match(ID_REF)?.[1] ?? '\0') }
     if (newRefs.length === 0) {
       // No NEW tag — still fine when the file already claims a real
       // scenario: "one scenario, many drivers" adds a second/third
@@ -739,7 +833,11 @@ export function requireSpecBackedAcceptanceTest(options: {
         'first: create the scenario heading (exact title match, ' +
         `case-insensitive) under ${options.specsDir}, then re-apply ` +
         'this test.\n' +
-        formatList(unresolved.map((ref) => `${ref.specFile} :: Scenario: ${ref.title}`)),
+        formatList(
+          unresolved.map((ref) =>
+            ref.id ? `@id:${ref.id} (no scenario carries this id)` : `${ref.specFile} :: Scenario: ${ref.title}`,
+          ),
+        ),
     }
   }
 }
@@ -759,9 +857,13 @@ export function requireSpecBackedAcceptanceTest(options: {
  *   tests.
  * @param options.testFilePattern — which files count as acceptance
  *   tests (default: any file under an `acceptance/` directory).
+ * @param options.specsDir — optional; lets a stable id move to another
+ *   spec file. Rewording a title that tests claim by id (`Covers:
+ *   @id:<slug>`) passes; dropping the id blocks, unless another spec
+ *   file under `specsDir` now carries it.
  */
 export function surfaceScenarioLinkBreakage(
-  options: Omit<ScanOptions, 'specsDir'>,
+  options: Omit<ScanOptions, 'specsDir'> & { specsDir?: string },
 ): Rule {
   const pattern = options.testFilePattern ?? DEFAULT_TEST_FILE_PATTERN
   return async function surfaceScenarioLinkBreakage(
@@ -773,19 +875,32 @@ export function surfaceScenarioLinkBreakage(
       return { kind: 'pass' }
     const before = await ctx?.readFile?.(action.path)
     if (!before || before.kind !== 'present') return { kind: 'pass' }
-    const beforeKeys = new Map(
-      extractScenarios(action.path, before.content).map((s) => [s.key, s]),
-    )
-    const afterKeys = new Set(
-      extractScenarios(action.path, action.content).map((s) => s.key),
-    )
-    const removed = [...beforeKeys.values()].filter((s) => !afterKeys.has(s.key))
+    const beforeScenarios = extractScenarios(action.path, before.content)
+    const afterScenarios = extractScenarios(action.path, action.content)
+    const afterKeys = new Set(afterScenarios.map((s) => s.key))
+    const afterIds = new Set(afterScenarios.flatMap((s) => s.ids))
+    const keyGone = (s: Scenario) => !afterKeys.has(s.key)
+    const idGone = (s: Scenario) => !!s.id && !afterIds.has(s.id)
+    const removed = beforeScenarios.filter((s) => keyGone(s) || idGone(s))
     if (removed.length === 0) return { kind: 'pass' }
+    // An id moved to another spec file is not gone.
+    const elsewhere = new Set(
+      options.specsDir && removed.some(idGone)
+        ? findSpecFiles(options.specsDir)
+            .filter((file) => resolve(file) !== resolve(action.path))
+            .flatMap((file) => extractScenarios(file, readFileSync(file, 'utf8')).flatMap((s) => s.ids))
+        : [],
+    )
     const refs = scanCoversRefs(options.testRoots, pattern)
     const broken = removed.flatMap((scenario) => {
+      const lostId = idGone(scenario) && !elsewhere.has(scenario.id!)
       const claimants = [
         ...new Set(
-          refs.filter((ref) => ref.key === scenario.key).map((ref) => ref.testFile),
+          refs
+            .filter((ref) =>
+              ref.id ? lostId && ref.id === scenario.id : keyGone(scenario) && ref.key === scenario.key,
+            )
+            .map((ref) => ref.testFile),
         ),
       ]
       return claimants.length > 0
@@ -796,10 +911,11 @@ export function surfaceScenarioLinkBreakage(
     return {
       kind: 'violation',
       reason:
-        'This edit removes or renames scenario(s) that acceptance ' +
-        'tests still claim. Update those tests’ Covers: tags (or ' +
-        'delete the tests) in the same change, then re-apply this ' +
-        'spec edit.\n' +
+        'This edit removes or renames scenario(s), or drops an id, that ' +
+        'acceptance tests still claim. Update those tests’ Covers: tags ' +
+        '(or delete the tests) in the same change, then re-apply this ' +
+        'spec edit. Claiming by id (`// Covers: @id:<slug>`) lets a ' +
+        'title change without touching tests.\n' +
         broken.join('\n'),
     }
   }
