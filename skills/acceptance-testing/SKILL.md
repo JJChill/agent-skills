@@ -100,9 +100,9 @@ it('acknowledges a submitted invoice to its submitter', async () => {
 });
 ```
 
-**Layer 2 — DSL** supplies defaults and isolation. If you're saying the same thing in two specs, say it the same way — reuse is the sign you're thinking in the domain language. Gherkin users: step definitions are *parsing only*; they delegate to this same DSL. Logic in step definitions is the classic anti-pattern.
+**Layer 2 — DSL** supplies defaults and isolation. If you're saying the same thing in two specs, say it the same way — reuse is the sign you're thinking in the domain language. Gherkin users: step definitions are *parsing only*; they delegate to this same DSL. Logic in step definitions is the classic anti-pattern. Give every DSL call **defaults** for what the scenario doesn't care about (`placeOrder('shopper1')` picks a valid product, quantity and address), so a test states only the values that matter and a new required field changes one place. **Decompose the DSL by concept** (accounts, orders, invoices), each a small object tests compose, not one class per suite that grows with every scenario.
 
-**Layer 3 — Protocol drivers** translate DSL concepts into real interactions. Each driver step passes or fails atomically; assertions live here. One DSL, many drivers: the same `placeOrder` spec can run against the web UI, the mobile app, or the public API by swapping drivers. When the SUT's interface changes, the fix is in one driver — not in hundreds of specs.
+**Layer 3 — Protocol drivers** translate DSL concepts into real interactions. Each driver step passes or fails atomically; assertions live here. One DSL, many drivers: the same `placeOrder` spec can run against the web UI, the mobile app, or the public API by swapping drivers. When the SUT's interface changes, the fix is in one driver — not in hundreds of specs. Driver **failure messages speak the domain**: "expected invoice1 to await authorisation, but it was rejected", not "element #status not found". A failing spec should say which promise broke without anyone opening the driver.
 
 Two rules that make the second driver cheap instead of a refactor:
 
@@ -143,11 +143,30 @@ Whichever rungs a project picks, two rules hold: confine the UI-automation frame
 Trustworthy tests control all the variables.
 
 1. **Functional isolation:** every test creates its own data through the system's natural functions (its own account, its own hospital, its own order) and operates only within that bubble. No shared writable data, no cleanup step, safe parallelism.
-2. **Temporal isolation:** the DSL aliases names so the same test can run twice, or in parallel with itself, against one SUT instance. The spec says `"invoice1"`; the SUT sees `invoice1-8f3a`.
+2. **Temporal isolation:** the DSL aliases names so the same test can run twice, or in parallel with itself, against one SUT instance. The spec says `"invoice1"`; the SUT sees `invoice1-8f3a`. Program stubs with the aliased id too ("when asked to validate invoice1-8f3a, reject it"), so parallel tests never answer each other's requests. One small helper per test is enough:
+
+   ```typescript
+   export class Alias {
+     private readonly run = crypto.randomUUID().slice(0, 8); // unique per test run
+     private readonly names = new Map<string, string>();
+     private counter = 0;
+     of(name: string): string {                // stable within the test, unique across runs
+       if (!this.names.has(name)) this.names.set(name, `${name}-${this.run}`);
+       return this.names.get(name)!;
+     }
+     next(prefix: string): string {            // test-scoped sequence: order-1, order-2, …
+       return this.of(`${prefix}-${++this.counter}`);
+     }
+   }
+   ```
+
+   The pipeline proves it mechanically by running the suite twice against one SUT instance (`ci-cd-and-automation`). A suite whose SUT is built fresh per test (in-process, new fakes each time) gets this isolation for free.
 3. **Controlling time:** systems that care about time read it from a clock port, never the OS clock. The test clock is a stub the DSL can set and advance — a week-long scenario runs in milliseconds, and daylight-saving boundaries become testable. Tag such tests (e.g. `@TimeTravel`) and run them on dedicated instances, not the shared parallel pool.
 4. **No sleeps, ever.** A fixed delay is a race condition postponed plus wasted time on every run. Protocol drivers poll for the **concluding event** with a generous timeout: fast when the system is fast, resilient when it's slow.
 5. **Fakes gate in-flight operations.** A driver that owns virtual time can pause the world anywhere; a driver that doesn't (a real UI toolkit with its own clock) cannot. Give port fakes a standard in-flight gate — a latch the test releases — so "the operation is still running" is a controllable fact in every driver, not a race. Build it into the fake once; don't reinvent it per feature.
 6. **Preconditions are controlled, not observed.** Every Given is *established by the test* — through a fixture, a programmed stub, or a substituted port — never inherited from whatever the environment happens to do. A scenario whose Given is "signing in will not succeed" is not honestly covered by running in a simulator that has no network: the assertion passes, but the test cannot distinguish the failure it asked for from the failure the machine produced, and on a connected machine the precondition silently inverts. An environmentally satisfied Given also hides a bigger cost: the *opposite* precondition is unreachable (nothing can make sign-in succeed), so the whole success side of the behavior is unspecifiable until the port is controlled.
+7. **Synthetic data only.** Every value a test uses is invented for it. Never copy production records, or real people's names, addresses or card numbers: real data leaks, ages, and ties the test to a state nobody controls.
+8. **No automatic retries.** An intermittent acceptance test most likely points at an intermittent bug in the system, not in the test. A retry hides it. Investigate it like any failure (`debugging-and-error-recovery`), and fix the race or the shared state it exposes.
 
 **When the test itself can't get a red.** The first test for behavior that already exists (characterization coverage — the normal case when retrofitting specs onto a brownfield system) is born green: no red keyed to it can precede it, and a mutation probe can't help yet because a probe only fails tests that already exist. That is legitimate — land the test, then immediately prove it bites with the mutation check (break the behavior, watch *this* test fail on its concluding assertion, restore). Teams enforcing TDD mechanically should sanction this as an explicit round-trip rather than an override (`hooks/PROBITY.md`, characterization round-trip).
 
@@ -186,6 +205,7 @@ Trustworthy tests control all the variables.
 | "One big end-to-end test covering the whole journey is more realistic" | It's also unfocused, undiagnosable, and breaks for a dozen unrelated reasons. Many small single-outcome specs, each in its own data bubble. |
 | "We need the real payment provider / partner system in the test" | You don't control it, so the test can't control its variables. Fake it at the port and pin the interface with a contract test. |
 | "Just add a 2-second sleep, it's flaky under load" | That's a race condition with a timer on it. Poll for the concluding event in the protocol driver. |
+| "Mark it retry-on-failure, it passes the second time" | An acceptance test that passes on the second try has found an intermittent bug, most likely in the system. Retries hide it from everyone. |
 | "Testing variations of this input is easiest to add here" | Input variation is unit-test territory. One acceptance spec per behavior; push permutations down to the TDD inner loop. |
 | "The environment already makes this happen, so no fixture is needed" | Then the precondition is owned by the environment, not the test — green for reasons the test can't see, flaky the day the environment changes, and the opposite precondition is unspecifiable. Write the inverse scenario; its red drives the fixture, then this scenario adopts it under green. |
 | "TDD refused the fixture — no failing test demanded it" | The gate refused *this scenario's* demand, not the design. A tooling verdict is not a design decision: the failing test that demands the control is the inverse scenario on the same port. |
@@ -200,6 +220,8 @@ Trustworthy tests control all the variables.
 - Test code calling the SUT's internals or HTTP endpoints directly from the test case layer (no DSL/driver layers)
 - Logic, assertions, or SUT interaction inside Gherkin step definitions
 - `sleep`/fixed waits anywhere in the suite
+- Automatic retries on acceptance tests, or production data copied into fixtures
+- Names passed straight from the test to a shared SUT without an alias, or test data cleaned up after the test
 - Tests sharing accounts, records, or other writable state; a "wipe the database" step between tests
 - An automated suite that drives a real external/third-party system
 - Scenarios with long chains of When/Then asserting many outcomes
@@ -224,4 +246,5 @@ After writing or changing acceptance tests, confirm:
 - [ ] Each test creates its own isolated data; the suite passes when run in parallel and when run twice in a row
 - [ ] Every Given is established by the test (fixture, programmed stub, substituted port) — no precondition is satisfied only by the ambient environment; where a control fixture had no red to drive it, the inverse scenario exists and drove it
 - [ ] No sleeps — concluding events are polled with timeouts
+- [ ] Every entity a test creates in a shared SUT is aliased (stubs keyed on the alias), data is synthetic, nothing is cleaned up, and nothing retries automatically
 - [ ] The suite runs in the pipeline's acceptance stage against a production-like deployment; in-progress specs are committed expected-to-fail with their scenario `(wip)`, and the marker and the wip come off together when they pass
