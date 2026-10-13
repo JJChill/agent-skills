@@ -13,6 +13,8 @@
  *                        [--exclusions <file>] [--ignore-tags a,b]
  *                        [--wip <file>] [--shared-wip honor|ignore]
  *                        [--in-progress <regex>]
+ *                        [--app-scope <name> [--strict-skeleton]
+ *                         [--skeleton-exempt <file>]]
  *
  *   --specs    specs directory containing *.feature.md (required)
  *   --tests    root(s) to scan for acceptance tests (repeatable, default .)
@@ -70,6 +72,20 @@
  *              test carrying it is an in-progress claim: not coverage, so
  *              its scenario must be wip, and a wip scenario a finished
  *              test claims fails as promoted.
+ *   --app-scope  the declared scope that runs the app tier (issue #129).
+ *              Turns on the walking-skeleton check from the
+ *              acceptance-testing skill's tier rules: every feature file
+ *              with scenarios needing proof (not wip, excluded or
+ *              baselined) has at least one scenario a finished test
+ *              claims at this scope. Feature files without one are listed
+ *              as a warning; the exit code doesn't change.
+ *   --strict-skeleton  with --app-scope: a missing walking skeleton or a
+ *              stale exemption fails (exit 1), for CI.
+ *   --skeleton-exempt  with --app-scope: feature files that reach no
+ *              external system, so need no app-tier scenario:
+ *              `<spec>.feature # <reason>` per line, reason required. A
+ *              line matching no feature file, or for a feature that has an
+ *              app-scope claim, is stale. Missing file → no exemptions.
  *
  * Exit codes: 0 parity holds, 1 orphaned scenarios, dangling Covers
  * tags, unmet driver scopes, or dangling/stale exclusion or wip lines,
@@ -139,6 +155,9 @@ function parseArgs(argv) {
     wip: undefined,
     sharedWip: 'honor',
     inProgress: DEFAULT_IN_PROGRESS,
+    appScope: undefined,
+    strictSkeleton: false,
+    skeletonExempt: undefined,
   }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--specs') args.specs = argv[++i]
@@ -162,6 +181,9 @@ function parseArgs(argv) {
     } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
     else if (argv[i] === '--wip') args.wip = argv[++i]
     else if (argv[i] === '--in-progress') args.inProgress = new RegExp(argv[++i] ?? '', 'm')
+    else if (argv[i] === '--app-scope') args.appScope = (argv[++i] ?? '').trim().toLowerCase()
+    else if (argv[i] === '--strict-skeleton') args.strictSkeleton = true
+    else if (argv[i] === '--skeleton-exempt') args.skeletonExempt = argv[++i]
     else if (argv[i] === '--shared-wip') {
       args.sharedWip = argv[++i]
       if (args.sharedWip !== 'honor' && args.sharedWip !== 'ignore') {
@@ -184,8 +206,17 @@ function parseArgs(argv) {
       'Usage: spec-parity.mjs --specs <dir> [--tests <root>]... [--pattern <regex>] ' +
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
         '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b] ' +
-        '[--wip <file>] [--shared-wip honor|ignore] [--in-progress <regex>]',
+        '[--wip <file>] [--shared-wip honor|ignore] [--in-progress <regex>] ' +
+        '[--app-scope <name> [--strict-skeleton] [--skeleton-exempt <file>]]',
     )
+    process.exit(2)
+  }
+  if (args.appScope !== undefined && !args.scopes.has(args.appScope)) {
+    console.error(`--app-scope: "${args.appScope}" is not a declared driver scope (declare it with --scope ${args.appScope}=<regex>).`)
+    process.exit(2)
+  }
+  if ((args.strictSkeleton || args.skeletonExempt) && args.appScope === undefined) {
+    console.error('--strict-skeleton and --skeleton-exempt need --app-scope.')
     process.exit(2)
   }
   for (const tag of args.ignoreTags) {
@@ -361,6 +392,33 @@ function readReasonedList(path, { noun, field, why }) {
     const specFile = line.slice(0, sep).trim()
     const title = line.slice(sep + 4, hash).trim()
     entries.push({ key: key(specFile, title), label: `${specFile} :: ${title}`, reason })
+  })
+  return entries
+}
+
+/**
+ * Feature files exempt from the walking-skeleton check (issue #129):
+ * `<spec>.feature # <reason>` per line, `#` comments allowed, reason
+ * required (what makes the feature reach no external system).
+ */
+function readSkeletonExempt(path) {
+  if (!path || !existsSync(path)) return []
+  const entries = []
+  readFileSync(path, 'utf8').split(/\r?\n/).forEach((raw, index) => {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) return
+    const hash = line.indexOf(' # ')
+    const specFile = (hash === -1 ? line : line.slice(0, hash)).trim()
+    const reason = hash === -1 ? '' : line.slice(hash + 3).trim()
+    if (!/\.feature(?:\.md)?$/.test(specFile) || !reason) {
+      console.error(
+        `${path}:${index + 1}: skeleton exemptions read \`<spec>.feature # <reason>\`, and every line ` +
+          'needs a reason saying why the feature reaches no external system:',
+      )
+      console.error(`  ${line}`)
+      process.exit(2)
+    }
+    entries.push({ stem: specStem(specFile), label: specFile, reason })
   })
   return entries
 }
@@ -552,7 +610,56 @@ for (const s of scenarios) {
   }
 }
 
+// Issue #129, the walking skeleton: every feature file with scenarios that
+// need proof has at least one finished claim at the app scope, unless the
+// project exempts it. A warning by default; --strict-skeleton fails it.
+const skeleton = { missing: [], exempt: [], stale: [] }
+if (args.appScope !== undefined) {
+  const appPattern = args.scopes.get(args.appScope)
+  const exemptions = readSkeletonExempt(args.skeletonExempt)
+  const stemOf = (scenarioKey) => scenarioKey.slice(0, scenarioKey.indexOf(' :: '))
+  const proven = new Set(
+    refs.filter((ref) => known.has(ref.key) && appPattern.test(ref.testFile)).map((ref) => stemOf(ref.key)),
+  )
+  const needing = new Map()
+  for (const s of scenarios) {
+    if (s.wip || excluded.has(s.key) || baseline.has(s.key)) continue
+    if (!needing.has(stemOf(s.key))) needing.set(stemOf(s.key), s.specFile)
+  }
+  const exemptStems = new Map(exemptions.map((entry) => [entry.stem, entry]))
+  const allStems = new Set(scenarios.map((s) => stemOf(s.key)))
+  for (const [stem, specFile] of needing) {
+    if (proven.has(stem)) continue
+    if (exemptStems.has(stem)) skeleton.exempt.push(`${specFile} — ${exemptStems.get(stem).reason}`)
+    else skeleton.missing.push(specFile)
+  }
+  for (const entry of exemptions) {
+    if (!allStems.has(entry.stem)) skeleton.stale.push(`${entry.label} — matches no feature file`)
+    else if (proven.has(entry.stem)) skeleton.stale.push(`${entry.label} — has an [${args.appScope}] claim now`)
+  }
+}
+const skeletonFails = args.strictSkeleton && (skeleton.missing.length > 0 || skeleton.stale.length > 0)
+
+function reportSkeleton(print) {
+  if (skeleton.missing.length > 0) {
+    print(
+      `Feature files with no scenario claimed at the [${args.appScope}] scope (walking skeleton — ` +
+        'claim the main success path at the app tier, or exempt a feature that reaches no external system):',
+    )
+    for (const line of skeleton.missing) print(`  ${line}`)
+  }
+  if (skeleton.stale.length > 0) {
+    print('Stale walking-skeleton exemptions (delete them):')
+    for (const line of skeleton.stale) print(`  ${line}`)
+  }
+  if (skeleton.exempt.length > 0) {
+    print('Exempt from the walking skeleton:')
+    for (const line of skeleton.exempt) print(`  ${line}`)
+  }
+}
+
 if (
+  !skeletonFails &&
   orphaned.length === 0 &&
   onlyInProgress.length === 0 &&
   promotedSpecWip.length === 0 &&
@@ -586,8 +693,10 @@ if (
       console.log(`  ${s.specFile} :: ${s.title} — ${excluded.get(s.key).reason}`)
     }
   }
+  reportSkeleton(console.log)
   process.exit(0)
 }
+reportSkeleton(console.error)
 if (orphaned.length > 0) {
   console.error('Scenarios with no covering acceptance test:')
   for (const s of orphaned) console.error(`  ${s.specFile} :: ${s.title}`)

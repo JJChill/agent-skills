@@ -32,7 +32,7 @@ const DEFAULT_MAX_SHARED_CHARS = 6000
 type Claim = { refs: CoversRef[]; text: string }
 
 /** A scenario's heading and steps, keyed for Covers resolution. */
-type ScenarioText = { key: string; id?: string; title: string; text: string }
+type ScenarioText = { key: string; id?: string; title: string; text: string; scopes: string[] }
 
 const isSpecFile = (path: string): boolean => /\.feature(?:\.md)?$/.test(path)
 
@@ -146,6 +146,7 @@ export function scenarioTexts(specFile: string, content: string): ScenarioText[]
       id: scenario.id,
       title: scenario.title,
       text: lines.slice(scenario.line, end).join('\n').trim(),
+      scopes: scenario.scopes,
     }
   })
 }
@@ -253,14 +254,44 @@ Write reason FIRST and set kind to the conclusion your reason reached —
 the two must agree. Keep reason brief on a clear pass ("" is fine).
 Return JSON only. No prose, no code fences.`
 
+const TIER_RULES = (scope: string) => `## Tier
+
+Each scenario also has a tier, shown as "Tier:" in its pair. An app-tier
+scenario is tagged [${scope}] and claimed by a test that builds the app
+through its shipping composition root; an untagged scenario runs at the
+component tier. A scenario belongs at the app tier when a bug the
+component tier cannot see could change its outcome:
+
+1. the wire decides the outcome (an external system must accept or
+   decode what we send, or we decode what it returns: signed or sealed
+   requests, encrypted or compressed payloads, a multi-call sequence
+   whose order matters);
+2. wiring decides it (which adapter, environment, endpoint or store the
+   composition root picks);
+3. a platform service decides it (a real key store, crypto or codec
+   round trip, not a fake's echo).
+
+Report a violation only when an untagged scenario's own text shows one
+of these deciding its outcome: name the rule and say to tag the scenario
+[${scope}] and claim it with an app-tier test. Never report a tagged
+scenario as over-tiered: a feature's walking skeleton and scenarios
+added after an escaped defect belong at the app tier for reasons the
+text can't show. When unsure, pass.`
+
 type Pair = { scenario: ScenarioText; claim: Claim; testFile: string }
 
-function buildPrompt(rules: string, pairs: Pair[]): string {
+function buildPrompt(rules: string, pairs: Pair[], appScope?: string): string {
   const sections = [rules]
+  if (appScope) sections.push(TIER_RULES(appScope))
   pairs.forEach(({ scenario, claim, testFile }, index) => {
     const shared = sharedBodies(testFile, claim.text)
+    const tier = !appScope
+      ? ''
+      : scenario.scopes.includes(appScope)
+        ? `\n\nTier: app (tagged [${appScope}])`
+        : '\n\nTier: component (untagged)'
     sections.push(
-      `## Pair ${index + 1}\n\n### Scenario\n\n${scenario.text}\n\n### Test (${basename(testFile)})\n\n${claim.text}` +
+      `## Pair ${index + 1}\n\n### Scenario\n\n${scenario.text}${tier}\n\n### Test (${basename(testFile)})\n\n${claim.text}` +
         (shared.length > 0 ? `\n### Shared scenario bodies\n\n${shared.join('\n\n')}` : ''),
     )
   })
@@ -288,6 +319,12 @@ function buildPrompt(rules: string, pairs: Pair[]): string {
  *   (default: the current directory).
  * @param options.testFilePattern — which files are acceptance tests
  *   (default: any file under an `acceptance/` directory).
+ * @param options.appScope — the driver scope that runs the app tier
+ *   (issue #129). When set, the same judge call also checks each changed
+ *   claim's tier against the acceptance-testing skill's tier rules, and
+ *   reports an untagged scenario whose text shows the wire, wiring or a
+ *   platform service decides its outcome. Tagged scenarios are never
+ *   reported as over-tiered.
  * @param options.instructions — replaces or extends the default rules
  *   text: a string replaces it, `(defaults) => ...` extends it.
  */
@@ -295,6 +332,7 @@ export function enforceScenarioFidelity(options: {
   specsDir: string
   testRoots?: string[]
   testFilePattern?: RegExp
+  appScope?: string
   instructions?: string | ((defaults: string) => string)
 }): Rule {
   const rules =
@@ -380,7 +418,7 @@ export function enforceScenarioFidelity(options: {
           'enforceScenarioFidelity: no AI agent available; configure Config.ai or use a vendor that ships one.',
       }
     }
-    const verdict = await ctx.agent.reason(buildPrompt(rules, pairs))
+    const verdict = await ctx.agent.reason(buildPrompt(rules, pairs, options.appScope?.toLowerCase()))
     if (verdict.kind === 'violation') return { kind: 'violation', reason: verdict.reason }
     return { kind: 'pass', reason: verdict.reason }
   }

@@ -594,5 +594,117 @@ const parityRun = (files, args = []) => {
   )
 }
 
+// ── Issue #129: walking skeleton — an app-tier claim per feature file ──
+
+const ORDERS = 'Feature: Orders\n\n  Scenario: Placing an order\n    Given a\n\n  Scenario: Rejecting an empty order\n    Given b\n'
+const RULES = 'Feature: Rules\n\n  Scenario: Discount rounding\n    Given c\n'
+const placing = '// Covers: orders.feature :: Scenario: Placing an order\n@Test\nfun placing() {}\n'
+const rejecting = '// Covers: orders.feature :: Scenario: Rejecting an empty order\n@Test\nfun rejecting() {}\n'
+const rounding = '// Covers: rules.feature :: Scenario: Discount rounding\n@Test\nfun rounding() {}\n'
+const skeletonArgs = ['--scope', 'app=tests/app/', '--scope', 'component=tests/component/', '--app-scope', 'app']
+
+// 40. A feature file with no app-scope claim is reported, but passes.
+{
+  const res = run(
+    workspace({
+      'specs/orders.feature': ORDERS,
+      'specs/rules.feature': RULES,
+      'tests/component/T.kt': placing + rejecting + rounding,
+      'tests/app/T.kt': '',
+    }),
+    skeletonArgs,
+  )
+  check(
+    'skeleton: feature files with no [app] claim are listed as a warning (exit 0)',
+    res.code === 0 && /walking skeleton/i.test(res.out) && /orders\.feature/.test(res.out) && /rules\.feature/.test(res.out),
+  )
+}
+
+// 41. One app-scope claim in a feature file satisfies it.
+{
+  const res = run(
+    workspace({
+      'specs/orders.feature': ORDERS,
+      'tests/component/T.kt': rejecting,
+      'tests/app/T.kt': placing,
+    }),
+    skeletonArgs,
+  )
+  check('skeleton: one [app] claim in the feature file satisfies it', res.code === 0 && !/walking skeleton/i.test(res.out))
+}
+
+// 42. --strict-skeleton makes a missing skeleton fail.
+{
+  const res = run(
+    workspace({ 'specs/orders.feature': ORDERS, 'tests/component/T.kt': placing + rejecting, 'tests/app/T.kt': '' }),
+    [...skeletonArgs, '--strict-skeleton'],
+  )
+  check('skeleton: --strict-skeleton fails a feature file with no [app] claim (exit 1)', res.code === 1 && /orders\.feature/.test(res.out))
+}
+
+// 43. An exempt feature file is skipped and listed with its reason.
+{
+  const dir = workspace({
+    'specs/orders.feature': ORDERS,
+    'specs/rules.feature': RULES,
+    'tests/component/T.kt': rounding + rejecting,
+    'tests/app/T.kt': placing,
+    'parity/skeleton-exempt.txt': '# features that reach no external system\nrules.feature # pure pricing rules, no external system\n',
+  })
+  const res = run(dir, [...skeletonArgs, '--strict-skeleton', '--skeleton-exempt', join(dir, 'parity/skeleton-exempt.txt')])
+  check(
+    'skeleton: an exempt feature file is skipped and its reason reported',
+    res.code === 0 && /pure pricing rules/.test(res.out),
+  )
+}
+
+// 44. Stale exempt lines fail under --strict-skeleton and warn otherwise.
+{
+  const files = {
+    'specs/orders.feature': ORDERS,
+    'tests/component/T.kt': rejecting,
+    'tests/app/T.kt': placing,
+    'parity/skeleton-exempt.txt': 'orders.feature # thought it was offline\nghost.feature # removed long ago\n',
+  }
+  const dir = workspace(files)
+  const exempt = join(dir, 'parity/skeleton-exempt.txt')
+  const loose = run(dir, [...skeletonArgs, '--skeleton-exempt', exempt])
+  const strict = run(dir, [...skeletonArgs, '--strict-skeleton', '--skeleton-exempt', exempt])
+  check(
+    'skeleton: an exempt line for a feature with an [app] claim, or for no feature, is stale',
+    loose.code === 0 && /stale/i.test(loose.out) && /ghost\.feature/.test(loose.out) && strict.code === 1,
+  )
+}
+
+// 45. Only finished claims count; wip, excluded and baselined scenarios don't need proof.
+{
+  const wipOnly = 'Feature: Later\n\n  @wip\n  Scenario: Not built yet\n    Given a\n'
+  const inProgress = '// Covers: orders.feature :: Scenario: Placing an order\n@Test\nfun placing() = inProgress {\n}\n'
+  const res = run(
+    workspace({
+      'specs/orders.feature': ORDERS,
+      'specs/later.feature': wipOnly,
+      'tests/component/T.kt': placing + rejecting,
+      'tests/app/T.kt': inProgress,
+    }),
+    [...skeletonArgs, '--strict-skeleton'],
+  )
+  check(
+    'skeleton: an in-progress app claim does not count; an all-wip feature file needs no skeleton',
+    res.code === 1 && /orders\.feature/.test(res.out) && !/later\.feature/.test(res.out),
+  )
+}
+
+// 46. Usage errors: --app-scope naming no declared scope; a malformed exempt line.
+{
+  const undeclared = run(workspace({ 'specs/orders.feature': ORDERS }), ['--app-scope', 'app'])
+  const malformedDir = workspace({ 'specs/orders.feature': ORDERS, 'parity/x.txt': 'orders.feature\n' })
+  const malformed = run(malformedDir, [...skeletonArgs, '--skeleton-exempt', join(malformedDir, 'parity/x.txt')])
+  check(
+    'skeleton: --app-scope must name a declared scope; exempt lines need a reason (exit 2)',
+    undeclared.code === 2 && malformed.code === 2 && /reason/.test(malformed.out),
+  )
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

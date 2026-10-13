@@ -142,6 +142,10 @@ export type KmpPresetOptions = {
    *  call per DSL write that adds code. */
   dslIsolationGlobs?: Globs
   scenarioFidelity?: boolean
+  /** The driver scope that runs the app tier (issue #129): the
+   *  fidelity judge also checks each changed claim's tier against the
+   *  acceptance-testing skill's tier rules. Pair with `driverScopes`. */
+  appScope?: string
   excludeGlobs?: string[]
   /** Acceptance code screened for new fixed waits (issue #119): the
    *  whole suite, DSL and drivers included. Exempt the suite's one
@@ -500,6 +504,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       specsDir,
       testRoots,
       testFilePattern: options.testFilePattern,
+      appScope: options.appScope,
     }),
 
     // ── Ship gates ───────────────────────────────────────────────────
