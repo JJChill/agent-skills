@@ -293,6 +293,28 @@ test('a Gherkin scenario body is read up to the next scenario', async () => {
   assert.doesNotMatch(j.prompts[0]!, /Given a catalogue/)
 })
 
+// ── Issue #129: the tier check, when an app scope is named ─────────
+
+test('with appScope, the prompt carries the tier rules and each scenario\'s tier', async () => {
+  const tagged = SPEC.replace('## Scenario: Placing an order', '## Scenario [app]: Placing an order')
+  const w = world({ 'docs/specs/checkout.feature.md': tagged })
+  const j = judge('pass')
+  const tiered = enforceScenarioFidelity({ specsDir: w.specsDir, testRoots: [w.root], appScope: 'app' })
+  await tiered(write(join(w.testDir, 'CheckoutSpec.kt'), specClass(PLACING, CANCELLING)), j.ctx())
+  assert.equal(j.prompts.length, 1, 'still one model call')
+  assert.match(j.prompts[0]!, /## Tier/)
+  assert.match(j.prompts[0]!, /the wire decides the outcome/i)
+  assert.match(j.prompts[0]!, /Tier: app \(tagged \[app\]\)/)
+  assert.match(j.prompts[0]!, /Tier: component \(untagged\)/)
+})
+
+test('without appScope, no tier check is asked for', async () => {
+  const w = world()
+  const j = judge('pass')
+  await rule(w)(write(join(w.testDir, 'CheckoutSpec.kt'), specClass(PLACING)), j.ctx())
+  assert.doesNotMatch(j.prompts[0]!, /## Tier/)
+})
+
 // ── Preset wiring ──────────────────────────────────────────────────
 
 function fidelityBlocks(entries: readonly RuleEntry[]): RuleBlock[] {
@@ -317,6 +339,16 @@ test('swiftRuleEntries wires scenario fidelity by default', () => {
 test('jsRuleEntries wires scenario fidelity only once specsDir is set', () => {
   assert.equal(fidelityBlocks(jsRuleEntries()).length, 0)
   assert.equal(fidelityBlocks(jsRuleEntries({ specsDir: '/repo/specs' })).length, 1)
+})
+
+test('the presets pass appScope through to the fidelity judge', async () => {
+  const w = world({ 'docs/specs/checkout.feature.md': SPEC })
+  const block = fidelityBlocks(
+    kmpRuleEntries(w.root, { appScope: 'app', testRoots: [w.root], driverScopes: [{ name: 'app', filePattern: /app/ }] }),
+  )[0]!
+  const j = judge('pass')
+  await block.rules![0]!(write(join(w.testDir, 'CheckoutSpec.kt'), specClass(PLACING)), j.ctx())
+  assert.match(j.prompts[0]!, /## Tier/)
 })
 
 test('scenarioFidelity: false turns it off', () => {

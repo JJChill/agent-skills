@@ -108,6 +108,10 @@ export type SwiftPresetOptions = {
    *  call per DSL write that adds code. */
   dslIsolationGlobs?: Globs
   scenarioFidelity?: boolean
+  /** The driver scope that runs the app tier (issue #129): the
+   *  fidelity judge also checks each changed claim's tier against the
+   *  acceptance-testing skill's tier rules. Pair with `driverScopes`. */
+  appScope?: string
   /** Files the TDD judge covers. Default: `App/*.swift`, `App/Sources/**`,
    *  `AcceptanceTests/**`, `VPNNetworkExtension/**`. */
   tddGlobs?: Globs
@@ -422,7 +426,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
     ...scenarioFidelityBlock(
       options.scenarioFidelity,
       ['AcceptanceTests/**', 'docs/specs/**/*.feature.md'],
-      { specsDir: join(root, 'docs/specs'), testRoots: [root], testFilePattern: ACCEPTANCE_TEST_FILES },
+      { specsDir: join(root, 'docs/specs'), testRoots: [root], testFilePattern: ACCEPTANCE_TEST_FILES, appScope: options.appScope },
     ),
 
     // ── Ship gates ───────────────────────────────────────────────────

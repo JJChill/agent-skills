@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.41
+
+Mechanical checks for two of the acceptance-testing skill's tier rules
+(#129).
+
+- **What was missing.** The tier rules added in 0.4.38 were skill text
+  only. A feature file could reach an external system with no app-tier
+  scenario, and a scenario whose outcome the wire decides could sit at
+  the component tier, without anything saying so.
+- **Walking skeleton (CLI):** `spec-parity.mjs --app-scope <name>` (a
+  declared `--scope`) lists every feature file that has scenarios
+  needing proof (not wip, excluded or baselined) but no finished claim
+  at that scope.
+  - **Warning by default.** The exit code doesn't change, because not
+    every feature file reaches an external system, and the commit gate
+    can't warn (a pass reason only reaches the trace).
+  - **`--strict-skeleton`** makes a missing skeleton, or a stale
+    exemption, fail (exit 1) for CI.
+  - **`--skeleton-exempt <file>`** lists feature files that reach no
+    external system, one `<spec>.feature # <reason>` per line with the
+    reason required. A line for a feature with an app-scope claim, or
+    for no feature, is stale.
+- **Tier check (fidelity judge):** `enforceScenarioFidelity({ appScope
+  })`, and the KMP, Swift and JS preset option `appScope`, add the tier
+  rules to the same judge call, at no extra model cost. The judge
+  reports an untagged scenario whose own text shows the wire, wiring or a
+  platform service decides its outcome. It never reports a tagged
+  scenario as over-tiered, because walking skeletons and escaped-defect
+  scenarios are app-tier for reasons the text can't show.
+
 ## 0.4.40
 
 An opt-in judged check that the acceptance DSL keeps tests isolated, and
