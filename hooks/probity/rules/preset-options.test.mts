@@ -409,3 +409,23 @@ test('the adapter-observability prompt passes delegation through the codebase\'s
   assert.match(prompt, /Delegation through the codebase's own abstractions/)
   assert.match(prompt, /Block only when this file itself reaches the vendor or platform API/)
 })
+
+// Issue #112: the presets pass the live-test options to the parity gate.
+test('kmpRuleEntries passes liveTestPattern and liveFloorScopes to the parity gate', async () => {
+  const dir = workspace({
+    'docs/specs/s.feature': 'Feature: F\n\n  @critical\n  Scenario: Blocked\n    Given a\n',
+    'app/acceptance/live/T.kt': '// Covers: s.feature :: Scenario: Blocked\n@Test\nfun blocked() {\n}\n',
+  })
+  const entries = kmpRuleEntries(dir, {
+    specsDir: join(dir, 'docs/specs'),
+    testRoots: [dir],
+    driverScopes: [{ name: 'critical', filePattern: /acceptance/ }],
+    liveTestPattern: /[/\\]live[/\\]/,
+    liveFloorScopes: ['critical'],
+  })
+  const gate = findRule(entries, 'enforceSpecTestParity')!.rule
+  const result = await gate({ kind: 'command', command: 'git commit -m x' } as never, noopCtx)
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(result.kind, 'violation')
+  assert.match((result as { reason: string }).reason, /live tests only/)
+})

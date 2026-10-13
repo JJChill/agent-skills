@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.42
+
+Claims from live (opt-in) tests are visible as weaker coverage (#112).
+
+- **What was missing.** A scenario whose only claim is a live test,
+  which CI skips unless an environment variable is set, looked exactly
+  as well covered as one exercised on every build.
+- **Now:**
+  - **`liveTestPattern`** (CLI `--live <regex>`) marks live test files
+    by path. Their claims still count as coverage.
+  - **The CLI reports live-only coverage** as its own group: a count in
+    the summary line, then the list.
+  - **`liveFloorScopes`** (CLI `--live-floor a,b`, which needs `--live`
+    and declared scopes) requires a claim from a test that isn't live on
+    scenarios tagged with those scopes. The gate and the CLI both
+    enforce it.
+  - **Exclusions:** a live claim on an excluded scenario makes the
+    exclusion stale, as any claim does.
+  - **Presets:** KMP, Swift and JS pass both options through to the
+    gate.
+- **Decisions to check:**
+  - **Path-based, not a `Covers (live):` marker.** Live tests usually
+    sit in their own source set or naming scheme, and a pattern leaves
+    every tool that parses `Covers:` untouched.
+  - **Reported, not blocking,** unless a floor is configured.
+
 ## 0.4.41
 
 Mechanical checks for two of the acceptance-testing skill's tier rules
