@@ -39,6 +39,7 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { scenarioFidelityBlock } from './scenario-fidelity.js'
 import { fixedWaitBlock } from './fixed-waits.js'
 import {
   enforceSpecTestParity,
@@ -157,6 +158,10 @@ export type JsPresetOptions = {
   ignoreTags?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
+  /** Judge each changed Covers-tagged test against the scenario it
+   *  claims (issue #120): same Given/When/Then, no unstated outcome.
+   *  One model call per write that changes a claim. Default: on. */
+  scenarioFidelity?: boolean
   excludeGlobs?: string[]
   /** Acceptance code screened for new fixed waits (issue #119): the
    *  whole suite, DSL and drivers included. Exempt the suite's one
@@ -292,6 +297,18 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
         }),
       ],
     })
+
+    // Scenario fidelity (issue #120): a changed Covers-tagged test
+    // must say what its scenario says, and a changed scenario must
+    // still match the tests that claim it. Judged, but only when a
+    // write changes a claim.
+    entries.push(
+      ...scenarioFidelityBlock(options.scenarioFidelity, [...acceptanceTestGlobs, ...specGlobs], {
+        specsDir,
+        testRoots,
+        testFilePattern: options.testFilePattern,
+      }),
+    )
 
     if (options.glossaryPath) {
       // Ubiquitous-language drift: renaming or removing a glossary

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.39
+
+A judged rule checks that a `Covers:`-tagged test says what its scenario
+says (#120).
+
+- **What was missing.** `enforceSpecTestParity` and
+  `requireSpecBackedAcceptanceTest` check that a test's `Covers:` tag
+  resolves, and the Language Test judges each side's wording. Nothing
+  compared the two sides, so a test could claim a scenario while setting
+  up a different precondition or asserting a different outcome, and
+  parity stayed green.
+- **Now:** `enforceScenarioFidelity({ specsDir, testRoots?,
+  testFilePattern?, instructions? })` in `rules/scenario-fidelity.ts`.
+  On a test write, it sends each claimed test the write adds or changes
+  to the judge, beside the text of the scenario it claims (by title or
+  `@id`). The judge reads the test through its DSL and denies a
+  different Given, When or Then, or an outcome the scenario doesn't
+  state. On a spec write, it judges each changed scenario against the
+  tests that already claim it. A test that delegates to a shared body in
+  a sibling `*Scenarios.*` file is judged with that file.
+- **Cost:** no model call for a write that changes no claim, for a claim
+  that resolves to no scenario (the parity rules report it), or for a
+  test whose body matches another test already claiming the same
+  scenario (a second driver).
+- **Presets:** KMP and Swift wire it by default on their acceptance tests
+  and specs. JS wires it once `specsDir` is set. `scenarioFidelity:
+  false` turns it off. It is wrapped in the presets' usual judge-failure
+  diagnostics and contradiction retry.
+- **Supporting changes.** `rules/spec-test-parity.ts` exports
+  `findTestFiles`, `OWNER_DECLARATION`, `COMMENT_OR_ANNOTATION_LINE` and
+  `DEFAULT_TEST_FILE_PATTERN`, and records each scenario's heading line.
+  The workflow eval tells the new judge apart from the language
+  validator, and asserts it stays silent when a second driver test
+  leaves the claimed test unchanged.
+
 ## 0.4.38
 
 The acceptance suite must exercise the whole deployable unit, with rules

@@ -43,7 +43,7 @@ The examples live in a durable, human-readable spec artifact — a Gherkin `.fea
 // Covers: onboarding.feature.md :: Scenario: New user completes onboarding
 ```
 
-An acceptance test with no feature file behind it is not a specification — it's a test someone will reverse-engineer intent from later. The order is mechanical: scenario heading first, then the test that claims it. The tags make traceability checkable in both directions (every scenario covered, every tag resolving to a real scenario); mark scenarios still being driven outside-in `## Scenario (wip):`. When several projects share one spec repository, give the scenario a stable id (`@id:<slug>`) and claim it with `// Covers: @id:<slug>`, so the title can be reworded without breaking every project's tests. Teams enforcing this with hooks can use the `requireSpecBackedAcceptanceTest` / `enforceSpecTestParity` rules in the Probity templates (`hooks/PROBITY.md`).
+An acceptance test with no feature file behind it is not a specification — it's a test someone will reverse-engineer intent from later. The order is mechanical: scenario heading first, then the test that claims it. The tags make traceability checkable in both directions (every scenario covered, every tag resolving to a real scenario); mark scenarios still being driven outside-in `## Scenario (wip):`. When several projects share one spec repository, give the scenario a stable id (`@id:<slug>`) and claim it with `// Covers: @id:<slug>`, so the title can be reworded without breaking every project's tests. A tag is a promise as well as a link: the test must set up the scenario's Givens, perform its When and assert its Thens, and nothing the scenario doesn't state. When the scenario changes, so do the tests that claim it. Teams enforcing this with hooks can use the `requireSpecBackedAcceptanceTest` / `enforceSpecTestParity` / `enforceScenarioFidelity` rules in the Probity templates (`hooks/PROBITY.md`).
 
 ### The Language Test
 
@@ -196,6 +196,7 @@ Trustworthy tests control all the variables.
 - Specifications mentioning pages, buttons, fields, URLs, endpoints, JSON, tables, or any named UI element
 - Acceptance criteria written after the implementation, or reverse-engineered from it
 - Acceptance test code with no feature file behind it — scenarios that exist only as test method names, or `Covers:` tags pointing at scenarios that don't exist
+- A `Covers:`-tagged test that sets up, does or checks something its scenario doesn't say
 - Test code calling the SUT's internals or HTTP endpoints directly from the test case layer (no DSL/driver layers)
 - Logic, assertions, or SUT interaction inside Gherkin step definitions
 - `sleep`/fixed waits anywhere in the suite

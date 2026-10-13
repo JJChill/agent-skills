@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { forbidContentPattern, type RuleEntry } from '@nizos/probity'
 
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { scenarioFidelityBlock } from './scenario-fidelity.js'
 import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import type { Globs } from '../rules/scoping.js'
 
@@ -96,6 +97,10 @@ export type SwiftPresetOptions = {
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
   shellWriteScreen?: boolean
+  /** Judge each changed Covers-tagged test against the scenario it
+   *  claims (issue #120): same Given/When/Then, no unstated outcome.
+   *  One model call per write that changes a claim. Default: on. */
+  scenarioFidelity?: boolean
   /** Files the TDD judge covers. Default: `App/*.swift`, `App/Sources/**`,
    *  `AcceptanceTests/**`, `VPNNetworkExtension/**`. */
   tddGlobs?: Globs
@@ -397,6 +402,16 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
       ],
       rules: [enforceAcceptanceLanguage({ glossaryPath: glossary })],
     },
+
+    // Scenario fidelity (issue #120): a changed Covers-tagged test
+    // must say what its scenario says, and a changed scenario must
+    // still match the tests that claim it. Judged, but only when a
+    // write changes a claim.
+    ...scenarioFidelityBlock(
+      options.scenarioFidelity,
+      ['AcceptanceTests/**', 'docs/specs/**/*.feature.md'],
+      { specsDir: join(root, 'docs/specs'), testRoots: [root], testFilePattern: ACCEPTANCE_TEST_FILES },
+    ),
 
     // ── Ship gates ───────────────────────────────────────────────────
 
