@@ -8,8 +8,12 @@
  * by package (`domain`/`port`/`usecase`/`presentation` vs
  * `adapter`/`di`/`ui`), kotlin.test + hand-written fakes with NO
  * mocking library, Koin at the composition root only, and
- * acceptance tests driven through a Robot DSL at the ViewModel
- * boundary with Markdown Given/When/Then specs in docs/specs/.
+ * acceptance tests driven through a Robot DSL with Markdown
+ * Given/When/Then specs in docs/specs/. The default driver should
+ * build the app through its shipping composition root and fake only
+ * outbound ports; a driver that fakes at the use-case ports is a
+ * component tier, not enough for releasability (see the
+ * acceptance-testing skill, issue #118).
  * Adjust globs and package names to your layout.
  *
  * Probity still runs on Node: install `@nizos/probity` and this rule
@@ -494,12 +498,17 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // is a thin spec class calling the existing body. CALIBRATE THE
     // PATTERNS TO YOUR LAYOUT before setting `driverScopes` — a
     // pattern matching zero files makes every tagged scenario fail,
-    // loudly. Example:
+    // loudly. Tag app-tier scenarios `[app]` by the acceptance-testing
+    // skill's tier rules (the wire, wiring or a platform service decides
+    // the outcome; a walking skeleton per feature that reaches an
+    // external system; escaped defects). Untagged scenarios need any
+    // covering test, normally at the component tier (issue #118).
+    // Example:
     //   driverScopes: [
-    //     { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
+    //     { name: 'component', filePattern: /[/\\]acceptance[/\\]component[/\\]/ },
+    //     { name: 'app', filePattern: /[/\\]acceptance[/\\]app[/\\]/ },
     //     { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
     //   ],
-    //   defaultScopes: ['view-model'],
     enforceSpecTestParity({
       specsDir,
       testRoots,

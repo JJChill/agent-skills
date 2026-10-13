@@ -347,7 +347,7 @@ type ScanOptions = {
   /**
    * Scope names every non-wip, non-baselined scenario must satisfy
    * even without a tag — the project's standard driver set (e.g.
-   * `['view-model']`). Names must exist in `driverScopes`. Omit for
+   * `['component']`). Names must exist in `driverScopes`. Omit for
    * the status-quo default: untagged scenarios need any one covering
    * test, regardless of driver.
    */
