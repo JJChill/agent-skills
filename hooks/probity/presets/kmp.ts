@@ -32,6 +32,7 @@ import {
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { fixedWaitBlock } from './fixed-waits.js'
 import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import {
   enforceSpecTestParity,
@@ -60,6 +61,7 @@ import {
   withKotlinFastPath,
   withMutationProbe,
   withTelemetryFastPath,
+  KOTLIN_FIXED_WAIT_PATTERNS,
 } from '../rules/kotlin.js'
 import {
   enforceAdapterObservability,
@@ -125,6 +127,11 @@ export type KmpPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Acceptance code screened for new fixed waits (issue #119): the
+   *  whole suite, DSL and drivers included. Exempt the suite's one
+   *  poll-for-concluding-event helper with a `!` glob. Default
+   *  `['**\/acceptance/**']`; pass `[]` to turn the screen off. */
+  fixedWaitGlobs?: Globs
   /** Test-infrastructure paths outside the TDD gate (issue #94), such
    *  as a device harness whose check-runners can only run in a signed
    *  app, e.g. `['harness/**']`. The TDD block (with its mutation-probe
@@ -310,6 +317,11 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
         }),
       ],
     },
+
+    // No fixed waits anywhere in the acceptance suite (issue #119):
+    // drivers wait for the concluding event, never for a set time.
+    // Delta-based, so waits already in a file don't block edits to it.
+    ...fixedWaitBlock(options.fixedWaitGlobs, KOTLIN_FIXED_WAIT_PATTERNS),
 
     // Spec↔test traceability. Editing a spec must not silently break
     // the tests that claim its scenarios: removing or renaming a

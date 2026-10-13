@@ -156,6 +156,21 @@ export function forbidNewAmbientEffects(
   })
 }
 
+/**
+ * Fixed waits for a Kotlin/Android acceptance suite (issue #119), for
+ * `forbidNewFixedWaits` in gates.ts. `delay(` is included even though
+ * under `runTest` it only moves virtual time: in an acceptance test it
+ * still waits a fixed amount instead of for the concluding event, and
+ * a statement can't tell which dispatcher it runs on. Advance the test
+ * clock instead; exempt the suite's one poll helper by glob.
+ */
+export const KOTLIN_FIXED_WAIT_PATTERNS: NamedPattern[] = [
+  { label: 'Thread.sleep()', pattern: /\bThread\.sleep\s*\(/g },
+  { label: 'TimeUnit.*.sleep()', pattern: /\bTimeUnit\.\w+\.sleep\s*\(/g },
+  { label: 'SystemClock.sleep()', pattern: /\bSystemClock\.sleep\s*\(/g },
+  { label: 'delay()', pattern: /\bdelay\s*\(/g },
+]
+
 type AstGrepNode = {
   ancestors(): AstGrepNode[]
   children(): AstGrepNode[]

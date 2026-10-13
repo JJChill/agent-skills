@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.37
+
+The Kotlin, KMP and JS/TS presets screen the acceptance suite for new
+fixed waits, as the Swift preset already did (#119, item 1).
+
+- **What was missing.** Only the Swift preset blocked sleeps in
+  acceptance code. A Kotlin or JS/TS driver or DSL could add
+  `Thread.sleep(500)` or `page.waitForTimeout(1000)` without anything
+  stopping it, and the acceptance-language judge mentions sleeps only
+  in spec files.
+- **Now:** `forbidNewFixedWaits({ patterns })` in `rules/gates.ts`
+  blocks a write that adds a fixed wait, and names it. The deny points
+  the agent at polling for the concluding event through the suite's
+  one poll helper, or at advancing a test clock. Kotlin patterns
+  (`KOTLIN_FIXED_WAIT_PATTERNS`): `Thread.sleep`, `TimeUnit.*.sleep`,
+  `SystemClock.sleep`, `delay(`. JS/TS patterns
+  (`JS_FIXED_WAIT_PATTERNS`): `waitForTimeout`, `setTimeout`, numeric
+  `cy.wait`, `sleep(`, `browser.pause`. The rule is delta-based, so
+  waits already in a file don't block edits to it, and waits named in
+  comments don't count. The presets wire it on `fixedWaitGlobs`
+  (default `['**/acceptance/**']`, so DSL and driver files are
+  covered too). Exempt the poll helper with a `!` glob, or pass `[]`
+  to turn the screen off. The JS preset wires it by default, unlike
+  its opt-in parity rules: a project with no `acceptance/` directory
+  sees no change.
+
 ## 0.4.36
 
 The commit gates recognise a commit by what a command runs, not by the
