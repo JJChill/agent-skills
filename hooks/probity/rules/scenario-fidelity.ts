@@ -83,15 +83,17 @@ export function claimedTests(testFile: string, content: string): Claim[] {
 
 /**
  * The end of the test declared at `owner`: past its annotations, the
- * line where its braces close again, or the end of its first code line
- * when that line opens none and doesn't continue (a Kotlin expression
- * body). Braces in
- * strings are not special-cased; they balance in practice.
+ * line where its braces close again. A test that opens no braces (a
+ * Kotlin expression body, a JS arrow without braces) runs while its
+ * lines end mid-expression (`=`, `(`, `,`, `=>`) or the next line is
+ * indented deeper than the declaration. Braces in strings are not
+ * special-cased; they balance in practice.
  */
 function testEnd(content: string, owner: number): number {
   let depth = 0
   let opened = false
-  let lineStart = owner
+  let lineStart = content.lastIndexOf('\n', owner - 1) + 1
+  let declarationIndent: number | undefined
   for (let i = owner; i < content.length; i++) {
     const char = content[i]
     if (char === '{') {
@@ -105,11 +107,19 @@ function testEnd(content: string, owner: number): number {
       }
     } else if (char === '\n') {
       const line = content.slice(lineStart, i)
-      if (!opened && !COMMENT_OR_ANNOTATION_LINE.test(line) && !/[=(,]\s*$/.test(line)) return i + 1
       lineStart = i + 1
+      if (opened || COMMENT_OR_ANNOTATION_LINE.test(line)) continue
+      declarationIndent ??= indentOf(line)
+      if (/(?:[=(,]|=>)\s*$/.test(line)) continue
+      const next = content.slice(i + 1).split('\n').find((candidate) => candidate.trim() !== '')
+      if (next === undefined || indentOf(next) <= declarationIndent) return i + 1
     }
   }
   return content.length
+}
+
+function indentOf(line: string): number {
+  return line.length - line.trimStart().length
 }
 
 /** Where the comment/annotation lines leading into a declaration begin. */

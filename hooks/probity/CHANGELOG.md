@@ -20,6 +20,10 @@ says (#120).
   state. On a spec write, it judges each changed scenario against the
   tests that already claim it. A test that delegates to a shared body in
   a sibling `*Scenarios.*` file is judged with that file.
+- **How far a test reaches.** A test runs from its tag to where its
+  braces close. A test with no braces (a Kotlin expression body, a JS
+  arrow) runs while its lines end mid-expression or the next line is
+  indented deeper, so a wrapped chained call is read in full.
 - **Cost:** no model call for a write that changes no claim, for a claim
   that resolves to no scenario (the parity rules report it), or for a
   test whose body matches another test already claiming the same

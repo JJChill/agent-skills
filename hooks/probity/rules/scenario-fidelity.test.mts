@@ -173,6 +173,30 @@ test('a multi-line expression body is read in full', async () => {
   assert.match(j.prompts[0]!, /receivesAnOrderConfirmation/)
 })
 
+test('a wrapped expression body is read in full (Kotlin chained call, JS arrow without braces)', async () => {
+  const w = world()
+  const kotlin = `    // Covers: checkout.feature.md :: Scenario: Placing an order
+    @Test
+    fun placingAnOrder() = CheckoutScenarios
+        .placingAnOrderThenConfirming(shopper)
+
+    @Test
+    fun unclaimed() {}
+`
+  const js =
+    "// Covers: checkout.feature.md :: Scenario: Placing an order\n" +
+    "it('places an order', () =>\n  scenarios.placingAnOrderThenConfirming(shopper))\n\nit('unclaimed', () => {})\n"
+  for (const [path, content] of [
+    [join(w.testDir, 'CheckoutSpec.kt'), specClass(kotlin)],
+    [join(w.root, 'acceptance/checkout.test.ts'), js],
+  ] as const) {
+    const j = judge('pass')
+    await rule(w)(write(path, content), j.ctx())
+    assert.match(j.prompts[0]!, /placingAnOrderThenConfirming/, path)
+    assert.doesNotMatch(j.prompts[0]!, /unclaimed/, path)
+  }
+})
+
 test('a claim that resolves to no scenario is left to the parity rules', async () => {
   const w = world()
   const j = judge('violation')
