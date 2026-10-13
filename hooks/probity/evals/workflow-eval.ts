@@ -299,7 +299,7 @@ const GREEN_RUN = {
 
 // ── Episode ─────────────────────────────────────────────────────────
 
-type AiKind = 'tdd' | 'boundary' | 'language' | 'adapterObs'
+type AiKind = 'tdd' | 'boundary' | 'language' | 'adapterObs' | 'fidelity'
 
 type Step = {
   title: string
@@ -446,8 +446,9 @@ class ParcelTrackingSplitDriverAcceptanceTest {
     expectNote: 'fast-path',
     // No NEW Covers key is added — the file's existing tag already
     // resolves, which is exactly how a second/third driver transcribes
-    // an already-claimed scenario. The spec-first rule must stay quiet.
-    expectAiSilent: ['tdd', 'language'],
+    // an already-claimed scenario. The spec-first rule must stay quiet,
+    // and so must the fidelity judge: the claimed test is unchanged.
+    expectAiSilent: ['tdd', 'language', 'fidelity'],
   },
   {
     title: 'Production code before any failing test was observed',
@@ -751,6 +752,7 @@ function ruleKind(prompt: string): AiKind {
   if (prompt.includes('TDD validator')) return 'tdd'
   if (prompt.includes('architecture-boundary validator')) return 'boundary'
   if (prompt.includes('adapter-observability validator')) return 'adapterObs'
+  if (prompt.includes('acceptance-test fidelity validator')) return 'fidelity'
   return 'language'
 }
 

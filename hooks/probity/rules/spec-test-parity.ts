@@ -71,10 +71,10 @@ export const DEFAULT_IN_PROGRESS_PATTERN =
 // A test declaration in any supported framework, for finding the test a
 // Covers tag belongs to: Kotlin/Java/Swift Testing `@Test`, XCTest
 // `func test…(`, and `it(`/`test(` with their modifiers.
-const OWNER_DECLARATION =
+export const OWNER_DECLARATION =
   /@Test\b|\bfunc\s+test\w*\s*\(|(?<![\w$.])(?:it|test)(?:\.(?:only|skip|todo|failing|fails|concurrent)\b)?(?:\.each\s*\([^)]*\))?\s*\(/g
 // Lines that may sit between a Covers tag and the test it annotates.
-const COMMENT_OR_ANNOTATION_LINE = /^\s*(?:$|\/\/|\/\*|\*|@\w)/
+export const COMMENT_OR_ANNOTATION_LINE = /^\s*(?:$|\/\/|\/\*|\*|@\w)/
 const SKIP_DIRS = new Set([
   'node_modules',
   '.git',
@@ -104,7 +104,7 @@ function scenarioKey(specFile: string, title: string): string {
   return `${specStem(specFile)} :: ${normalizeTitle(title)}`
 }
 
-type Scenario = {
+export type Scenario = {
   key: string
   specFile: string
   title: string
@@ -115,12 +115,14 @@ type Scenario = {
   id?: string
   /** Every id the scenario declares; more than one is an error. */
   ids: string[]
+  /** 0-based line of the scenario heading in its spec file. */
+  line: number
 }
 /**
  * A `Covers:` tag. By title: `key` is the scenario key. By id: `id` is
  * set and `key` is the raw `@id:<slug>` until resolved against the specs.
  */
-type CoversRef = {
+export type CoversRef = {
   key: string
   testFile: string
   specFile: string
@@ -182,7 +184,7 @@ function parseScopes(tag: string | undefined): string[] {
 export function extractScenarios(specFile: string, content: string): Scenario[] {
   const scenarios: Scenario[] = []
   let tags: string[] = []
-  for (const line of content.split(/\r?\n/)) {
+  for (const [index, line] of content.split(/\r?\n/).entries()) {
     const md = line.match(MD_SCENARIO)
     if (md) {
       const title = md[4] ?? ''
@@ -196,6 +198,7 @@ export function extractScenarios(specFile: string, content: string): Scenario[] 
         scopes: list.filter((tag) => !isIdTag(tag)),
         ids,
         id: ids.length === 1 ? ids[0] : undefined,
+        line: index,
       })
       tags = []
       continue
@@ -222,6 +225,7 @@ export function extractScenarios(specFile: string, content: string): Scenario[] 
         scopes: tags.filter((tag) => tag !== 'wip' && tag !== 'planned' && !isIdTag(tag)),
         ids,
         id: ids.length === 1 ? ids[0] : undefined,
+        line: index,
       })
       tags = []
       continue
@@ -315,7 +319,7 @@ function isFile(path: string): boolean {
   }
 }
 
-const DEFAULT_TEST_FILE_PATTERN = /[/\\]acceptance[/\\]/
+export const DEFAULT_TEST_FILE_PATTERN = /[/\\]acceptance[/\\]/
 
 /**
  * A named driver scope: which test files count as coverage from a
@@ -493,11 +497,9 @@ export function scanSpecs(specsDir: string): Scenario[] {
   )
 }
 
-export function scanCoversRefs(
-  testRoots: string[],
-  testFilePattern: RegExp,
-  inProgressPattern?: RegExp,
-): CoversRef[] {
+/** Acceptance test files under `testRoots`: files matching
+ *  `testFilePattern`, never the specs themselves. */
+export function findTestFiles(testRoots: string[], testFilePattern: RegExp): string[] {
   return testRoots
     .flatMap((root) => walk(root))
     .filter(
@@ -506,7 +508,16 @@ export function scanCoversRefs(
         !file.endsWith('.feature.md') &&
         !file.endsWith('.feature'),
     )
-    .flatMap((file) => extractCoversRefs(file, readFileSync(file, 'utf8'), inProgressPattern))
+}
+
+export function scanCoversRefs(
+  testRoots: string[],
+  testFilePattern: RegExp,
+  inProgressPattern?: RegExp,
+): CoversRef[] {
+  return findTestFiles(testRoots, testFilePattern).flatMap((file) =>
+    extractCoversRefs(file, readFileSync(file, 'utf8'), inProgressPattern),
+  )
 }
 
 function formatList(lines: string[], max = 10): string {
