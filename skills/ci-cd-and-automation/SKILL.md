@@ -9,7 +9,9 @@ description: Automates CI/CD pipeline setup. Use when adding, changing, or remov
 
 Automate quality gates so that no change reaches production without passing tests, lint, type checking, and build. CI/CD is the enforcement mechanism for every other skill — it catches what humans and agents miss, and it does so consistently on every single change.
 
-**Shift Left:** Catch problems as early in the pipeline as possible. A bug caught in linting costs minutes; the same bug caught in production costs hours. Move checks upstream — static analysis before tests, tests before staging, staging before production.
+**One pipeline, two test stages.** A **commit stage** gives fast feedback on every change and builds the release candidate once. An **acceptance stage** deploys that same candidate into a production-like environment and runs the executable specifications against it. Green acceptance stage means releasable: no manual gate decides it (see `acceptance-testing`).
+
+**Shift Left:** Catch problems as early in the pipeline as possible. A bug caught in linting costs minutes; the same bug caught in production costs hours. Move checks upstream — static analysis before tests, the commit stage before the acceptance stage, the acceptance stage before production.
 
 **Faster is Safer:** Smaller batches and more frequent releases reduce risk, not increase it. A deployment with 3 changes is easier to debug than one with 30. Frequent releases build confidence in the release process itself.
 
@@ -17,39 +19,50 @@ Automate quality gates so that no change reaches production without passing test
 
 - Setting up a new project's CI pipeline
 - Adding or modifying automated checks
-- Configuring deployment pipelines
+- Configuring deployment pipelines, including the acceptance stage
 - When a change should trigger automated verification
 - Debugging CI failures
 
-## The Quality Gate Pipeline
+## The Deployment Pipeline
 
-Every change goes through these gates before merge:
+Every change goes through both stages. The commit stage gates the merge; the acceptance stage decides whether the candidate can ship.
 
 ```
-Pull Request Opened
+Commit (PR or push to main)
     │
     ▼
-┌─────────────────┐
-│   LINT CHECK     │  eslint, prettier
-│   ↓ pass         │
-│   TYPE CHECK     │  tsc --noEmit
-│   ↓ pass         │
-│   UNIT TESTS     │  jest/vitest
-│   ↓ pass         │
-│   BUILD          │  npm run build
-│   ↓ pass         │
-│   INTEGRATION    │  API/DB tests
-│   ↓ pass         │
-│   E2E (optional) │  Playwright/Cypress
-│   ↓ pass         │
-│   SECURITY AUDIT │  npm audit
-│   ↓ pass         │
-│   BUNDLE SIZE    │  bundlesize check
-└─────────────────┘
-    │
+┌──────────────────────────┐
+│ COMMIT STAGE  (< 10 min)  │
+│   LINT CHECK              │  eslint, prettier
+│   TYPE CHECK              │  tsc --noEmit
+│   UNIT TESTS              │  jest/vitest (TDD tests)
+│   INTEGRATION             │  thin adapters against real deps
+│   BUILD                   │  npm run build
+│   SECURITY AUDIT          │  npm audit
+│   BUNDLE SIZE             │  bundlesize check
+│   → RELEASE CANDIDATE     │  versioned artifact, built once
+└──────────────────────────┘
+    │ pass
     ▼
-  Ready for review
+┌──────────────────────────┐
+│ ACCEPTANCE STAGE (< 1 h)  │
+│   PROVISION ENVIRONMENT   │  production-like, defined as code
+│   DEPLOY CANDIDATE        │  same artifact, production deploy tooling
+│   EXECUTABLE SPECS        │  the acceptance-testing suite
+│   OTHER RELEASE TESTS     │  performance, security, resilience
+└──────────────────────────┘
+    │ green ⇒ releasable
+    ▼
+  Production deployment of the same artifact
 ```
+
+- **Build once, promote the artifact.** Every later stage deploys the commit stage's candidate. Rebuilding per environment tests something other than what ships.
+- **Deploy the candidate the way production is deployed**, into an environment provisioned as code, so the acceptance stage also tests the deployment and its configuration. A shared, hand-kept "integration staging" environment is a poor substitute: other teams' versions in it make results uncontrollable.
+- **The acceptance tests live in the same repository** as the system they specify, and change in the same commits.
+- **In-progress specs run too.** A spec for a feature still being built is committed expected-to-fail, as `acceptance-testing` describes: it passes while its scenario still fails, so the stage stays green. The stage goes red the moment the feature works, which says to remove the marker. Never skip or exclude in-progress specs from the stage.
+- **Run the suite twice against one deployment**, and in parallel where it can run that way. A test that passes once and fails the second time leaks data between runs: it reuses a name instead of aliasing it, or depends on what an earlier run left behind (`acceptance-testing`, Test Isolation). Run the second pass in the same job, so the check costs no extra environment.
+- **No automatic retries.** Don't configure the runner to re-run failed acceptance tests. A test that passes on the second try has found an intermittent bug, most likely in the system, and a retry hides it.
+- **Manual exploratory testing is optional.** Do it on a candidate the acceptance stage has already passed, to learn. It is never a gate.
 
 **No gate can be skipped.** If lint fails, fix lint — don't disable the rule. If a test fails, fix the code — don't skip the test.
 
@@ -136,10 +149,12 @@ jobs:
 
 > **Note:** Even for CI-only test databases, use GitHub Secrets for credentials rather than hardcoding values. This builds good habits and prevents accidental reuse of test credentials in other contexts.
 
-### E2E Tests
+### Acceptance Stage
+
+The acceptance job takes the commit stage's artifact, deploys it with the same script production uses, and runs the executable specifications against that deployment. Drivers such as Playwright are an implementation detail of the suite (`acceptance-testing`), not a separate test category.
 
 ```yaml
-  e2e:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -148,18 +163,44 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - name: Install Playwright
-        run: npx playwright install --with-deps chromium
-      - name: Build
-        run: npm run build
-      - name: Run E2E tests
-        run: npx playwright test
+      - run: npm run build
       - uses: actions/upload-artifact@v4
-        if: failure()
         with:
-          name: playwright-report
-          path: playwright-report/
+          name: release-candidate-${{ github.sha }}
+          path: dist/
+
+  acceptance:
+    needs: [quality, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate-${{ github.sha }}
+          path: dist/
+      - name: Provision a production-like environment
+        run: ./deploy/provision.sh acceptance-${{ github.run_id }}
+      - name: Deploy the release candidate
+        run: ./deploy/deploy.sh acceptance-${{ github.run_id }} dist/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Run the executable specifications
+        run: npm run test:acceptance
+        env:
+          SUT_URL: https://acceptance-${{ github.run_id }}.example.test
+      - name: Run them again against the same deployment (isolation check)
+        run: npm run test:acceptance
+        env:
+          SUT_URL: https://acceptance-${{ github.run_id }}.example.test
+      - name: Tear down the environment
+        if: always()
+        run: ./deploy/teardown.sh acceptance-${{ github.run_id }}
 ```
+
+`deploy/provision.sh` and `deploy/deploy.sh` stand for whatever provisions and deploys production (Terraform, Helm, a platform CLI). The acceptance stage must call the same ones, with acceptance-environment parameters.
 
 ## Feeding CI Failures Back to Agents
 
@@ -232,10 +273,13 @@ return renderLegacyCheckout();
 PR merged to main
     │
     ▼
-  Staging deployment (auto)
-    │ Manual verification
+  Commit stage builds the release candidate
+    │
     ▼
-  Production deployment (manual trigger or auto after staging)
+  Acceptance stage (auto): deploy candidate, run executable specs
+    │ green ⇒ releasable
+    ▼
+  Production deployment of the same artifact (manual trigger or auto)
     │
     ▼
   Monitor for errors (15-minute window)
@@ -308,7 +352,7 @@ Designate someone responsible for keeping CI green. When the build breaks, the B
 
 ## CI Optimization
 
-When the pipeline exceeds 10 minutes, apply these strategies in order of impact:
+When the commit stage exceeds 10 minutes, apply these strategies in order of impact:
 
 ```
 Slow CI pipeline?
@@ -317,11 +361,11 @@ Slow CI pipeline?
 ├── Run jobs in parallel
 │   └── Split lint, typecheck, test, build into separate parallel jobs
 ├── Only run what changed
-│   └── Use path filters to skip unrelated jobs (e.g., skip e2e for docs-only PRs)
+│   └── Use path filters to skip unrelated jobs (e.g., skip lint for docs-only PRs)
 ├── Use matrix builds
 │   └── Shard test suites across multiple runners
 ├── Optimize the test suite
-│   └── Remove slow tests from the critical path, run them on a schedule instead
+│   └── Move slow system-level tests to the acceptance stage, which runs after every commit stage
 └── Use larger runners
     └── GitHub-hosted larger runners or self-hosted for CPU-heavy builds
 ```
@@ -366,13 +410,20 @@ jobs:
 | "The test is flaky, just re-run" | Flaky tests mask real bugs and waste everyone's time. Fix the flakiness. |
 | "We'll add CI later" | Projects without CI accumulate broken states. Set it up on day one. |
 | "Manual testing is enough" | Manual testing doesn't scale and isn't repeatable. Automate what you can. |
+| "Someone checks staging by hand before release" | A manual gate is slow and inconsistent, and decides nothing the acceptance stage can't. Green acceptance stage means releasable; explore by hand afterwards if you want to learn more. |
+| "We'll run the E2E suite against the shared staging environment" | Other teams' versions make it uncontrollable and hard to diagnose. Deploy your own candidate into an environment you provision, and fake what lies beyond your boundary. |
 
 ## Red Flags
 
 - No CI pipeline in the project
 - CI failures ignored or silenced
 - Tests disabled in CI to make the pipeline pass
-- Production deploys without staging verification
+- Production deploys of a candidate the acceptance stage hasn't passed
+- A manual verification step gating production
+- Rebuilding the artifact for each environment instead of promoting one release candidate
+- An acceptance stage that deploys differently from production, or into a hand-kept shared environment
+- In-progress acceptance tests skipped or excluded instead of committed expected-to-fail
+- Automatic retries of failed acceptance tests
 - No rollback mechanism
 - Secrets stored in code or CI config files (not secrets manager)
 - Long CI times with no optimization effort
@@ -381,10 +432,13 @@ jobs:
 
 After setting up or modifying CI:
 
-- [ ] All quality gates are present (lint, types, tests, build, audit)
+- [ ] All commit-stage gates are present (lint, types, tests, build, audit), and the stage produces one versioned release candidate
 - [ ] Pipeline runs on every PR and push to main
 - [ ] Failures block merge (branch protection configured)
 - [ ] CI results feed back into the development loop
 - [ ] Secrets are stored in the secrets manager, not in code
 - [ ] Deployment has a rollback mechanism
-- [ ] Pipeline runs in under 10 minutes for the test suite
+- [ ] The commit stage runs in under 10 minutes
+- [ ] An acceptance stage deploys that release candidate into a production-like environment with production deploy tooling, and runs the executable specifications in under an hour
+- [ ] Green acceptance stage is what makes a candidate releasable; no manual verification gates production
+- [ ] The acceptance suite runs twice against one deployment, and no failed test is retried automatically
