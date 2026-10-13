@@ -23,10 +23,11 @@ Before writing any test:
 Pure logic, no I/O          → Unit test
 Crosses a boundary          → Integration test (thin adapters get a few of these)
 Acceptance criterion        → Executable specification (see acceptance-testing)
-Critical user flow          → E2E test
+Critical user flow          → Executable specification whose scenario also
+                              declares a system-level driver scope ([system])
 ```
 
-Test at the lowest level that captures the behavior. Don't write E2E tests for things unit tests can cover. Acceptance tests specify behavior in domain language — one per acceptance criterion, a single outcome each, no UI or endpoint detail in the test case; input variations belong in unit tests below them.
+Test at the lowest level that captures the behavior. Don't push behavior up to a system-level driver when a unit test can cover it. Acceptance tests specify behavior in domain language — one per acceptance criterion, a single outcome each, no UI or endpoint detail in the test case; input variations belong in unit tests below them.
 
 ### 3. Substitute Fakes at Ports Only
 

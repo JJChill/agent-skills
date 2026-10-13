@@ -173,7 +173,7 @@ const clock = new ControlledClock(new Date('2026-07-01T09:00:00Z'));
 const app = new PlaceOrder(new InMemoryOrderStore(), approvingGateway(), clock);
 ```
 
-- Prefer **fakes** (working in-memory implementations, shared across the suite) over per-test stubs; prefer stubs over interaction-verifying mocks.
+- In unit and component tests, prefer **fakes** (working in-memory implementations, shared across the suite) over per-test stubs, and stubs over interaction-verifying mocks. At the acceptance layer it reverses: an external system gets a programmable **stub**, a response holder programmed through the DSL and keyed on the test's aliased ids, not a simulation (`acceptance-testing`).
 - Run the outbound-port **contract test suite** against both the fake and the real adapter, so the fake can't drift from reality.
 - The thin adapters themselves get a few focused integration tests against the real dependency (or its official emulator) — that's all they need, because they contain no logic.
 - Acceptance tests (`acceptance-testing`) use these same ports to stub external systems around the deployed SUT; unit tests (`test-driven-development`) use them in-process. One set of seams serves every level.

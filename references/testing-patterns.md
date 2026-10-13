@@ -10,7 +10,7 @@ Quick reference of JavaScript/TypeScript testing patterns — Jest, React Testin
 - [Mocking Patterns](#mocking-patterns)
 - [React/Component Testing](#reactcomponent-testing)
 - [API / Integration Testing](#api--integration-testing)
-- [E2E Testing (Playwright)](#e2e-testing-playwright)
+- [Acceptance Testing with a Playwright Driver](#acceptance-testing-with-a-playwright-driver)
 - [Test Anti-Patterns](#test-anti-patterns)
 
 ## Test Structure (Arrange-Act-Assert)
@@ -196,31 +196,40 @@ describe('POST /api/tasks', () => {
 });
 ```
 
-## E2E Testing (Playwright)
+## Acceptance Testing with a Playwright Driver
+
+Playwright belongs in the **protocol driver**, the only layer that knows about pages, roles and clicks. The test reads as the scenario, and the DSL in between supplies defaults and aliases names so tests can run in parallel against one deployment (`acceptance-testing`).
 
 ```typescript
-import { test, expect } from '@playwright/test';
-
-test('user can create and complete a task', async ({ page }) => {
-  // Navigate and authenticate
-  await page.goto('/');
-  await page.getByRole('textbox', { name: /email/i }).fill('test@example.com');
-  await page.getByLabel(/password/i).fill('testpass123');
-  await page.getByRole('button', { name: /log in/i }).click();
-
-  // Create a task
-  await page.getByRole('button', { name: /new task/i }).click();
-  await page.getByRole('textbox', { name: /title/i }).fill('Buy groceries');
-  await page.getByRole('button', { name: /create/i }).click();
-
-  // Verify task appears
-  const task = page.getByRole('listitem', { name: /buy groceries/i });
-  await expect(task).toBeVisible();
-
-  // Complete the task
-  await task.getByRole('checkbox', { name: /complete buy groceries/i }).check();
-  await expect(task).toHaveCSS('text-decoration-line', 'line-through');
+// Test case: the scenario, in domain language
+// Covers: tasks.feature :: Scenario: Completing a task
+test('a completed task is shown as done', async () => {
+  await tasks.signedInUser('user1');
+  await tasks.hasTask('user1', 'Buy groceries');
+  await tasks.completesTask('user1', 'Buy groceries');
+  await tasks.confirmTaskShownAsDone('user1', 'Buy groceries');
 });
+
+// DSL: defaults and aliasing; no Playwright here
+export class TasksDsl {
+  constructor(private driver: TasksDriver, private alias: Alias) {}
+  async signedInUser(name: string) { await this.driver.signIn(this.alias.of(name)); }
+  async hasTask(user: string, title: string) { await this.driver.createTask(this.alias.of(user), this.alias.of(title)); }
+  async completesTask(user: string, title: string) { await this.driver.complete(this.alias.of(user), this.alias.of(title)); }
+  async confirmTaskShownAsDone(user: string, title: string) { await this.driver.assertDone(this.alias.of(user), this.alias.of(title)); }
+}
+
+// Protocol driver: the only layer that imports Playwright
+export class WebTasksDriver implements TasksDriver {
+  constructor(private page: Page) {}
+  async complete(user: string, title: string) {
+    await this.page.getByRole('checkbox', { name: `Complete ${title}` }).check();
+  }
+  async assertDone(user: string, title: string) {
+    await expect(this.page.getByRole('listitem', { name: title })).toHaveAttribute('aria-checked', 'true');
+  }
+  // signIn and createTask likewise
+}
 ```
 
 ## Test Anti-Patterns
@@ -229,7 +238,7 @@ test('user can create and complete a task', async ({ page }) => {
 |---|---|---|
 | Testing implementation details | Breaks on refactor | Test inputs/outputs |
 | Snapshot everything | No one reviews snapshot diffs | Assert specific values |
-| Shared mutable state | Tests pollute each other | Setup/teardown per test |
+| Shared mutable state | Tests pollute each other | Fresh state per test (new fakes in each test); at the acceptance level, each test creates its own aliased data and nothing is cleaned up |
 | Testing third-party code | Wastes time, not your bug | Mock the boundary |
 | Skipping tests to pass CI | Hides real bugs | Fix or delete the test |
 | Using `test.skip` permanently | Dead code | Remove or fix it |
