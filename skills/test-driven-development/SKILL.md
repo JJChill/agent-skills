@@ -147,8 +147,8 @@ Invest testing effort according to the pyramid — most tests should be small an
 
 ```
           ╱╲
-         ╱  ╲         E2E Tests (~5%)
-        ╱    ╲        Full user flows, real browser
+         ╱  ╲         Acceptance Tests (~5%)
+        ╱    ╲        Executable specifications, deployed SUT
        ╱──────╲
       ╱        ╲      Integration Tests (~15%)
      ╱          ╲     Component interactions, API boundaries
@@ -168,9 +168,11 @@ Beyond the pyramid levels, classify tests by what resources they consume:
 |------|------------|-------|---------|
 | **Small** | Single process, no I/O, no network, no database | Milliseconds | Pure function tests, data transforms |
 | **Medium** | Multi-process OK, localhost only, no external services | Seconds | API tests with test DB, component tests |
-| **Large** | Multi-machine OK, external services allowed | Minutes | E2E tests, performance benchmarks, staging integration |
+| **Large** | Multi-machine OK, a deployed release candidate; systems outside it are faked | Minutes | Acceptance tests against a production-like deployment, performance benchmarks |
 
 Small tests should make up the vast majority of your suite. They're fast, reliable, and easy to debug when they fail.
+
+No automated test calls a real external service your team doesn't deploy: those calls are slow, uncontrollable and hard to diagnose. Fake it at its port, and protect the boundary with contract tests (`acceptance-testing`, `ports-and-adapters`).
 
 ### Decision Guide
 
@@ -181,8 +183,9 @@ Is it pure logic with no side effects?
 Does it cross a boundary (API, database, file system)?
   → Integration test (medium)
 
-Is it a critical user flow that must work end-to-end?
-  → E2E test (large) — limit these to critical paths
+Is it an acceptance criterion, or a critical user flow?
+  → Executable specification (large, see acceptance-testing); a critical
+    flow's scenario also declares a system-level driver scope
 ```
 
 ## Writing Good Tests
@@ -242,6 +245,8 @@ Preference order (most to least preferred):
 3. Stub                 → Returns canned data, no behavior
 4. Mock (interaction)   → Verifies method calls — use sparingly
 ```
+
+This order is for unit and component tests. At the acceptance layer, an external system is replaced by a **stub**: a programmable response holder the DSL programs per test, keyed on the test's aliased ids so parallel tests can't collide. It translates, it doesn't simulate (`acceptance-testing`).
 
 **Use mocks only when:** the real implementation is too slow, non-deterministic, or has side effects you can't control (external APIs, email sending). Over-mocking creates tests that pass while production breaks.
 
@@ -312,7 +317,7 @@ If the project sets a naming convention (for example, every unit test name is a 
 | Flaky tests (timing, order-dependent) | Erode trust in the test suite | Use deterministic assertions, isolate test state |
 | Testing framework code | Wastes time testing third-party behavior | Only test YOUR code |
 | Snapshot abuse | Large snapshots nobody reviews, break on any change | Use snapshots sparingly and review every change |
-| No test isolation | Tests pass individually but fail together | Each test sets up and tears down its own state |
+| No test isolation | Tests pass individually but fail together | Each test builds its own fresh state (new fakes per test). Acceptance tests create their own aliased data through the system and never clean up (`acceptance-testing`) |
 | Mocking everything | Tests pass but production breaks | Prefer real implementations > fakes > stubs > mocks. Mock only at boundaries where real deps are slow or non-deterministic |
 
 ## Browser Testing with DevTools
