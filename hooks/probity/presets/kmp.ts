@@ -498,17 +498,17 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // is a thin spec class calling the existing body. CALIBRATE THE
     // PATTERNS TO YOUR LAYOUT before setting `driverScopes` — a
     // pattern matching zero files makes every tagged scenario fail,
-    // loudly. Make the default scope one that runs the whole
-    // deployable unit (the shipping composition root, fakes only at
-    // outbound ports); a component scope that fakes at the use-case
-    // ports is an extra fast tier, never the default (issue #118).
+    // loudly. Tag app-tier scenarios `[app]` by the acceptance-testing
+    // skill's tier rules (the wire, wiring or a platform service decides
+    // the outcome; a walking skeleton per feature that reaches an
+    // external system; escaped defects). Untagged scenarios need any
+    // covering test, normally at the component tier (issue #118).
     // Example:
     //   driverScopes: [
     //     { name: 'component', filePattern: /[/\\]acceptance[/\\]component[/\\]/ },
     //     { name: 'app', filePattern: /[/\\]acceptance[/\\]app[/\\]/ },
     //     { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
     //   ],
-    //   defaultScopes: ['app'],
     enforceSpecTestParity({
       specsDir,
       testRoots,

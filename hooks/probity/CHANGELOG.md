@@ -2,24 +2,32 @@
 
 ## 0.4.38
 
-The documented default acceptance driver runs the whole deployable unit
-(#118). Docs and examples only; no rule behavior changes.
+The acceptance suite must exercise the whole deployable unit, with rules
+for which scenarios prove it (#118). Docs and examples only; no rule
+behavior changes.
 
 - **What was wrong.** The acceptance-testing skill offered a view-model
   driver that fakes at the use-case ports as the default driver set, and
   the KMP preset's scope example made `view-model` the default scope. A
-  suite like that decides releasability without ever running the core,
-  the adapters or the composition root.
-- **Now:** the skill's driver ladder has a floor, the **application
-  driver**. It builds the app through the composition entry point the
-  app ships with and fakes only outbound ports, with no UI needed. The
-  presentation-only rung is renamed the **component driver**: a fast
-  tier, never enough on its own for releasability. The KMP preset's
-  header and scope example (`component`, `app`, `system`, with
-  `defaultScopes: ['app']`) and `PROBITY.md` say the same. Scopes stay
-  opt-in: no preset sets `defaultScopes`, so existing parity results
-  don't change. To adopt it, a consuming project declares a whole-unit
-  scope and makes it its default.
+  suite like that decides releasability without ever running the
+  adapters, the wire or the composition root.
+- **Now:**
+  - **Two tiers.** The skill names an **app tier**: a driver that builds
+    the app through the composition entry point the app ships with and
+    fakes only outbound ports. The presentation-only rung becomes the
+    **component tier**, where most scenarios live. A suite of
+    component-tier scenarios alone is never releasable.
+  - **Tier rules.** A scenario goes to the app tier when the wire,
+    wiring or a platform service decides its outcome, as the walking
+    skeleton of a feature that reaches an external system, or after an
+    escaped defect. Everything else stays at the component tier, and
+    each scenario is claimed at one tier.
+  - **Preset example.** The KMP scope example declares `component`,
+    `app` and `system` scopes, tags app-tier scenarios `[app]`, and sets
+    no `defaultScopes`.
+- **Adopting it.** Scopes stay opt-in: no preset sets `driverScopes`, so
+  existing parity results don't change. A consuming project declares the
+  scopes and tags its app-tier scenarios.
 
 ## 0.4.37
 
