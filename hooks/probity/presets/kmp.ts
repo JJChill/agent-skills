@@ -135,6 +135,10 @@ export type KmpPresetOptions = {
   liveTestPattern?: RegExp
   /** Scope tags whose scenarios need a non-live claim (issue #112). */
   liveFloorScopes?: string[]
+  /** Dependency claim lists (issue #114), written by a dependency that
+   *  consumes the same specs with `spec-parity.mjs --write-claims` and
+   *  committed here. Default: none. */
+  dependencyClaimsPaths?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   /** Judge each changed Covers-tagged test against the scenario it
@@ -557,6 +561,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       inProgressPattern: options.inProgressPattern,
       liveTestPattern: options.liveTestPattern,
       liveFloorScopes: options.liveFloorScopes,
+      dependencyClaimsPaths: options.dependencyClaimsPaths,
       testFilePattern: options.testFilePattern,
       driverScopes: options.driverScopes,
       defaultScopes: options.defaultScopes,

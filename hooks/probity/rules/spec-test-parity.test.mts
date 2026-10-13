@@ -6,7 +6,7 @@
 // Gherkin `.feature` specs, treat the extensions as interchangeable in
 // Covers-tag resolution, and reject a stem present in both forms.
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import {
@@ -683,6 +683,82 @@ const liveScopes = { driverScopes: [{ name: 'critical', filePattern: /tests/ }],
     liveScopes,
   )
   check('live: a live claim on an excluded scenario fails the stale exclusion', res.kind === 'violation' && /delete the exclusion/.test(res.reason ?? ''))
+}
+
+// ── Issue #114: a pinned dependency's claims ─────────────────────
+
+const SDK_SPEC = 'Feature: Sync\n\n  @id:offline-sync\n  Scenario: Changes made offline sync later\n    Given an offline change\n    Then the change syncs\n\n  Scenario: App badge\n    Given a pending change\n    Then the badge shows\n'
+const appBadge = '// Covers: sync.feature :: Scenario: App badge\n@Test\nfun badge() {\n}\n'
+
+/** Claims written by the CLI, so the gate is checked against the real hash. */
+function cliClaims(spec: string): string {
+  const dir = workspace({ 'specs/sync.feature': spec, 'tests/T.kt': '// Covers: @id:offline-sync\n@Test\nfun sync() {\n}\n' })
+  const out = join(dir, 'claims.txt')
+  execFileSync('node', [join(dirname(new URL(import.meta.url).pathname), '../scripts/spec-parity.mjs'), '--specs', join(dir, 'specs'), '--tests', dir, '--pattern', 'tests', '--write-claims', out, '--claims-source', 'example-sdk 2.3.0'])
+  const text = readFileSync(out, 'utf8')
+  rmSync(dir, { recursive: true, force: true })
+  return text
+}
+const SDK_CLAIMS = cliClaims(SDK_SPEC)
+
+// 37. A CLI-written dependency claim covers the scenario in the gate.
+{
+  const res = await parityWip(
+    { 'specs/sync.feature': SDK_SPEC, 'tests/T.kt': appBadge, 'parity/deps.txt': SDK_CLAIMS },
+    { dependencyClaimsPaths: [] },
+  )
+  const withClaims = await (async () => {
+    const dir = workspace({ 'specs/sync.feature': SDK_SPEC, 'tests/T.kt': appBadge, 'parity/deps.txt': SDK_CLAIMS })
+    try {
+      return await enforceSpecTestParity({
+        specsDir: join(dir, 'specs'),
+        testRoots: [dir],
+        testFilePattern: /tests/,
+        dependencyClaimsPaths: [join(dir, 'parity/deps.txt')],
+      } as any)(commit as any)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })()
+  check('claims: without the claim file the scenario is orphaned; with it, covered', res.kind === 'violation' && withClaims.kind === 'pass')
+}
+
+async function parityDeps(spec: string, extra: Record<string, unknown> = {}, more: Record<string, string> = {}) {
+  const dir = workspace({ 'specs/sync.feature': spec, 'tests/T.kt': appBadge, 'parity/deps.txt': SDK_CLAIMS, ...more })
+  try {
+    return (await enforceSpecTestParity({
+      specsDir: join(dir, 'specs'),
+      testRoots: [dir],
+      testFilePattern: /tests/,
+      dependencyClaimsPaths: [join(dir, 'parity/deps.txt')],
+      exclusionsPath: join(dir, 'parity/exclusions.txt'),
+      ...extra,
+    } as any)(commit as any)) as { kind: string; reason?: string }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// 38. Changed steps void the claim, and the gate says so.
+{
+  const res = await parityDeps(SDK_SPEC.replace('Then the change syncs', 'Then the change syncs fast'))
+  check(
+    'claims: changed steps void the dependency claim (violation names the source)',
+    res.kind === 'violation' && /void/i.test(res.reason ?? '') && /example-sdk 2\.3\.0/.test(res.reason ?? ''),
+  )
+}
+
+// 39. A tagged scope still needs the app's own test; an exclusion for a covered scenario is stale.
+{
+  const tagged = await parityDeps(SDK_SPEC.replace('@id:offline-sync', '@id:offline-sync @ui'), {
+    driverScopes: [{ name: 'ui', filePattern: /tests[/\\]ui[/\\]/ }],
+  })
+  const excluded = await parityDeps(SDK_SPEC, {}, { 'parity/exclusions.txt': '@id:offline-sync # covered by example-sdk\n' })
+  check(
+    'claims: a tagged scope is not met by a dependency claim; an exclusion for a dependency-covered scenario is stale',
+    tagged.kind === 'violation' && /needs \[ui\]/.test(tagged.reason ?? '') &&
+      excluded.kind === 'violation' && /dependency/i.test(excluded.reason ?? ''),
+  )
 }
 
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)

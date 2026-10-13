@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.43
+
+A dependency's checked coverage replaces unchecked "covered by the SDK"
+exclusions (#114).
+
+- **What was missing.** An app built on an SDK that consumes the same
+  specs could only exclude SDK-internal scenarios with a reason naming
+  the SDK. Nothing checked the reason, so a later SDK that stopped
+  covering a scenario, or a scenario whose steps changed, stayed green.
+- **Now:**
+  - **The SDK writes its claims.** `spec-parity.mjs --write-claims
+    <file> [--claims-source <text>]` writes every scenario a finished
+    test claims, one line each, pinned to a hash of the scenario's
+    steps (`@id:<slug> sha=<hash>`, or the title form).
+  - **The app checks them.** It commits the file and passes it as
+    `dependencyClaimsPaths` (gate and presets) or `--dependency-claims`
+    (CLI, repeatable). A claim covers a scenario the app has no
+    finished test for while the steps still hash the same.
+  - **Changed steps void a claim**, and the uncovered scenario is
+    reported with the claim's source. A reworded title keeps an id
+    claim.
+  - **Scope floors:** a dependency claim meets `defaultScopes`, never a
+    scope tagged on the scenario.
+  - **Stale entries:** an exclusion or wip line for a dependency-covered
+    scenario is stale.
+  - **Reporting:** claims for scenarios the app's specs don't have are
+    ignored. The CLI lists dependency coverage with its source. A commit
+    that changes a claim file runs the gate.
+- **Decisions to check:**
+  - **The claim list is committed in the app**, offline and reviewable,
+    not read from a build cache.
+  - **Exclusions stay separate** rather than turning into claims.
+  - **Spec mismatches:** the hash is of the scenario's steps only, so a
+    different spec revision on either side shows up as a void claim
+    rather than silently passing.
+
 ## 0.4.42
 
 Claims from live (opt-in) tests are visible as weaker coverage (#112).
