@@ -28,6 +28,7 @@ import {
   requireGreenTestRun,
   withJudgeFailureDiagnostics,
   withContradictionRetry,
+  JS_FIXED_WAIT_PATTERNS,
 } from '../rules/gates.js'
 import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
@@ -38,6 +39,7 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { fixedWaitBlock } from './fixed-waits.js'
 import {
   enforceSpecTestParity,
   JS_TEST_DECLARATION,
@@ -156,6 +158,11 @@ export type JsPresetOptions = {
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   excludeGlobs?: string[]
+  /** Acceptance code screened for new fixed waits (issue #119): the
+   *  whole suite, DSL and drivers included. Exempt the suite's one
+   *  poll-for-concluding-event helper with a `!` glob. Default
+   *  `['**\/acceptance/**']`; pass `[]` to turn the screen off. */
+  fixedWaitGlobs?: Globs
   /** Deny a shell command (Bash, Kiro's shell) that writes a file any
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
@@ -219,6 +226,11 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
       files: mockGlobs,
       rules: [forbidInternalModuleMocks()],
     },
+
+    // No fixed waits anywhere in the acceptance suite (issue #119):
+    // drivers wait for the concluding event, never for a set time.
+    // Delta-based, so waits already in a file don't block edits to it.
+    ...fixedWaitBlock(options.fixedWaitGlobs, JS_FIXED_WAIT_PATTERNS),
   ]
 
   // Driving adapters must be thin (issue #72). The core-purity block
