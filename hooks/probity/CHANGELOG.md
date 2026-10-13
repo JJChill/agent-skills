@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.40
+
+An opt-in judged check that the acceptance DSL keeps tests isolated, and
+the course's remaining isolation advice in the skill (#119, items 2, 3
+and 5).
+
+- **What was missing.** Nothing checked functional or temporal
+  isolation. A DSL could pass a test's names straight to a shared SUT,
+  program stubs with raw names, write to a shared fixture, or clean up
+  after itself, and only the skill text said otherwise.
+- **Now:** `enforceTestIsolation({ instructions? })` in
+  `rules/acceptance-language.ts` judges DSL writes that add code. It
+  denies an unaliased entity, a stub keyed on a raw name, a shared
+  writable fixture, and clean-up of test data. Closing driver resources
+  is fine, and a DSL that builds a fresh SUT per test passes the
+  aliasing and clean-up checks. The prompt carries the file's first 30
+  lines and the changed lines with context rather than the whole file,
+  and a write that adds no code (only removals, comments or imports) is
+  not judged. Every preset takes `dslIsolationGlobs`, off by default.
+- **Skill (acceptance-testing):**
+  - **DSL:** defaults on every call, and a DSL organised by concept.
+  - **Drivers:** failure messages in domain language.
+  - **Aliasing:** a reference alias and sequence helper, with stubs keyed
+    on aliased ids.
+  - **Data and retries:** synthetic data only, and no automatic retries.
+  - Matching red flags, a new rationalization row, and a checklist item.
+
 ## 0.4.39
 
 A judged rule checks that a `Covers:`-tagged test says what its scenario

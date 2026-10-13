@@ -55,6 +55,7 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { testIsolationBlock } from './test-isolation.js'
 import { fixedWaitBlock } from './fixed-waits.js'
 import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
@@ -125,6 +126,12 @@ export type KotlinPresetOptions = {
   commitCommand?: RegExp
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
+  /** Acceptance DSL files judged for test isolation (issue #119):
+   *  aliased entities, stubs keyed on aliased ids, no shared writable
+   *  fixtures, no clean-up of test data. Off by default; worth turning on
+   *  when the suite runs against a SUT that outlives a test. One model
+   *  call per DSL write that adds code. */
+  dslIsolationGlobs?: Globs
   excludeGlobs?: string[]
   /** Acceptance code screened for new fixed waits (issue #119): the
    *  whole suite, DSL and drivers included. Exempt the suite's one
@@ -353,6 +360,11 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
         ),
       ],
     },
+
+    // Test isolation on the acceptance DSL (issue #119): opt-in, for
+    // suites whose SUT outlives a test. Judged per DSL write that adds
+    // code.
+    ...testIsolationBlock(options.dslIsolationGlobs),
 
     // ── Ship gates ───────────────────────────────────────────────────
 
