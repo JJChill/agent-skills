@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.38
+
+The documented default acceptance driver runs the whole deployable unit
+(#118). Docs and examples only; no rule behavior changes.
+
+- **What was wrong.** The acceptance-testing skill offered a view-model
+  driver that fakes at the use-case ports as the default driver set, and
+  the KMP preset's scope example made `view-model` the default scope. A
+  suite like that decides releasability without ever running the core,
+  the adapters or the composition root.
+- **Now:** the skill's driver ladder has a floor, the **application
+  driver**. It builds the app through the composition entry point the
+  app ships with and fakes only outbound ports, with no UI needed. The
+  presentation-only rung is renamed the **component driver**: a fast
+  tier, never enough on its own for releasability. The KMP preset's
+  header and scope example (`component`, `app`, `system`, with
+  `defaultScopes: ['app']`) and `PROBITY.md` say the same. Scopes stay
+  opt-in: no preset sets `defaultScopes`, so existing parity results
+  don't change. To adopt it, a consuming project declares a whole-unit
+  scope and makes it its default.
+
 ## 0.4.37
 
 The Kotlin, KMP and JS/TS presets screen the acceptance suite for new
