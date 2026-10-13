@@ -13,6 +13,7 @@
  *                        [--exclusions <file>] [--ignore-tags a,b]
  *                        [--wip <file>] [--shared-wip honor|ignore]
  *                        [--in-progress <regex>]
+ *                        [--live <regex> [--live-floor a,b]]
  *                        [--app-scope <name> [--strict-skeleton]
  *                         [--skeleton-exempt <file>]]
  *
@@ -72,6 +73,13 @@
  *              test carrying it is an in-progress claim: not coverage, so
  *              its scenario must be wip, and a wip scenario a finished
  *              test claims fails as promoted.
+ *   --live     regex for live test files (issue #112): tests that run
+ *              only against a live service, opt-in and usually skipped
+ *              in CI. Their claims still count as coverage; scenarios
+ *              covered by live tests only are listed as their own group.
+ *   --live-floor  with --live: comma-separated declared scopes whose
+ *              tagged scenarios need a claim from a test that isn't
+ *              live. A scenario covered by live tests only then fails.
  *   --app-scope  the declared scope that runs the app tier (issue #129).
  *              Turns on the walking-skeleton check from the
  *              acceptance-testing skill's tier rules: every feature file
@@ -155,6 +163,8 @@ function parseArgs(argv) {
     wip: undefined,
     sharedWip: 'honor',
     inProgress: DEFAULT_IN_PROGRESS,
+    live: undefined,
+    liveFloor: [],
     appScope: undefined,
     strictSkeleton: false,
     skeletonExempt: undefined,
@@ -181,6 +191,13 @@ function parseArgs(argv) {
     } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
     else if (argv[i] === '--wip') args.wip = argv[++i]
     else if (argv[i] === '--in-progress') args.inProgress = new RegExp(argv[++i] ?? '', 'm')
+    else if (argv[i] === '--live') args.live = new RegExp(argv[++i] ?? '')
+    else if (argv[i] === '--live-floor') {
+      args.liveFloor = (argv[++i] ?? '')
+        .split(',')
+        .map((name) => name.trim().toLowerCase())
+        .filter(Boolean)
+    }
     else if (argv[i] === '--app-scope') args.appScope = (argv[++i] ?? '').trim().toLowerCase()
     else if (argv[i] === '--strict-skeleton') args.strictSkeleton = true
     else if (argv[i] === '--skeleton-exempt') args.skeletonExempt = argv[++i]
@@ -207,6 +224,7 @@ function parseArgs(argv) {
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
         '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b] ' +
         '[--wip <file>] [--shared-wip honor|ignore] [--in-progress <regex>] ' +
+        '[--live <regex> [--live-floor a,b]] ' +
         '[--app-scope <name> [--strict-skeleton] [--skeleton-exempt <file>]]',
     )
     process.exit(2)
@@ -214,6 +232,16 @@ function parseArgs(argv) {
   if (args.appScope !== undefined && !args.scopes.has(args.appScope)) {
     console.error(`--app-scope: "${args.appScope}" is not a declared driver scope (declare it with --scope ${args.appScope}=<regex>).`)
     process.exit(2)
+  }
+  if (args.liveFloor.length > 0 && !args.live) {
+    console.error('--live-floor needs --live to tell live tests apart.')
+    process.exit(2)
+  }
+  for (const name of args.liveFloor) {
+    if (!args.scopes.has(name)) {
+      console.error(`--live-floor: "${name}" is not a declared driver scope.`)
+      process.exit(2)
+    }
   }
   if ((args.strictSkeleton || args.skeletonExempt) && args.appScope === undefined) {
     console.error('--strict-skeleton and --skeleton-exempt need --app-scope.')
@@ -610,6 +638,23 @@ for (const s of scenarios) {
   }
 }
 
+// Issue #112: scenarios whose every finished claim comes from a live
+// (opt-in) test count as covered, but are reported as their own group;
+// with --live-floor, a scenario tagged with a floor scope needs a claim
+// from a test that isn't live.
+const coveredLiveOnly = args.live
+  ? scenarios.filter(
+      (s) =>
+        claimed.has(s.key) &&
+        !s.wip &&
+        !excluded.has(s.key) &&
+        refs.every((ref) => ref.key !== s.key || args.live.test(ref.testFile)),
+    )
+  : []
+const liveOnlyBelowFloor = coveredLiveOnly.filter(
+  (s) => !baseline.has(s.key) && s.scopes.some((tag) => args.liveFloor.includes(tag)),
+)
+
 // Issue #129, the walking skeleton: every feature file with scenarios that
 // need proof has at least one finished claim at the app scope, unless the
 // project exempts it. A warning by default; --strict-skeleton fails it.
@@ -660,6 +705,7 @@ function reportSkeleton(print) {
 
 if (
   !skeletonFails &&
+  liveOnlyBelowFloor.length === 0 &&
   orphaned.length === 0 &&
   onlyInProgress.length === 0 &&
   promotedSpecWip.length === 0 &&
@@ -676,6 +722,7 @@ if (
   const baselined = unclaimed.length
   console.log(
     `Spec↔test parity holds: ${scenarios.length - wip - baselined - notOurs.length} scenario(s) covered` +
+      (coveredLiveOnly.length > 0 ? ` (${coveredLiveOnly.length} by live tests only)` : '') +
       (wip > 0 ? `, ${wip} wip` : '') +
       (baselined > 0 ? `, ${baselined} baselined (burn-down)` : '') +
       (notOurs.length > 0 ? `, ${notOurs.length} not this project's` : '') +
@@ -693,8 +740,19 @@ if (
       console.log(`  ${s.specFile} :: ${s.title} — ${excluded.get(s.key).reason}`)
     }
   }
+  if (coveredLiveOnly.length > 0) {
+    console.log('Covered by live tests only (not run on every build):')
+    for (const s of coveredLiveOnly) console.log(`  ${s.specFile} :: ${s.title}`)
+  }
   reportSkeleton(console.log)
   process.exit(0)
+}
+if (liveOnlyBelowFloor.length > 0) {
+  console.error(
+    'Scenarios covered by live tests only, whose scope requires a test that runs on every build ' +
+      '(add a non-live claim, or drop the tag):',
+  )
+  for (const s of liveOnlyBelowFloor) console.error(`  ${s.specFile} :: ${s.title}`)
 }
 reportSkeleton(console.error)
 if (orphaned.length > 0) {

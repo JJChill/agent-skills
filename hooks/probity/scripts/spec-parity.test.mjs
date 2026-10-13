@@ -706,5 +706,41 @@ const skeletonArgs = ['--scope', 'app=tests/app/', '--scope', 'component=tests/c
   )
 }
 
+// ── Issue #112: claims by live (opt-in) tests ─────────────────────
+
+const LIVE_SPEC = 'Feature: F\n\n  @critical\n  Scenario: Blocked number\n    Given a\n\n  Scenario: Plain live\n    Given b\n'
+const blockedLive = '// Covers: sample.feature :: Scenario: Blocked number\n@Test\nfun blocked() {}\n'
+const plainLive = '// Covers: sample.feature :: Scenario: Plain live\n@Test\nfun plain() {}\n'
+const liveArgs = ['--scope', 'critical=tests/', '--live', 'tests/live/']
+
+// 47. Live-only coverage counts, and is reported as its own group.
+{
+  const res = run(workspace({ 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive, 'tests/offline/T.kt': plainLive }), liveArgs)
+  check(
+    'live: a scenario covered only by live tests passes and is listed separately',
+    res.code === 0 && /1 by live tests only/.test(res.out) && /Covered by live tests only/.test(res.out) && /Blocked number/.test(res.out) && !/Plain live —/.test(res.out),
+  )
+}
+
+// 48. --live-floor: a tagged scenario needs a non-live claim.
+{
+  const onlyLive = run(workspace({ 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive + plainLive }), [...liveArgs, '--live-floor', 'critical'])
+  const both = run(
+    workspace({ 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive + plainLive, 'tests/offline/T.kt': blockedLive }),
+    [...liveArgs, '--live-floor', 'critical'],
+  )
+  check(
+    'live: --live-floor fails a tagged scenario covered only by live tests (exit 1), passes with a non-live claim',
+    onlyLive.code === 1 && /live tests only/i.test(onlyLive.out) && both.code === 0,
+  )
+}
+
+// 49. --live-floor without --live, or naming an undeclared scope, is a usage error.
+{
+  const noLive = run(workspace({ 'specs/sample.feature': LIVE_SPEC }), ['--scope', 'critical=tests/', '--live-floor', 'critical'])
+  const undeclared = run(workspace({ 'specs/sample.feature': LIVE_SPEC }), [...liveArgs, '--live-floor', 'nope'])
+  check('live: --live-floor needs --live and declared scopes (exit 2)', noLive.code === 2 && undeclared.code === 2)
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

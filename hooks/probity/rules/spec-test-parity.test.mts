@@ -638,5 +638,52 @@ const IN_PROGRESS = '// Covers: sample.feature :: Scenario: Driving now\n@Test\n
   check('in progress: an in-progress test does not meet a driver scope', res.kind === 'violation' && /\[system\]/.test(res.reason ?? ''))
 }
 
+// ── Issue #112: claims by live (opt-in) tests ─────────────────────
+
+const LIVE_SPEC = 'Feature: F\n\n  @critical\n  Scenario: Blocked number\n    Given a\n\n  Scenario: Plain live\n    Given b\n'
+const blockedLive = '// Covers: sample.feature :: Scenario: Blocked number\n@Test\nfun blocked() {\n}\n'
+const plainLive = '// Covers: sample.feature :: Scenario: Plain live\n@Test\nfun plain() {\n}\n'
+const liveScopes = { driverScopes: [{ name: 'critical', filePattern: /tests/ }], liveTestPattern: /tests[/\\]live[/\\]/ }
+
+// 34. A live claim still counts as coverage by default.
+{
+  const res = await parityWip({ 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive + plainLive }, liveScopes)
+  check('live: a scenario claimed only by live tests is covered (pass)', res.kind === 'pass')
+}
+
+// 35. liveFloorScopes: a tagged scenario needs a non-live claim.
+{
+  const onlyLive = await parityWip(
+    { 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive + plainLive },
+    { ...liveScopes, liveFloorScopes: ['critical'] },
+  )
+  const alsoOffline = await parityWip(
+    { 'specs/sample.feature': LIVE_SPEC, 'tests/live/T.kt': blockedLive + plainLive, 'tests/offline/T.kt': blockedLive },
+    { ...liveScopes, liveFloorScopes: ['critical'] },
+  )
+  check(
+    'live: liveFloorScopes blocks a tagged scenario covered only by live tests, passes with a non-live claim',
+    onlyLive.kind === 'violation' &&
+      /live tests only/i.test(onlyLive.reason ?? '') &&
+      /Blocked number/.test(onlyLive.reason ?? '') &&
+      !/Plain live/.test(onlyLive.reason ?? '') &&
+      alsoOffline.kind === 'pass',
+  )
+}
+
+// 36. A live claim on an excluded scenario makes the exclusion stale, as any claim does.
+{
+  const res = await parityWip(
+    {
+      'specs/sample.feature': LIVE_SPEC,
+      'tests/live/T.kt': blockedLive,
+      'tests/offline/T.kt': plainLive,
+      'parity/exclusions.txt': 'sample.feature :: Blocked number # the service enforces blocks\n',
+    },
+    liveScopes,
+  )
+  check('live: a live claim on an excluded scenario fails the stale exclusion', res.kind === 'violation' && /delete the exclusion/.test(res.reason ?? ''))
+}
+
 console.log(`\nspec-test-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

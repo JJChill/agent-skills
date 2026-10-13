@@ -418,6 +418,19 @@ type ScanOptions = {
    */
   inProgressPattern?: RegExp
   /**
+   * Live tests (issue #112): test files that run only against a live
+   * service, opt-in and usually skipped in CI. A claim from one still
+   * counts as coverage; the CLI reports scenarios covered by live tests
+   * only as their own group. Pair with `liveFloorScopes` to require more.
+   */
+  liveTestPattern?: RegExp
+  /**
+   * Scope tags whose scenarios need at least one claim from a test that
+   * is not live (issue #112): such a scenario covered only by live tests
+   * blocks. Needs `liveTestPattern`.
+   */
+  liveFloorScopes?: string[]
+  /**
    * Files the pending commit will record, relative to the root of the
    * working tree being committed (`cwd`: the project, or a worktree nested
    * in it). Defaults to Git's staged set plus tracked modifications for
@@ -660,6 +673,14 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           'A tag is either a scope this project checks or one it ignores — pick one.',
       }
     }
+    if ((options.liveFloorScopes ?? []).length > 0 && !options.liveTestPattern) {
+      return {
+        kind: 'violation',
+        reason:
+          'Spec↔test parity is misconfigured: `liveFloorScopes` needs `liveTestPattern` ' +
+          'to tell live tests apart.',
+      }
+    }
     const exclusionFile = readExclusions(exclusionsPath)
     if (exclusionFile.malformed.length > 0) {
       return {
@@ -776,6 +797,21 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       ],
     ]
     const staleWip = wipProblems.some(([, entries]) => entries.length > 0)
+    // Issue #112: a scenario tagged with a live-floor scope needs a claim
+    // from a test that isn't live.
+    const liveFloor = new Set((options.liveFloorScopes ?? []).map((name) => name.toLowerCase()))
+    const liveOnlyBelowFloor =
+      options.liveTestPattern && liveFloor.size > 0
+        ? scenarios.filter(
+            (s) =>
+              !s.wip &&
+              !baseline.has(s.key) &&
+              !excluded.has(s.key) &&
+              s.scopes.some((tag) => liveFloor.has(tag)) &&
+              claimed.has(s.key) &&
+              refs.every((ref) => ref.key !== s.key || options.liveTestPattern!.test(ref.testFile)),
+          )
+        : []
     const unknownScopes: string[] = []
     const missingScopes: string[] = []
     for (const scenario of scenarios) {
@@ -806,6 +842,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       dangling.length === 0 &&
       unknownScopes.length === 0 &&
       missingScopes.length === 0 &&
+      liveOnlyBelowFloor.length === 0 &&
       danglingExclusions.length === 0 &&
       claimedExclusions.length === 0 &&
       baselinedExclusions.length === 0 &&
@@ -850,6 +887,14 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
           'scenario bodies this is a thin spec class calling the ' +
           'existing body):\n' +
           formatList(missingScopes),
+      )
+    }
+    if (liveOnlyBelowFloor.length > 0) {
+      sections.push(
+        'Scenarios covered by live tests only, whose scope requires a test that ' +
+          'runs on every build (add a claim from a non-live test — a fake-backed ' +
+          'acceptance test of the part this project owns — or drop the tag):\n' +
+          formatList(liveOnlyBelowFloor.map((s) => `${basename(s.specFile)} :: ${s.title}`)),
       )
     }
     if (unknownScopes.length > 0) {

@@ -130,6 +130,11 @@ export type KmpPresetOptions = {
    *  default `DEFAULT_IN_PROGRESS_PATTERN` (`= inProgress {`, `test.failing`,
    *  `test.fails`, `withKnownIssue`, `XCTExpectFailure`). */
   inProgressPattern?: RegExp
+  /** Live test files (issue #112): their claims count, and the CLI lists
+   *  scenarios covered by live tests only. */
+  liveTestPattern?: RegExp
+  /** Scope tags whose scenarios need a non-live claim (issue #112). */
+  liveFloorScopes?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
   /** Judge each changed Covers-tagged test against the scenario it
@@ -550,6 +555,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       wipPath,
       sharedWip: options.sharedWip,
       inProgressPattern: options.inProgressPattern,
+      liveTestPattern: options.liveTestPattern,
+      liveFloorScopes: options.liveFloorScopes,
       testFilePattern: options.testFilePattern,
       driverScopes: options.driverScopes,
       defaultScopes: options.defaultScopes,
