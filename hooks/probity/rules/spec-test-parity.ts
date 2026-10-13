@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
@@ -102,6 +103,62 @@ function specStem(name: string): string {
 
 function scenarioKey(specFile: string, title: string): string {
   return `${specStem(specFile)} :: ${normalizeTitle(title)}`
+}
+
+const MD_BOUNDARY = /^#{1,6}\s/
+const GHERKIN_BOUNDARY = /^\s*(?:@\S|(?:Scenario(?: Outline)?|Example|Rule|Background|Feature):)/
+
+/**
+ * A hash of a scenario's steps (issue #114): the lines after its heading
+ * up to the next scenario or heading, trimmed, whitespace collapsed,
+ * blank and comment lines dropped. A reworded title keeps the hash;
+ * changed steps change it. Mirrored by `stepsHash` in
+ * `scripts/spec-parity.mjs`, which writes the claim lists this checks.
+ */
+export function scenarioStepsHash(specFile: string, content: string, headingLine: number): string {
+  const lines = content.split(/\r?\n/)
+  const boundary = specFile.endsWith('.md') ? MD_BOUNDARY : GHERKIN_BOUNDARY
+  const steps: string[] = []
+  for (let i = headingLine + 1; i < lines.length && !boundary.test(lines[i]!); i++) {
+    const step = lines[i]!.trim().replace(/\s+/g, ' ')
+    if (step && !step.startsWith('#')) steps.push(step)
+  }
+  return createHash('sha256').update(steps.join('\n')).digest('hex').slice(0, 12)
+}
+
+type DependencyClaim = { key: string; label: string; sha: string; source: string }
+
+/**
+ * Reads a dependency's claim list (issue #114), as `spec-parity.mjs
+ * --write-claims` writes it: `# source: <text>` in the header, then
+ * `<spec>.feature :: <title> sha=<hash>` or `@id:<slug> sha=<hash>` per
+ * line. Missing file → no claims; a malformed line lands in `malformed`.
+ */
+export function readDependencyClaims(path: string): { entries: DependencyClaim[]; malformed: string[] } {
+  if (!existsSync(path)) return { entries: [], malformed: [] }
+  let source = basename(path)
+  const entries: Omit<DependencyClaim, 'source'>[] = []
+  const malformed: string[] = []
+  for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim()
+    const header = line.match(/^#\s*source:\s*(.+)$/)
+    if (header) source = header[1]!.trim()
+    if (!line || line.startsWith('#')) continue
+    const m = line.match(/^(.+?)\s+sha=([0-9a-f]{6,64})$/)
+    const ref = m?.[1]!.trim() ?? ''
+    const id = ref.toLowerCase().match(ID_REF)
+    const at = ref.indexOf(' :: ')
+    if (!m || (!id && at === -1)) {
+      malformed.push(line)
+      continue
+    }
+    entries.push({
+      key: id ? `@id:${id[1]}` : scenarioKey(ref.slice(0, at).trim(), ref.slice(at + 4)),
+      label: ref,
+      sha: m[2]!,
+    })
+  }
+  return { entries: entries.map((entry) => ({ ...entry, source })), malformed }
 }
 
 export type Scenario = {
@@ -431,6 +488,16 @@ type ScanOptions = {
    */
   liveFloorScopes?: string[]
   /**
+   * Claim lists from dependencies that consume the same specs (issue
+   * #114), committed in this project and written by the dependency with
+   * `spec-parity.mjs --write-claims`. A claim covers a scenario this
+   * project has no finished test for when the scenario's steps still hash
+   * the same; changed steps void it. It meets `defaultScopes`, never a
+   * scope tagged on the scenario. An exclusion or wip line for a scenario a
+   * dependency claim covers blocks as stale. Missing file → no claims.
+   */
+  dependencyClaimsPaths?: string[]
+  /**
    * Files the pending commit will record, relative to the root of the
    * working tree being committed (`cwd`: the project, or a worktree nested
    * in it). Defaults to Git's staged set plus tracked modifications for
@@ -639,6 +706,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const baselinePath = options.baselinePath && inTree(options.baselinePath)
     const exclusionsPath = options.exclusionsPath && inTree(options.exclusionsPath)
     const wipPath = options.wipPath && inTree(options.wipPath)
+    const dependencyClaimsPaths = (options.dependencyClaimsPaths ?? []).map(inTree)
     // Hook processes are anchored to the project root. Scope only when that
     // relationship is known (or a test injects the lister); otherwise retain
     // the historical fail-safe full scan.
@@ -653,6 +721,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
             (!!baselinePath && pathsIntersect(absolute, baselinePath)) ||
             (!!exclusionsPath && pathsIntersect(absolute, exclusionsPath)) ||
             (!!wipPath && pathsIntersect(absolute, wipPath)) ||
+            dependencyClaimsPaths.some((path) => pathsIntersect(absolute, path)) ||
             matches(pattern, file) ||
             matches(pattern, absolute)
           )
@@ -723,8 +792,9 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       }
       byStem.set(stem, file)
     }
+    const specContent = new Map(specFiles.map((file) => [file, readFileSync(file, 'utf8')]))
     const scenarios = specFiles
-      .flatMap((file) => extractScenarios(file, readFileSync(file, 'utf8')))
+      .flatMap((file) => extractScenarios(file, specContent.get(file)!))
       .map((s) => ({ ...s, scopes: s.scopes.filter((tag) => !ignoredTags.has(tag)) }))
     const { byId, problems } = indexIds(scenarios)
     if (problems.length > 0) {
@@ -748,7 +818,32 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const claimed = new Set(refs.map((ref) => ref.key))
     const anyClaim = new Set(allRefs.map((ref) => ref.key))
     const known = new Set(scenarios.map((scenario) => scenario.key))
-    // Precedence: claimed > excluded > wip > baseline. A claimed or
+    // Issue #114: a dependency's claim covers a scenario this project has
+    // no finished test for, while the scenario's steps hash the same.
+    const depCovered = new Map<string, string>()
+    const voidClaims = new Map<string, string>()
+    const byKey = new Map(scenarios.map((s) => [s.key, s]))
+    for (const path of dependencyClaimsPaths) {
+      const file = readDependencyClaims(path)
+      if (file.malformed.length > 0) {
+        return {
+          kind: 'violation',
+          reason:
+            `Spec↔test parity: dependency claims in ${path} must read ` +
+            '`<spec>.feature :: <title> sha=<hash>` or `@id:<slug> sha=<hash>` ' +
+            '(regenerate them with spec-parity.mjs --write-claims):\n' +
+            formatList(file.malformed),
+        }
+      }
+      for (const entry of file.entries) {
+        const s = byKey.get(resolveRef(entry.key))
+        if (!s || claimed.has(s.key)) continue
+        const sha = scenarioStepsHash(s.specFile, specContent.get(s.specFile)!, s.line)
+        if (sha === entry.sha) depCovered.set(s.key, entry.source)
+        else voidClaims.set(s.key, entry.source)
+      }
+    }
+    // Precedence: claimed > dependency > excluded > wip > baseline. A claimed or
     // baselined exclusion blocks below as stale rather than silently winning.
     const exclusions = exclusionFile.entries.map((entry) => ({ ...entry, key: resolveRef(entry.key) }))
     const excluded = new Set(exclusions.map((entry) => entry.key))
@@ -763,7 +858,8 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       s.wip = specWip || projectWip.has(s.key)
     }
     const unclaimed = scenarios.filter(
-      (s) => !s.wip && !claimed.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
+      (s) =>
+        !s.wip && !claimed.has(s.key) && !depCovered.has(s.key) && !baseline.has(s.key) && !excluded.has(s.key),
     )
     const orphaned = unclaimed.filter((s) => !anyClaim.has(s.key))
     const onlyInProgress = unclaimed.filter((s) => anyClaim.has(s.key))
@@ -775,6 +871,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const baselinedExclusions = exclusions.filter(
       (entry) => known.has(entry.key) && baseline.has(entry.key),
     )
+    const depExclusions = exclusions.filter((entry) => depCovered.has(entry.key))
     const wipProblems: [string, Exclusion[]][] = [
       [
         'Wip lines matching no scenario (renamed or removed — update or delete them)',
@@ -794,6 +891,10 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         wipLines.filter(
           (entry) => known.has(entry.key) && !excluded.has(entry.key) && baseline.has(entry.key),
         ),
+      ],
+      [
+        'Wip lines for scenarios a dependency claim covers (delete the wip line)',
+        wipLines.filter((entry) => depCovered.has(entry.key)),
       ],
     ]
     const staleWip = wipProblems.some(([, entries]) => entries.length > 0)
@@ -816,7 +917,10 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
     const missingScopes: string[] = []
     for (const scenario of scenarios) {
       if (scenario.wip || baseline.has(scenario.key) || excluded.has(scenario.key)) continue
-      const required = [...new Set([...defaultScopes, ...scenario.scopes])]
+      // A dependency claim meets the defaults, never a scope tagged on the
+      // scenario itself (issue #114).
+      const viaDependency = depCovered.has(scenario.key)
+      const required = [...new Set([...(viaDependency ? [] : defaultScopes), ...scenario.scopes])]
       for (const name of required) {
         const scope = scopes.get(name)
         if (!scope) {
@@ -846,6 +950,7 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       danglingExclusions.length === 0 &&
       claimedExclusions.length === 0 &&
       baselinedExclusions.length === 0 &&
+      depExclusions.length === 0 &&
       !staleWip
     )
       return { kind: 'pass' }
@@ -855,7 +960,15 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
         'Scenarios with no covering acceptance test (add a test with ' +
           '`// Covers: <spec>.feature.md :: Scenario: <title>`, or mark ' +
           'the heading `## Scenario (wip):` while driving it):\n' +
-          formatList(orphaned.map((s) => `${basename(s.specFile)} :: ${s.title}`)),
+          formatList(
+            orphaned.map(
+              (s) =>
+                `${basename(s.specFile)} :: ${s.title}` +
+                (voidClaims.has(s.key)
+                  ? ` — the dependency claim from ${voidClaims.get(s.key)} is void: the steps changed since it was written`
+                  : ''),
+            ),
+          ),
       )
     }
     if (onlyInProgress.length > 0) {
@@ -922,6 +1035,12 @@ export function enforceSpecTestParity(options: ScanOptions): Rule {
       sections.push(
         'Excluded scenarios still in the baseline (delete the baseline line):\n' +
           exclusionLines(baselinedExclusions),
+      )
+    }
+    if (depExclusions.length > 0) {
+      sections.push(
+        'Excluded scenarios a dependency claim covers (delete the exclusion — the claim is the checked version):\n' +
+          formatList(depExclusions.map((e) => `${e.label} — ${depCovered.get(e.key)}`)),
       )
     }
     for (const [heading, entries] of wipProblems) {

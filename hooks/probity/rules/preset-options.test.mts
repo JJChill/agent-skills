@@ -429,3 +429,21 @@ test('kmpRuleEntries passes liveTestPattern and liveFloorScopes to the parity ga
   assert.equal(result.kind, 'violation')
   assert.match((result as { reason: string }).reason, /live tests only/)
 })
+
+// Issue #114: the presets pass dependencyClaimsPaths to the parity gate.
+test('kmpRuleEntries passes dependencyClaimsPaths to the parity gate', async () => {
+  const dir = workspace({
+    'docs/specs/s.feature': 'Feature: F\n\n  Scenario: Synced\n    Given a\n',
+    'docs/deps.txt': '# source: example-sdk\ns.feature :: Synced sha=000000000000\n',
+  })
+  const entries = kmpRuleEntries(dir, {
+    specsDir: join(dir, 'docs/specs'),
+    testRoots: [dir],
+    dependencyClaimsPaths: [join(dir, 'docs/deps.txt')],
+  })
+  const gate = findRule(entries, 'enforceSpecTestParity')!.rule
+  const result = await gate({ kind: 'command', command: 'git commit -m x' } as never, noopCtx)
+  rmSync(dir, { recursive: true, force: true })
+  assert.equal(result.kind, 'violation')
+  assert.match((result as { reason: string }).reason, /dependency claim from example-sdk is void/)
+})

@@ -742,5 +742,101 @@ const liveArgs = ['--scope', 'critical=tests/', '--live', 'tests/live/']
   check('live: --live-floor needs --live and declared scopes (exit 2)', noLive.code === 2 && undeclared.code === 2)
 }
 
+// ── Issue #114: a pinned dependency's claims ─────────────────────
+
+const SYNC_SPEC = 'Feature: Sync\n\n  @id:offline-sync\n  Scenario: Changes made offline sync later\n    Given an offline change\n    When the device reconnects\n    Then the change syncs\n\n  Scenario: Key backup is sealed\n    Given a key backup\n    Then it is sealed\n\n  Scenario: App shows the sync badge\n    Given a pending change\n    Then the badge shows\n'
+const sdkTests =
+  '// Covers: @id:offline-sync\n@Test\nfun sync() {}\n' +
+  '// Covers: sync.feature :: Scenario: Key backup is sealed\n@Test\nfun sealed() = inProgress {\n}\n' +
+  '// Covers: sync.feature :: Scenario: App shows the sync badge\n@Test\nfun badge() {}\n'
+
+function writeClaims(files, extra = []) {
+  const dir = workspace(files)
+  const out = join(dir, 'claims.txt')
+  const res = run(dir, ['--write-claims', out, '--claims-source', 'example-sdk 2.3.0', ...extra])
+  return { res, text: res.code === 0 ? readFileSync(out, 'utf8') : '' }
+}
+
+// 50. --write-claims lists finished claims, pinned to a hash of the steps.
+{
+  const { res, text } = writeClaims({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': sdkTests })
+  check(
+    'claims: --write-claims writes finished claims with step hashes, ids preferred, source in the header',
+    res.code === 0 &&
+      /^# source: example-sdk 2\.3\.0$/m.test(text) &&
+      /^@id:offline-sync sha=[0-9a-f]{12}$/m.test(text) &&
+      /^sync\.feature :: App shows the sync badge sha=[0-9a-f]{12}$/m.test(text) &&
+      !/Key backup/.test(text),
+  )
+}
+
+const { text: CLAIMS } = writeClaims({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': sdkTests })
+const appTest = '// Covers: sync.feature :: Scenario: App shows the sync badge\n@Test\nfun badge() {}\n'
+const sealedTest = '// Covers: sync.feature :: Scenario: Key backup is sealed\n@Test\nfun sealed() {}\n'
+function appRun(files, extra = []) {
+  const dir = workspace({ ...files })
+  writeFileSync(join(dir, 'deps.txt'), files['deps.txt'] ?? CLAIMS)
+  return run(dir, ['--dependency-claims', join(dir, 'deps.txt'), ...extra.map((a) => (a.startsWith('@dir/') ? join(dir, a.slice(5)) : a))])
+}
+
+// 51. A scenario the dependency covers needs no test in the app, and is reported.
+{
+  const res = appRun({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': appTest + sealedTest })
+  check(
+    'claims: a dependency-covered scenario passes without an app test and is listed with its source',
+    res.code === 0 && /1 by dependency claims/.test(res.out) && /Changes made offline sync later — example-sdk 2\.3\.0/.test(res.out),
+  )
+}
+
+// 52. Changed steps void the claim.
+{
+  const changed = SYNC_SPEC.replace('Then the change syncs', 'Then the change syncs within a minute')
+  const res = appRun({ 'specs/sync.feature': changed, 'tests/T.kt': appTest + sealedTest })
+  check(
+    'claims: a claim whose scenario steps changed is void, and the scenario is uncovered (exit 1)',
+    res.code === 1 && /Changes made offline sync later/.test(res.out) && /void/i.test(res.out) && /example-sdk 2\.3\.0/.test(res.out),
+  )
+}
+
+// 53. A reworded title keeps an id claim valid.
+{
+  const reworded = SYNC_SPEC.replace('Changes made offline sync later', 'Offline changes sync on reconnect')
+  const res = appRun({ 'specs/sync.feature': reworded, 'tests/T.kt': appTest + sealedTest })
+  check('claims: an id claim survives a reworded title', res.code === 0 && /1 by dependency claims/.test(res.out))
+}
+
+// 54. A dependency claim meets defaultScopes, never a scope tagged on the scenario.
+{
+  const tagged = SYNC_SPEC.replace('  @id:offline-sync\n', '  @id:offline-sync @ui\n')
+  const scopeArgs = ['--scope', 'ui=tests/ui/', '--scope', 'component=tests/', '--default-scopes', 'component']
+  const untagged = appRun({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': appTest + sealedTest }, scopeArgs)
+  const taggedRun = appRun({ 'specs/sync.feature': tagged, 'tests/T.kt': appTest + sealedTest }, scopeArgs)
+  check(
+    'claims: a dependency claim meets defaultScopes but not a tagged scope',
+    untagged.code === 0 && taggedRun.code === 1 && /needs \[ui\]/.test(taggedRun.out),
+  )
+}
+
+// 55. An exclusion or wip line for a dependency-covered scenario is stale.
+{
+  const dir = workspace({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': appTest + sealedTest, 'deps.txt': CLAIMS })
+  writeFileSync(join(dir, 'ex.txt'), '@id:offline-sync # covered by example-sdk\n')
+  writeFileSync(join(dir, 'wip.txt'), '@id:offline-sync # waiting for the SDK\n')
+  const ex = run(dir, ['--dependency-claims', join(dir, 'deps.txt'), '--exclusions', join(dir, 'ex.txt')])
+  const wip = run(dir, ['--dependency-claims', join(dir, 'deps.txt'), '--wip', join(dir, 'wip.txt')])
+  check(
+    'claims: an exclusion or a wip line for a dependency-covered scenario fails as stale',
+    ex.code === 1 && /dependency/i.test(ex.out) && wip.code === 1 && /dependency/i.test(wip.out),
+  )
+}
+
+// 56. Claims for scenarios these specs don't have are ignored; malformed lines are usage errors.
+{
+  const extra = CLAIMS + 'other.feature :: Not in these specs sha=0123456789ab\n'
+  const ok = appRun({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': appTest + sealedTest, 'deps.txt': extra })
+  const bad = appRun({ 'specs/sync.feature': SYNC_SPEC, 'tests/T.kt': appTest + sealedTest, 'deps.txt': '@id:offline-sync\n' })
+  check('claims: unknown claims are ignored; a line without sha= is a usage error', ok.code === 0 && bad.code === 2)
+}
+
 console.log(`\nspec-parity tests: ${passed} passed, ${failed} failed`)
 process.exit(failed === 0 ? 0 : 1)

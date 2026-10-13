@@ -176,6 +176,10 @@ export type SwiftPresetOptions = {
   liveTestPattern?: RegExp
   /** Scope tags whose scenarios need a non-live claim (issue #112). */
   liveFloorScopes?: string[]
+  /** Dependency claim lists (issue #114), written by a dependency that
+   *  consumes the same specs with `spec-parity.mjs --write-claims` and
+   *  committed here. Default: none. */
+  dependencyClaimsPaths?: string[]
 }
 
 function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
@@ -462,6 +466,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
       inProgressPattern: options.inProgressPattern,
       liveTestPattern: options.liveTestPattern,
       liveFloorScopes: options.liveFloorScopes,
+      dependencyClaimsPaths: options.dependencyClaimsPaths,
       // driverScopes: [
       //   { name: 'system', filePattern: /AcceptanceTests[/\\]Specs[/\\]/ },
       //   { name: 'hosted-ui', filePattern: /AcceptanceTests[/\\]Component[/\\]/ },

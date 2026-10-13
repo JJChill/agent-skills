@@ -119,6 +119,7 @@
  * same stem in both extensions at once is rejected (unfinished rename).
  */
 import { readdirSync, readFileSync, existsSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
 import process from 'node:process'
 
@@ -163,6 +164,9 @@ function parseArgs(argv) {
     wip: undefined,
     sharedWip: 'honor',
     inProgress: DEFAULT_IN_PROGRESS,
+    writeClaims: undefined,
+    claimsSource: undefined,
+    dependencyClaims: [],
     live: undefined,
     liveFloor: [],
     appScope: undefined,
@@ -191,6 +195,9 @@ function parseArgs(argv) {
     } else if (argv[i] === '--exclusions') args.exclusions = argv[++i]
     else if (argv[i] === '--wip') args.wip = argv[++i]
     else if (argv[i] === '--in-progress') args.inProgress = new RegExp(argv[++i] ?? '', 'm')
+    else if (argv[i] === '--write-claims') args.writeClaims = argv[++i]
+    else if (argv[i] === '--claims-source') args.claimsSource = argv[++i]
+    else if (argv[i] === '--dependency-claims') args.dependencyClaims.push(argv[++i])
     else if (argv[i] === '--live') args.live = new RegExp(argv[++i] ?? '')
     else if (argv[i] === '--live-floor') {
       args.liveFloor = (argv[++i] ?? '')
@@ -224,6 +231,7 @@ function parseArgs(argv) {
         '[--baseline <file>] [--write-baseline] [--scope name=<regex>]... ' +
         '[--default-scopes a,b] [--exclusions <file>] [--ignore-tags a,b] ' +
         '[--wip <file>] [--shared-wip honor|ignore] [--in-progress <regex>] ' +
+        '[--write-claims <file> [--claims-source <text>]] [--dependency-claims <file>]... ' +
         '[--live <regex> [--live-floor a,b]] ' +
         '[--app-scope <name> [--strict-skeleton] [--skeleton-exempt <file>]]',
     )
@@ -345,10 +353,12 @@ const isIdTag = (tag) => tag.startsWith('id:')
 function parseScenarios(file) {
   const scenarios = []
   let tags = []
-  for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+  const lines = readFileSync(file, 'utf8').split(/\r?\n/)
+  for (const [index, line] of lines.entries()) {
     const md = line.match(MD_SCENARIO)
     if (md) {
       scenarios.push({
+        line: index,
         key: key(file, md[4]),
         specFile: basename(file),
         title: md[4].trim(),
@@ -372,6 +382,7 @@ function parseScenarios(file) {
     const gherkin = trimmed.match(GHERKIN_SCENARIO)
     if (gherkin) {
       scenarios.push({
+        line: index,
         key: key(file, gherkin[1]),
         specFile: basename(file),
         title: gherkin[1].trim(),
@@ -386,7 +397,61 @@ function parseScenarios(file) {
     // non-tag, non-comment content, ends a dangling tag block.
     if (trimmed !== '' && !trimmed.startsWith('#')) tags = []
   }
+  for (const s of scenarios) s.sha = stepsHash(file, lines, s.line)
   return scenarios
+}
+
+// Issue #114: a dependency claim is pinned to a hash of the scenario's
+// steps — the lines after its heading up to the next scenario or heading,
+// trimmed, whitespace collapsed, blank and comment lines dropped — so a
+// reworded title keeps the claim and changed steps void it. Mirrored by
+// scenarioStepsHash in rules/spec-test-parity.ts.
+const MD_BOUNDARY = /^#{1,6}\s/
+const GHERKIN_BOUNDARY = /^\s*(?:@\S|(?:Scenario(?: Outline)?|Example|Rule|Background|Feature):)/
+function stepsHash(file, lines, headingLine) {
+  const boundary = file.endsWith('.md') ? MD_BOUNDARY : GHERKIN_BOUNDARY
+  const steps = []
+  for (let i = headingLine + 1; i < lines.length && !boundary.test(lines[i]); i++) {
+    const step = lines[i].trim().replace(/\s+/g, ' ')
+    if (step && !step.startsWith('#')) steps.push(step)
+  }
+  return createHash('sha256').update(steps.join('\n')).digest('hex').slice(0, 12)
+}
+
+/**
+ * A dependency's claim list (issue #114), as --write-claims writes it:
+ * `# source: <text>` in the header, then `<spec>.feature :: <title>
+ * sha=<hash>` or `@id:<slug> sha=<hash>` per line.
+ */
+function readDependencyClaims(path) {
+  if (!existsSync(path)) {
+    console.error(`--dependency-claims: no file at ${path}`)
+    process.exit(2)
+  }
+  let source = basename(path)
+  const entries = []
+  readFileSync(path, 'utf8').split(/\r?\n/).forEach((raw, index) => {
+    const line = raw.trim()
+    const header = line.match(/^#\s*source:\s*(.+)$/)
+    if (header) source = header[1].trim()
+    if (!line || line.startsWith('#')) return
+    const m = line.match(/^(.+?)\s+sha=([0-9a-f]{6,64})$/)
+    const ref = m?.[1].trim()
+    const id = ref?.toLowerCase().match(ID_REF)
+    const sep = ref?.indexOf(' :: ') ?? -1
+    if (!m || (!id && sep === -1)) {
+      console.error(`${path}:${index + 1}: dependency claims read \`<spec>.feature :: <title> sha=<hash>\` or \`@id:<slug> sha=<hash>\`:`)
+      console.error(`  ${line}`)
+      process.exit(2)
+    }
+    entries.push({
+      key: id ? `@id:${id[1]}` : key(ref.slice(0, sep).trim(), ref.slice(sep + 4)),
+      label: ref,
+      sha: m[2],
+      source: () => source,
+    })
+  })
+  return entries.map((entry) => ({ ...entry, source: entry.source() }))
 }
 
 /**
@@ -562,12 +627,43 @@ for (const s of scenarios) {
 }
 
 const known = new Set(scenarios.map((scenario) => scenario.key))
-// Precedence: claimed > excluded > wip > baseline. A claimed or
+
+// Issue #114: a dependency's claim covers a scenario this project has no
+// finished test for, when the scenario's steps still hash the same.
+const depCovered = new Map()
+const voidClaims = new Map()
+const byKey = new Map(scenarios.map((s) => [s.key, s]))
+for (const path of args.dependencyClaims) {
+  for (const entry of readDependencyClaims(path)) {
+    const s = byKey.get(resolve(entry.key))
+    if (!s) continue // a scenario these specs don't have (another spec revision)
+    if (s.sha === entry.sha) depCovered.set(s.key, entry.source)
+    else voidClaims.set(s.key, entry.source)
+  }
+}
+for (const k of claimed) depCovered.delete(k)
+
+// Precedence: claimed > dependency > excluded > wip > baseline. A claimed or
 // baselined exclusion is reported below as stale rather than silently won.
 const unclaimed = scenarios.filter(
-  (s) => !s.wip && !claimed.has(s.key) && !excluded.has(s.key),
+  (s) => !s.wip && !claimed.has(s.key) && !depCovered.has(s.key) && !excluded.has(s.key),
 )
 const dangling = allRefs.filter((ref) => !known.has(ref.key))
+
+if (args.writeClaims) {
+  const covered = scenarios.filter((s) => claimed.has(s.key))
+  writeFileSync(
+    args.writeClaims,
+    '# spec-parity dependency claims — scenarios this project covers with a finished test,\n' +
+      "# each pinned to a hash of the scenario's steps. Consumers pass this file to\n" +
+      '# spec-parity.mjs --dependency-claims (or the gate\'s dependencyClaimsPaths).\n' +
+      `# source: ${args.claimsSource ?? basename(process.cwd())}\n` +
+      covered.map((s) => `${s.id ? `@id:${s.id}` : `${s.specFile} :: ${s.title}`} sha=${s.sha}`).join('\n') +
+      '\n',
+  )
+  console.log(`Wrote ${covered.length} claim(s) to ${args.writeClaims}.`)
+  process.exit(0)
+}
 
 if (args.writeBaseline) {
   const header =
@@ -611,6 +707,8 @@ const claimedExclusions = exclusions.filter(
 const baselinedExclusions = exclusions.filter(
   (entry) => known.has(entry.key) && baseline.has(entry.key),
 )
+const depExclusions = exclusions.filter((entry) => depCovered.has(entry.key))
+const depWip = wipLines.filter((entry) => depCovered.has(entry.key))
 const danglingWip = wipLines.filter((entry) => !known.has(entry.key))
 const claimedWip = wipLines.filter((entry) => known.has(entry.key) && claimed.has(entry.key))
 const excludedWip = wipLines.filter((entry) => excluded.has(entry.key))
@@ -619,13 +717,16 @@ const excludedWip = wipLines.filter((entry) => excluded.has(entry.key))
 const baselinedWip = wipLines.filter(
   (entry) => known.has(entry.key) && !excluded.has(entry.key) && baseline.has(entry.key),
 )
-const staleWip = danglingWip.length + claimedWip.length + excludedWip.length + baselinedWip.length
+const staleWip = danglingWip.length + claimedWip.length + excludedWip.length + baselinedWip.length + depWip.length
 
 const unknownScopes = []
 const missingScopes = []
 for (const s of scenarios) {
   if (s.wip || baseline.has(s.key) || excluded.has(s.key)) continue
-  const required = [...new Set([...args.defaultScopes, ...s.scopes])]
+  // A dependency claim meets the defaults, never a scope tagged on the
+  // scenario itself (issue #114).
+  const viaDependency = depCovered.has(s.key)
+  const required = [...new Set([...(viaDependency ? [] : args.defaultScopes), ...s.scopes])]
   for (const name of required) {
     const scopePattern = args.scopes.get(name)
     if (!scopePattern) {
@@ -715,6 +816,7 @@ if (
   danglingExclusions.length === 0 &&
   claimedExclusions.length === 0 &&
   baselinedExclusions.length === 0 &&
+  depExclusions.length === 0 &&
   staleWip === 0
 ) {
   const notOurs = scenarios.filter((s) => excluded.has(s.key))
@@ -723,6 +825,7 @@ if (
   console.log(
     `Spec↔test parity holds: ${scenarios.length - wip - baselined - notOurs.length} scenario(s) covered` +
       (coveredLiveOnly.length > 0 ? ` (${coveredLiveOnly.length} by live tests only)` : '') +
+      (depCovered.size > 0 ? ` (${depCovered.size} by dependency claims)` : '') +
       (wip > 0 ? `, ${wip} wip` : '') +
       (baselined > 0 ? `, ${baselined} baselined (burn-down)` : '') +
       (notOurs.length > 0 ? `, ${notOurs.length} not this project's` : '') +
@@ -738,6 +841,12 @@ if (
     console.log("Not this project's:")
     for (const s of notOurs) {
       console.log(`  ${s.specFile} :: ${s.title} — ${excluded.get(s.key).reason}`)
+    }
+  }
+  if (depCovered.size > 0) {
+    console.log('Covered by dependency claims:')
+    for (const s of scenarios.filter((s) => depCovered.has(s.key))) {
+      console.log(`  ${s.specFile} :: ${s.title} — ${depCovered.get(s.key)}`)
     }
   }
   if (coveredLiveOnly.length > 0) {
@@ -757,7 +866,13 @@ if (liveOnlyBelowFloor.length > 0) {
 reportSkeleton(console.error)
 if (orphaned.length > 0) {
   console.error('Scenarios with no covering acceptance test:')
-  for (const s of orphaned) console.error(`  ${s.specFile} :: ${s.title}`)
+  for (const s of orphaned) {
+    const voided = voidClaims.get(s.key)
+    console.error(
+      `  ${s.specFile} :: ${s.title}` +
+        (voided ? ` — the dependency claim from ${voided} is void: the steps changed since it was written` : ''),
+    )
+  }
 }
 if (onlyInProgress.length > 0) {
   console.error(
@@ -799,11 +914,16 @@ if (baselinedExclusions.length > 0) {
   console.error('Excluded scenarios still in the baseline (delete the baseline line):')
   for (const e of baselinedExclusions) console.error(`  ${e.label}`)
 }
+if (depExclusions.length > 0) {
+  console.error('Excluded scenarios a dependency claim covers (delete the exclusion — the claim is the checked version):')
+  for (const e of depExclusions) console.error(`  ${e.label} — ${depCovered.get(e.key)}`)
+}
 const wipSections = [
   ['Wip lines matching no scenario (renamed or removed — update or delete them):', danglingWip],
   ['Wip lines for scenarios a test now claims (promoted — delete the wip line):', claimedWip],
   ['Wip lines for excluded scenarios (a scenario is ours or not — keep one line):', excludedWip],
   ['Wip scenarios still in the baseline (the baseline only shrinks — delete the baseline line):', baselinedWip],
+  ['Wip lines for scenarios a dependency claim covers (delete the wip line):', depWip],
 ]
 for (const [heading, entries] of wipSections) {
   if (entries.length === 0) continue
