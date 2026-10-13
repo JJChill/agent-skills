@@ -60,6 +60,8 @@ Commit (PR or push to main)
 - **Deploy the candidate the way production is deployed**, into an environment provisioned as code, so the acceptance stage also tests the deployment and its configuration. A shared, hand-kept "integration staging" environment is a poor substitute: other teams' versions in it make results uncontrollable.
 - **The acceptance tests live in the same repository** as the system they specify, and change in the same commits.
 - **In-progress specs run too.** A spec for a feature still being built is committed expected-to-fail, as `acceptance-testing` describes: it passes while its scenario still fails, so the stage stays green. The stage goes red the moment the feature works, which says to remove the marker. Never skip or exclude in-progress specs from the stage.
+- **Run the suite twice against one deployment**, and in parallel where it can run that way. A test that passes once and fails the second time leaks data between runs: it reuses a name instead of aliasing it, or depends on what an earlier run left behind (`acceptance-testing`, Test Isolation). Run the second pass in the same job, so the check costs no extra environment.
+- **No automatic retries.** Don't configure the runner to re-run failed acceptance tests. A test that passes on the second try has found an intermittent bug, most likely in the system, and a retry hides it.
 - **Manual exploratory testing is optional.** Do it on a candidate the acceptance stage has already passed, to learn. It is never a gate.
 
 **No gate can be skipped.** If lint fails, fix lint — don't disable the rule. If a test fails, fix the code — don't skip the test.
@@ -186,6 +188,10 @@ The acceptance job takes the commit stage's artifact, deploys it with the same s
           cache: 'npm'
       - run: npm ci
       - name: Run the executable specifications
+        run: npm run test:acceptance
+        env:
+          SUT_URL: https://acceptance-${{ github.run_id }}.example.test
+      - name: Run them again against the same deployment (isolation check)
         run: npm run test:acceptance
         env:
           SUT_URL: https://acceptance-${{ github.run_id }}.example.test
@@ -417,6 +423,7 @@ jobs:
 - Rebuilding the artifact for each environment instead of promoting one release candidate
 - An acceptance stage that deploys differently from production, or into a hand-kept shared environment
 - In-progress acceptance tests skipped or excluded instead of committed expected-to-fail
+- Automatic retries of failed acceptance tests
 - No rollback mechanism
 - Secrets stored in code or CI config files (not secrets manager)
 - Long CI times with no optimization effort
@@ -434,3 +441,4 @@ After setting up or modifying CI:
 - [ ] The commit stage runs in under 10 minutes
 - [ ] An acceptance stage deploys that release candidate into a production-like environment with production deploy tooling, and runs the executable specifications in under an hour
 - [ ] Green acceptance stage is what makes a candidate releasable; no manual verification gates production
+- [ ] The acceptance suite runs twice against one deployment, and no failed test is retried automatically

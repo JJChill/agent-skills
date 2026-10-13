@@ -44,6 +44,7 @@ import {
   withKotlinFastPath,
   withMutationProbe,
   withTelemetryFastPath,
+  KOTLIN_FIXED_WAIT_PATTERNS,
 } from '../rules/kotlin.js'
 import {
   enforceAdapterObservability,
@@ -54,6 +55,8 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { testIsolationBlock } from './test-isolation.js'
+import { fixedWaitBlock } from './fixed-waits.js'
 import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 
@@ -123,7 +126,18 @@ export type KotlinPresetOptions = {
   commitCommand?: RegExp
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
+  /** Acceptance DSL files judged for test isolation (issue #119):
+   *  aliased entities, stubs keyed on aliased ids, no shared writable
+   *  fixtures, no clean-up of test data. Off by default; worth turning on
+   *  when the suite runs against a SUT that outlives a test. One model
+   *  call per DSL write that adds code. */
+  dslIsolationGlobs?: Globs
   excludeGlobs?: string[]
+  /** Acceptance code screened for new fixed waits (issue #119): the
+   *  whole suite, DSL and drivers included. Exempt the suite's one
+   *  poll-for-concluding-event helper with a `!` glob. Default
+   *  `['**\/acceptance/**']`; pass `[]` to turn the screen off. */
+  fixedWaitGlobs?: Globs
   /** Test-infrastructure paths outside the TDD gate (issue #94), such
    *  as a device harness whose check-runners can only run in a signed
    *  app, e.g. `['harness/**']`. The TDD block (with its mutation-probe
@@ -242,6 +256,11 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
       rules: [forbidStaticMocks()],
     },
 
+    // No fixed waits anywhere in the acceptance suite (issue #119):
+    // drivers wait for the concluding event, never for a set time.
+    // Delta-based, so waits already in a file don't block edits to it.
+    ...fixedWaitBlock(options.fixedWaitGlobs, KOTLIN_FIXED_WAIT_PATTERNS),
+
     // Ubiquitous-language drift: renaming or removing a glossary term
     // that specs, tests, or code still use blocks the glossary edit
     // with the list of users.
@@ -341,6 +360,11 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
         ),
       ],
     },
+
+    // Test isolation on the acceptance DSL (issue #119): opt-in, for
+    // suites whose SUT outlives a test. Judged per DSL write that adds
+    // code.
+    ...testIsolationBlock(options.dslIsolationGlobs),
 
     // ── Ship gates ───────────────────────────────────────────────────
 

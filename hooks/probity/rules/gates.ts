@@ -111,6 +111,77 @@ export function forbidNewAmbientEffects(options: {
 }
 
 /**
+ * Fixed waits for a JS/TS acceptance suite: Playwright's
+ * `waitForTimeout`, timer-based sleeps, Cypress's numeric `cy.wait`,
+ * sleep helpers, and WebdriverIO's `browser.pause`. Pass to
+ * {@link forbidNewFixedWaits}.
+ */
+export const JS_FIXED_WAIT_PATTERNS: NamedPattern[] = [
+  { label: 'waitForTimeout()', pattern: /\bwaitForTimeout\s*\(/g },
+  { label: 'setTimeout()', pattern: /\bsetTimeout\s*\(/g },
+  { label: 'cy.wait(<ms>)', pattern: /\bcy\.wait\s*\(\s*\d/g },
+  { label: 'sleep()', pattern: /\bsleep\s*\(/g },
+  { label: 'browser.pause()', pattern: /\bbrowser\.pause\s*\(/g },
+]
+
+/** Blanks comments so a wait named in prose doesn't count as a call.
+ *  Naive about strings: a `//` inside a string literal hides the rest
+ *  of its line, which can only make the screen miss, never misfire. */
+function withoutComments(content: string): string {
+  return content.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, ' ')
+}
+
+/**
+ * Blocks acceptance-suite writes that introduce a fixed wait (issue
+ * #119). A sleep postpones a race instead of fixing it and wastes time
+ * on every passing run: protocol drivers wait for the concluding
+ * event through one poll-with-timeout helper. Scope it to the whole
+ * acceptance suite (scenarios, DSL, and drivers), and exempt that one
+ * helper with a `!` glob.
+ *
+ * Delta-based like {@link forbidNewAmbientEffects}: waits already in a
+ * file don't block edits to it; only new ones do. Waits named in
+ * comments don't count.
+ */
+export function forbidNewFixedWaits(options: { patterns: NamedPattern[] }): Rule {
+  return async function forbidNewFixedWaits(
+    action: Action,
+    ctx?: RuleContext,
+  ): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    const uncommented: RuleContext = {
+      ...ctx,
+      readFile: async (path) => {
+        const before = await ctx?.readFile?.(path)
+        return before?.kind === 'present'
+          ? { ...before, content: withoutComments(before.content) }
+          : (before ?? { kind: 'absent' })
+      },
+    }
+    const introduced = await introducedPatterns(
+      { path: action.path, content: withoutComments(action.content) },
+      uncommented,
+      options.patterns,
+    )
+    if (introduced.length === 0) return { kind: 'pass' }
+    return {
+      kind: 'violation',
+      reason:
+        `This write adds a fixed wait to the acceptance suite (${introduced.join(', ')}). ` +
+        'A sleep postpones a race instead of fixing it, and costs its ' +
+        'full delay on every passing run. Wait for the concluding event ' +
+        'instead: poll for the observable outcome with a generous ' +
+        "timeout through the suite's one poll helper, so the test is " +
+        'fast when the system is fast and tolerant when it is slow. ' +
+        'To move time forward, advance a test clock behind the clock ' +
+        'port. Waits already in the file are untouched by this rule — ' +
+        'only new ones are blocked (see the acceptance-testing skill, ' +
+        'Test Isolation).',
+    }
+  }
+}
+
+/**
  * Files the pending commit will record, relative to the root of the
  * tree being committed (`cwd`). Reads the
  * staged set (`git diff --cached --name-only`); for a `git commit`

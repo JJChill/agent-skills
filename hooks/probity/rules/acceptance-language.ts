@@ -495,3 +495,133 @@ export function enforceControlledPreconditions(
     return { kind: 'pass', reason: verdict.reason }
   }
 }
+
+const ISOLATION_RULES = `## Role
+
+You are an acceptance-test isolation validator. The file is part of the
+acceptance suite's DSL (layer 2 of the four-layer model) or its test
+control. Judge whether the change keeps every test functionally and
+temporally isolated, so the same test can run twice, or in parallel with
+itself, against one system under test.
+
+## Inputs
+
+"File head" shows how the file builds or reaches the system under test.
+"Change" shows the lines this write adds or changes, marked \`+\`, with
+a little unchanged context. Judge only the change.
+
+## When a SUT is fresh per test
+
+If the DSL builds a fresh system under test for each test (a new
+in-process app with new fakes, constructed per test instance), tests
+cannot collide: names need no aliasing and nothing needs clean-up. Pass
+on aliasing and clean-up in that case. Shared writable state outside
+that fresh instance (a static or global object, a companion object, a
+file or database shared between tests) is still a violation.
+
+## Violations, when the SUT outlives a test
+
+- **Unaliased entity:** a name or identifier the test supplies for
+  something it creates in the SUT (an account, an order, a sequence
+  number) reaches the SUT unchanged. The DSL must map it to a value
+  unique to this run, through the suite's alias or sequence helper, and
+  map it back when it reads results.
+- **Stub keyed on raw names:** a stub for an external system is
+  programmed with the raw test name rather than the aliased one, so
+  parallel tests can program each other's responses.
+- **Shared writable fixture:** the test writes to a well-known record,
+  account or dataset other tests also use, instead of creating its own.
+- **Clean-up of test data:** deleting what the test created, resetting
+  the SUT's store, or truncating tables after or before a test. Each
+  test creates its own data and leaves it. Closing driver resources (a
+  browser, an app process, a connection) is not clean-up of test data
+  and is fine.
+
+A transient state (a helper written before its first use) is never
+itself a violation. Name each violation and the line in your reason.`
+
+const ISOLATION_HEAD_LINES = 30
+const ISOLATION_CONTEXT_LINES = 3
+const NON_CODE_LINE = /^\s*(?:$|\/\/|\/\*|\*|#|import\b|package\b|from\b.*\bimport\b|using\b)/
+
+/**
+ * The lines of `after` that are new relative to `before` (by trimmed
+ * text), and an excerpt of them with a few lines of context, `+`-marked.
+ */
+function changedExcerpt(before: string, after: string): { added: string[]; excerpt: string } {
+  const previous = new Map<string, number>()
+  for (const line of before.split('\n')) previous.set(line.trim(), (previous.get(line.trim()) ?? 0) + 1)
+  const lines = after.split('\n')
+  const changed = new Set<number>()
+  lines.forEach((line, index) => {
+    const left = previous.get(line.trim()) ?? 0
+    if (left > 0) previous.set(line.trim(), left - 1)
+    else changed.add(index)
+  })
+  const shown = new Set<number>()
+  for (const index of changed) {
+    for (let i = index - ISOLATION_CONTEXT_LINES; i <= index + ISOLATION_CONTEXT_LINES; i++) {
+      if (i >= 0 && i < lines.length) shown.add(i)
+    }
+  }
+  const out: string[] = []
+  let last = -2
+  for (const index of [...shown].sort((a, b) => a - b)) {
+    if (index !== last + 1) out.push('…')
+    out.push(`${changed.has(index) ? '+' : ' '} ${lines[index]}`)
+    last = index
+  }
+  return { added: [...changed].map((index) => lines[index]!), excerpt: out.join('\n') }
+}
+
+/**
+ * AI-validated enforcement of the `acceptance-testing` skill's isolation
+ * rules on the acceptance DSL (issue #119): entities a test creates in a
+ * SUT that outlives the test are aliased, stubs are keyed on aliased
+ * ids, no test writes a shared fixture, and no test cleans up its data.
+ * A DSL that builds a fresh SUT per test passes the aliasing and
+ * clean-up checks.
+ *
+ * The model sees the file's head (how it reaches the SUT) and the lines
+ * the write adds or changes with a little context, never the whole
+ * file, and is not called when the write adds no code (only removals,
+ * comments, imports).
+ *
+ * Applies to: write actions. Scope it to the DSL layer (e.g.
+ * `**\/acceptance/dsl/**`); every write there that adds code costs one
+ * AI call.
+ *
+ * @param options.instructions — replaces or extends the default rules
+ *   text: a string replaces it, `(defaults) => ...` extends it.
+ */
+export function enforceTestIsolation(
+  options: { instructions?: string | ((defaults: string) => string) } = {},
+): Rule {
+  const rules =
+    typeof options.instructions === 'function'
+      ? options.instructions(ISOLATION_RULES)
+      : (options.instructions ?? ISOLATION_RULES)
+  return async function enforceTestIsolation(action: Action, ctx?: RuleContext): Promise<RuleResult> {
+    if (action.kind !== 'write') return { kind: 'pass' }
+    const previous = await ctx?.readFile?.(action.path)
+    const before = previous?.kind === 'present' ? previous.content : ''
+    const { added, excerpt } = changedExcerpt(before, action.content)
+    if (!added.some((line) => !NON_CODE_LINE.test(line))) return { kind: 'pass' }
+    if (!ctx?.agent) {
+      return {
+        kind: 'violation',
+        reason: 'enforceTestIsolation: no AI agent available; configure Config.ai or use a vendor that ships one.',
+      }
+    }
+    const head = action.content.split('\n').slice(0, ISOLATION_HEAD_LINES).join('\n')
+    const prompt = [
+      rules,
+      `## File head\n\nFile: ${action.path}\n\n${head}`,
+      `## Change\n\n${excerpt}`,
+      RESPONSE_SPEC,
+    ].join('\n\n')
+    const verdict = await ctx.agent.reason(prompt)
+    if (verdict.kind === 'violation') return { kind: 'violation', reason: verdict.reason }
+    return { kind: 'pass', reason: verdict.reason }
+  }
+}

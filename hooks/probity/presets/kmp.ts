@@ -8,8 +8,12 @@
  * by package (`domain`/`port`/`usecase`/`presentation` vs
  * `adapter`/`di`/`ui`), kotlin.test + hand-written fakes with NO
  * mocking library, Koin at the composition root only, and
- * acceptance tests driven through a Robot DSL at the ViewModel
- * boundary with Markdown Given/When/Then specs in docs/specs/.
+ * acceptance tests driven through a Robot DSL with Markdown
+ * Given/When/Then specs in docs/specs/. The default driver should
+ * build the app through its shipping composition root and fake only
+ * outbound ports; a driver that fakes at the use-case ports is a
+ * component tier, not enough for releasability (see the
+ * acceptance-testing skill, issue #118).
  * Adjust globs and package names to your layout.
  *
  * Probity still runs on Node: install `@nizos/probity` and this rule
@@ -32,6 +36,9 @@ import {
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { testIsolationBlock } from './test-isolation.js'
+import { fixedWaitBlock } from './fixed-waits.js'
+import { scenarioFidelityBlock } from './scenario-fidelity.js'
 import { vendorAdapterBlock, vendorAdapterExclusions } from './vendor-adapter.js'
 import {
   enforceSpecTestParity,
@@ -60,6 +67,7 @@ import {
   withKotlinFastPath,
   withMutationProbe,
   withTelemetryFastPath,
+  KOTLIN_FIXED_WAIT_PATTERNS,
 } from '../rules/kotlin.js'
 import {
   enforceAdapterObservability,
@@ -124,7 +132,22 @@ export type KmpPresetOptions = {
   inProgressPattern?: RegExp
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
+  /** Judge each changed Covers-tagged test against the scenario it
+   *  claims (issue #120): same Given/When/Then, no unstated outcome.
+   *  One model call per write that changes a claim. Default: on. */
+  /** Acceptance DSL files judged for test isolation (issue #119):
+   *  aliased entities, stubs keyed on aliased ids, no shared writable
+   *  fixtures, no clean-up of test data. Off by default; worth turning on
+   *  when the suite runs against a SUT that outlives a test. One model
+   *  call per DSL write that adds code. */
+  dslIsolationGlobs?: Globs
+  scenarioFidelity?: boolean
   excludeGlobs?: string[]
+  /** Acceptance code screened for new fixed waits (issue #119): the
+   *  whole suite, DSL and drivers included. Exempt the suite's one
+   *  poll-for-concluding-event helper with a `!` glob. Default
+   *  `['**\/acceptance/**']`; pass `[]` to turn the screen off. */
+  fixedWaitGlobs?: Globs
   /** Test-infrastructure paths outside the TDD gate (issue #94), such
    *  as a device harness whose check-runners can only run in a signed
    *  app, e.g. `['harness/**']`. The TDD block (with its mutation-probe
@@ -311,6 +334,11 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       ],
     },
 
+    // No fixed waits anywhere in the acceptance suite (issue #119):
+    // drivers wait for the concluding event, never for a set time.
+    // Delta-based, so waits already in a file don't block edits to it.
+    ...fixedWaitBlock(options.fixedWaitGlobs, KOTLIN_FIXED_WAIT_PATTERNS),
+
     // Spec↔test traceability. Editing a spec must not silently break
     // the tests that claim its scenarios: removing or renaming a
     // `## Scenario:` heading still covered by a test blocks with the
@@ -459,6 +487,21 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       ],
     },
 
+    // Scenario fidelity (issue #120): a changed Covers-tagged test
+    // must say what its scenario says, and a changed scenario must
+    // still match the tests that claim it. Judged, but only when a
+    // write changes a claim.
+    // Test isolation on the acceptance DSL (issue #119): opt-in, for
+    // suites whose SUT outlives a test. Judged per DSL write that adds
+    // code.
+    ...testIsolationBlock(options.dslIsolationGlobs),
+
+    ...scenarioFidelityBlock(options.scenarioFidelity, [...acceptanceTestGlobs, ...specGlobs], {
+      specsDir,
+      testRoots,
+      testFilePattern: options.testFilePattern,
+    }),
+
     // ── Ship gates ───────────────────────────────────────────────────
     // Definition of done, made mechanical: every non-wip scenario in
     // specsDir is claimed by an acceptance test (Covers: tag), and
@@ -482,12 +525,17 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     // is a thin spec class calling the existing body. CALIBRATE THE
     // PATTERNS TO YOUR LAYOUT before setting `driverScopes` — a
     // pattern matching zero files makes every tagged scenario fail,
-    // loudly. Example:
+    // loudly. Tag app-tier scenarios `[app]` by the acceptance-testing
+    // skill's tier rules (the wire, wiring or a platform service decides
+    // the outcome; a walking skeleton per feature that reaches an
+    // external system; escaped defects). Untagged scenarios need any
+    // covering test, normally at the component tier (issue #118).
+    // Example:
     //   driverScopes: [
-    //     { name: 'view-model', filePattern: /[/\\]acceptance[/\\]viewmodel[/\\]/ },
+    //     { name: 'component', filePattern: /[/\\]acceptance[/\\]component[/\\]/ },
+    //     { name: 'app', filePattern: /[/\\]acceptance[/\\]app[/\\]/ },
     //     { name: 'system', filePattern: /[/\\]acceptance[/\\]ui[/\\]/ },
     //   ],
-    //   defaultScopes: ['view-model'],
     enforceSpecTestParity({
       specsDir,
       testRoots,

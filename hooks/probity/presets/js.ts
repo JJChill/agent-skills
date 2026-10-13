@@ -28,6 +28,7 @@ import {
   requireGreenTestRun,
   withJudgeFailureDiagnostics,
   withContradictionRetry,
+  JS_FIXED_WAIT_PATTERNS,
 } from '../rules/gates.js'
 import { enforceJsTdd } from '../rules/js-tdd.js'
 import {
@@ -38,6 +39,9 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
+import { testIsolationBlock } from './test-isolation.js'
+import { scenarioFidelityBlock } from './scenario-fidelity.js'
+import { fixedWaitBlock } from './fixed-waits.js'
 import {
   enforceSpecTestParity,
   JS_TEST_DECLARATION,
@@ -155,7 +159,22 @@ export type JsPresetOptions = {
   ignoreTags?: string[]
   /** Globs excluded (as `!`-negations) from every files-scoped block —
    *  spikes and build output by default. Pass `[]` to disable. */
+  /** Judge each changed Covers-tagged test against the scenario it
+   *  claims (issue #120): same Given/When/Then, no unstated outcome.
+   *  One model call per write that changes a claim. Default: on. */
+  /** Acceptance DSL files judged for test isolation (issue #119):
+   *  aliased entities, stubs keyed on aliased ids, no shared writable
+   *  fixtures, no clean-up of test data. Off by default; worth turning on
+   *  when the suite runs against a SUT that outlives a test. One model
+   *  call per DSL write that adds code. */
+  dslIsolationGlobs?: Globs
+  scenarioFidelity?: boolean
   excludeGlobs?: string[]
+  /** Acceptance code screened for new fixed waits (issue #119): the
+   *  whole suite, DSL and drivers included. Exempt the suite's one
+   *  poll-for-concluding-event helper with a `!` glob. Default
+   *  `['**\/acceptance/**']`; pass `[]` to turn the screen off. */
+  fixedWaitGlobs?: Globs
   /** Deny a shell command (Bash, Kiro's shell) that writes a file any
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
@@ -219,6 +238,11 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
       files: mockGlobs,
       rules: [forbidInternalModuleMocks()],
     },
+
+    // No fixed waits anywhere in the acceptance suite (issue #119):
+    // drivers wait for the concluding event, never for a set time.
+    // Delta-based, so waits already in a file don't block edits to it.
+    ...fixedWaitBlock(options.fixedWaitGlobs, JS_FIXED_WAIT_PATTERNS),
   ]
 
   // Driving adapters must be thin (issue #72). The core-purity block
@@ -281,6 +305,18 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
       ],
     })
 
+    // Scenario fidelity (issue #120): a changed Covers-tagged test
+    // must say what its scenario says, and a changed scenario must
+    // still match the tests that claim it. Judged, but only when a
+    // write changes a claim.
+    entries.push(
+      ...scenarioFidelityBlock(options.scenarioFidelity, [...acceptanceTestGlobs, ...specGlobs], {
+        specsDir,
+        testRoots,
+        testFilePattern: options.testFilePattern,
+      }),
+    )
+
     if (options.glossaryPath) {
       // Ubiquitous-language drift: renaming or removing a glossary
       // term that specs, tests, or code still use blocks the glossary
@@ -321,6 +357,11 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
     files: specGlobs,
     rules: [enforceAcceptanceLanguage({ glossaryPath: options.glossaryPath })],
   })
+
+  // Test isolation on the acceptance DSL (issue #119): opt-in, for
+  // suites whose SUT outlives a test. Judged per DSL write that adds
+  // code.
+  entries.push(...testIsolationBlock(options.dslIsolationGlobs))
 
   if (options.specsDir) {
     // ── Ship gate: spec↔test parity ─────────────────────────────────

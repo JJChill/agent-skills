@@ -1,5 +1,126 @@
 # Changelog
 
+## 0.4.40
+
+An opt-in judged check that the acceptance DSL keeps tests isolated, and
+the course's remaining isolation advice in the skill (#119, items 2, 3
+and 5).
+
+- **What was missing.** Nothing checked functional or temporal
+  isolation. A DSL could pass a test's names straight to a shared SUT,
+  program stubs with raw names, write to a shared fixture, or clean up
+  after itself, and only the skill text said otherwise.
+- **Now:** `enforceTestIsolation({ instructions? })` in
+  `rules/acceptance-language.ts` judges DSL writes that add code. It
+  denies an unaliased entity, a stub keyed on a raw name, a shared
+  writable fixture, and clean-up of test data. Closing driver resources
+  is fine, and a DSL that builds a fresh SUT per test passes the
+  aliasing and clean-up checks. The prompt carries the file's first 30
+  lines and the changed lines with context rather than the whole file,
+  and a write that adds no code (only removals, comments or imports) is
+  not judged. Every preset takes `dslIsolationGlobs`, off by default.
+- **Skill (acceptance-testing):**
+  - **DSL:** defaults on every call, and a DSL organised by concept.
+  - **Drivers:** failure messages in domain language.
+  - **Aliasing:** a reference alias and sequence helper, with stubs keyed
+    on aliased ids.
+  - **Data and retries:** synthetic data only, and no automatic retries.
+  - Matching red flags, a new rationalization row, and a checklist item.
+
+## 0.4.39
+
+A judged rule checks that a `Covers:`-tagged test says what its scenario
+says (#120).
+
+- **What was missing.** `enforceSpecTestParity` and
+  `requireSpecBackedAcceptanceTest` check that a test's `Covers:` tag
+  resolves, and the Language Test judges each side's wording. Nothing
+  compared the two sides, so a test could claim a scenario while setting
+  up a different precondition or asserting a different outcome, and
+  parity stayed green.
+- **Now:** `enforceScenarioFidelity({ specsDir, testRoots?,
+  testFilePattern?, instructions? })` in `rules/scenario-fidelity.ts`.
+  On a test write, it sends each claimed test the write adds or changes
+  to the judge, beside the text of the scenario it claims (by title or
+  `@id`). The judge reads the test through its DSL and denies a
+  different Given, When or Then, or an outcome the scenario doesn't
+  state. On a spec write, it judges each changed scenario against the
+  tests that already claim it. A test that delegates to a shared body in
+  a sibling `*Scenarios.*` file is judged with that file.
+- **How far a test reaches.** A test runs from its tag to where its
+  braces close. A test with no braces (a Kotlin expression body, a JS
+  arrow) runs while its lines end mid-expression or the next line is
+  indented deeper, so a wrapped chained call is read in full.
+- **Cost:** no model call for a write that changes no claim, for a claim
+  that resolves to no scenario (the parity rules report it), or for a
+  test whose body matches another test already claiming the same
+  scenario (a second driver).
+- **Presets:** KMP and Swift wire it by default on their acceptance tests
+  and specs. JS wires it once `specsDir` is set. `scenarioFidelity:
+  false` turns it off. It is wrapped in the presets' usual judge-failure
+  diagnostics and contradiction retry.
+- **Supporting changes.** `rules/spec-test-parity.ts` exports
+  `findTestFiles`, `OWNER_DECLARATION`, `COMMENT_OR_ANNOTATION_LINE` and
+  `DEFAULT_TEST_FILE_PATTERN`, and records each scenario's heading line.
+  The workflow eval tells the new judge apart from the language
+  validator, and asserts it stays silent when a second driver test
+  leaves the claimed test unchanged.
+
+## 0.4.38
+
+The acceptance suite must exercise the whole deployable unit, with rules
+for which scenarios prove it (#118). Docs and examples only; no rule
+behavior changes.
+
+- **What was wrong.** The acceptance-testing skill offered a view-model
+  driver that fakes at the use-case ports as the default driver set, and
+  the KMP preset's scope example made `view-model` the default scope. A
+  suite like that decides releasability without ever running the
+  adapters, the wire or the composition root.
+- **Now:**
+  - **Two tiers.** The skill names an **app tier**: a driver that builds
+    the app through the composition entry point the app ships with and
+    fakes only outbound ports. The presentation-only rung becomes the
+    **component tier**, where most scenarios live. A suite of
+    component-tier scenarios alone is never releasable.
+  - **Tier rules.** A scenario goes to the app tier when the wire,
+    wiring or a platform service decides its outcome, as the walking
+    skeleton of a feature that reaches an external system, or after an
+    escaped defect. Everything else stays at the component tier, and
+    each scenario is claimed at one tier.
+  - **Preset example.** The KMP scope example declares `component`,
+    `app` and `system` scopes, tags app-tier scenarios `[app]`, and sets
+    no `defaultScopes`.
+- **Adopting it.** Scopes stay opt-in: no preset sets `driverScopes`, so
+  existing parity results don't change. A consuming project declares the
+  scopes and tags its app-tier scenarios.
+
+## 0.4.37
+
+The Kotlin, KMP and JS/TS presets screen the acceptance suite for new
+fixed waits, as the Swift preset already did (#119, item 1).
+
+- **What was missing.** Only the Swift preset blocked sleeps in
+  acceptance code. A Kotlin or JS/TS driver or DSL could add
+  `Thread.sleep(500)` or `page.waitForTimeout(1000)` without anything
+  stopping it, and the acceptance-language judge mentions sleeps only
+  in spec files.
+- **Now:** `forbidNewFixedWaits({ patterns })` in `rules/gates.ts`
+  blocks a write that adds a fixed wait, and names it. The deny points
+  the agent at polling for the concluding event through the suite's
+  one poll helper, or at advancing a test clock. Kotlin patterns
+  (`KOTLIN_FIXED_WAIT_PATTERNS`): `Thread.sleep`, `TimeUnit.*.sleep`,
+  `SystemClock.sleep`, `delay(`. JS/TS patterns
+  (`JS_FIXED_WAIT_PATTERNS`): `waitForTimeout`, `setTimeout`, numeric
+  `cy.wait`, `sleep(`, `browser.pause`. The rule is delta-based, so
+  waits already in a file don't block edits to it, and waits named in
+  comments don't count. The presets wire it on `fixedWaitGlobs`
+  (default `['**/acceptance/**']`, so DSL and driver files are
+  covered too). Exempt the poll helper with a `!` glob, or pass `[]`
+  to turn the screen off. The JS preset wires it by default, unlike
+  its opt-in parity rules: a project with no `acceptance/` directory
+  sees no change.
+
 ## 0.4.36
 
 The commit gates recognise a commit by what a command runs, not by the
