@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.44
+
+A deliberate break that the TDD judge denies now names the
+mutation-probe marker (#134).
+
+- **What was missing.** A sabotage check, breaking a test-support stub
+  to watch an app-tier scenario fail, was denied as a behaviour change
+  under green. The stub lived in a `src/main` source set of a module
+  used only by tests, so the judge treated it as production code. The
+  denial gave no route, and the same edit was allowed in another
+  harness, because the judge saw a different session.
+- **Now:**
+  - **The denial names the route.** A TDD denial for an untested change
+    (no red, never observed failing, under green) gets a note: if the
+    write is a deliberate break, in production code or in a stub or
+    fake, mark it `// probity: mutation-probe`, watch the tests fail,
+    then revert. Other denials are unchanged.
+  - **The marked write is deterministic.** It passes with no model call
+    in every harness, and the commit gate keeps commits blocked until
+    the file is reverted.
+- **Decision to check.** There is no option to declare a `src/main`
+  module test-only. Treating the stub as test code would leave a
+  sabotage to the judge's reading of the session. It would also skip
+  the probe round-trip, which is what guarantees the stub is restored.
+  Stubs keep their TDD coverage, with a scenario's red authorizing new
+  stub behaviour.
+
 ## 0.4.43
 
 A dependency's checked coverage replaces unchecked "covered by the SDK"

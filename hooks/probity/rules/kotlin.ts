@@ -1209,6 +1209,11 @@ function markedFiles(
  * imports, ambient effects) and the boundary validator still apply to
  * probe writes — a probe has no business introducing those.
  *
+ * An unmarked write the TDD rule denies for lacking a red gets a note
+ * naming the marker (issue #134): a deliberate break and untested new
+ * behaviour look alike to the judge, and a test-support stub in a
+ * `src/main` source set is judged as production code.
+ *
  * @param rule — the wrapped TDD stack. Shipped presets supply their
  *   package-internal Kotlin-specialized judge before applying this wrapper.
  */
@@ -1220,7 +1225,11 @@ export function withMutationProbe(rule: Rule): Rule {
     if (action.kind === 'write' && MUTATION_PROBE_MARKER.test(action.content)) {
       return { kind: 'pass', notes: [{ kind: 'mutation-probe' }] }
     }
-    return rule(action, ctx)
+    const result = await rule(action, ctx)
+    if (result.kind === 'violation' && PROBE_CANDIDATE_REASON.test(result.reason ?? '')) {
+      return { ...result, reason: `${result.reason}\n\n${PROBE_HINT}` }
+    }
+    return result
   }
   Object.defineProperty(wrapped, 'name', {
     value: `mutationProbe(${rule.name || 'rule'})`,
@@ -1240,6 +1249,23 @@ const MISSING_RED_REASON =
 // first write is blocked for referencing a sibling it doesn't define.
 const UNDEFINED_SIBLING_REASON =
   /not defined|no declaration|undefined|not declared|does not (?:add|define|declare)|isn't defined/i
+
+// A denial for an untested change under green reads the same whether
+// the write is new behaviour or a deliberate break (issue #134, a
+// sabotage check on a test-support stub). The note names the
+// sanctioned route for the second case.
+const PROBE_CANDIDATE_REASON = new RegExp(
+  `${MISSING_RED_REASON.source}|under green|no failing test|untested behaviou?r`,
+  'i',
+)
+
+const PROBE_HINT =
+  'Note: if this write is a deliberate break — a mutation check or ' +
+  'sabotage made to watch a test or scenario fail, in production code ' +
+  'or in a stub or fake used only by tests — put `// probity: ' +
+  'mutation-probe` in a comment on the changed line and retry. The write ' +
+  'passes; run the tests and watch them fail, then revert the file ' +
+  '(git checkout -- <file>). Commits are blocked while the marker is on disk.'
 
 const ATOMIC_FIXTURE_HINT =
   'Note: if this block cites a symbol the write references but does not ' +
