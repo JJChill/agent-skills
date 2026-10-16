@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.45
+
+A red test denied as retrofitting now names the restart-the-cycle path
+(#136).
+
+- **What was missing.** A Kotlin/Native iOS test expected
+  `NotSetUp(NotSignedIn)`. After the production change it failed with
+  `ProtectedStoreUnavailable`: the simulator test host has no Keychain,
+  so the expectation was wrong about the environment, not the code.
+  Correcting it was denied as retrofitting, even though the correction
+  was exact and would still fail against the old code. The denial gave
+  no way forward, so the agent had to ask the owner.
+- **Now:**
+  - **The denial names the route.** A test-source write the TDD judge
+    denies as retrofitting gets a note: revert the production change
+    and the test, write the test again with the corrected expectation,
+    watch it fail against the unchanged code, then reapply the change.
+    The re-added test is a new test, so it is its own red step.
+  - **No misleading markers.** A retrofit denial no longer also carries
+    the characterization note or the mutation-probe note. Both offered a
+    way past the judge that would pin what the code now does.
+  - **The test-driven-development skill** describes the same restart in
+    its green step.
+- **Decision to check.** The judge still denies the correction itself.
+  The proposed test, that the correction is no looser and would still
+  fail against the old code, also passes an ordinary retrofit: a buggy
+  green whose wrong value is copied into the test. Whether a failure
+  comes from the environment or from the code isn't something the
+  session shows reliably, while the restart costs one cycle and leaves
+  an observed red.
+
 ## 0.4.44
 
 A deliberate break that the TDD judge denies now names the

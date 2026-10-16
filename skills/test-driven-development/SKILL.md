@@ -82,6 +82,8 @@ export async function createTask(input: { title: string }): Promise<Task> {
 }
 ```
 
+**When the green run shows the test's expectation was wrong.** Sometimes the test still fails after the green write, and the failure shows the expectation itself was mistaken — for example about the test environment (a simulator with no Keychain), not about the code. Don't edit the assertion to what the code now produces: from the outside that is indistinguishable from bending a test to fit the code, and the corrected expectation has never been seen failing. Restart the cycle instead: revert the production change and the test, write the test again with the corrected expectation, watch it fail against the unchanged code, then reapply the production change.
+
 ### Step 3: REFACTOR — Clean Up
 
 With tests green, improve the code without changing behavior:

@@ -1226,7 +1226,11 @@ export function withMutationProbe(rule: Rule): Rule {
       return { kind: 'pass', notes: [{ kind: 'mutation-probe' }] }
     }
     const result = await rule(action, ctx)
-    if (result.kind === 'violation' && PROBE_CANDIDATE_REASON.test(result.reason ?? '')) {
+    if (
+      result.kind === 'violation' &&
+      PROBE_CANDIDATE_REASON.test(result.reason ?? '') &&
+      !RETROFIT_REASON.test(result.reason ?? '')
+    ) {
       return { ...result, reason: `${result.reason}\n\n${PROBE_HINT}` }
     }
     return result
@@ -1249,6 +1253,23 @@ const MISSING_RED_REASON =
 // first write is blocked for referencing a sibling it doesn't define.
 const UNDEFINED_SIBLING_REASON =
   /not defined|no declaration|undefined|not declared|does not (?:add|define|declare)|isn't defined/i
+
+// A test write denied as bending a red test to the code (issue #136).
+// The judge can't tell a wrong expectation about the code from a wrong
+// one about the test environment, so the denial stands and the note
+// names the way through instead. Neither marker applies to this case.
+const RETROFIT_REASON =
+  /retrofit|weaken|loosen|bend|(?:fit|match)(?:es|ing)? (?:the )?(?:current |existing |new )?(?:production |implementation|code)|replac\w* (?:the )?(?:asserted|expected) (?:outcome|value|result)/i
+
+const RESTART_HINT =
+  'Note: if the original expectation was wrong rather than the code — ' +
+  'for example about the test environment — restart the cycle so the ' +
+  'corrected expectation is seen failing: revert the production change ' +
+  'made since the red and the test itself (git checkout -- <files>, or ' +
+  'delete a file git does not track yet), write it again as a new test ' +
+  'with the corrected expectation, run it and watch it fail on that ' +
+  'assertion against the unchanged code, then reapply the production ' +
+  'change. Do not loosen the test or pin what the code now produces.'
 
 // A denial for an untested change under green reads the same whether
 // the write is new behaviour or a deliberate break (issue #134, a
@@ -1516,6 +1537,10 @@ function fullCommandOutput(output: string): string {
  * write for lacking a red, the deny text gains a note naming the
  * marker, so an agent pinning existing behavior learns the sanctioned
  * route at the point it is blocked instead of breaking production.
+ * A test-layer write denied as retrofitting (bending a red test to the
+ * code) gets the restart-the-cycle note instead (issue #136), never the
+ * marker: a corrected expectation is seen failing by restarting, not
+ * by characterizing what the code now does.
  *
  * @param rule — the TDD rule to wrap (fast-paths/probe wrappers
  *   included as usual).
@@ -1586,6 +1611,9 @@ export function withCharacterizationTest(
       return { kind: 'pass', notes: [{ kind: 'characterization' }] }
     }
     const result = await rule(action, ctx)
+    if (result.kind === 'violation' && RETROFIT_REASON.test(result.reason ?? '')) {
+      return { ...result, reason: `${result.reason}\n\n${RESTART_HINT}` }
+    }
     if (
       result.kind === 'violation' &&
       CHARACTERIZATION_CANDIDATE_REASON.test(result.reason ?? '')
