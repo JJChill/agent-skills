@@ -60,6 +60,7 @@ import {
 } from '../rules/swift.js'
 import { surfaceGlossaryTermBreakage } from '../rules/ubiquitous-language.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
+import { withJudgeTasks } from '../rules/judge-task.js'
 import { enforceSwiftTdd } from '../internal/swift-tdd.js'
 import {
   withJudgeFailureDiagnostics,
@@ -90,7 +91,7 @@ const SWIFT_TELEMETRY_LINES = [
  * this file's directory.
  */
 export function swiftRuleEntries(root: string, options: SwiftPresetOptions = {}): RuleEntry[] {
-  return withShellWriteScreen(swiftEntries(root, options), { root, enabled: options.shellWriteScreen })
+  return withJudgeTasks(withShellWriteScreen(swiftEntries(root, options), { root, enabled: options.shellWriteScreen }))
 }
 
 export type SwiftPresetOptions = {

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.50
+
+`probity-shadow-report` breaks each candidate judge down by judging task,
+with bounded rates, so it can show that a cheaper judge is good enough
+for one rule and not another.
+
+- **What was missing.** A judge sees only a prompt, never the rule that
+  asked, so the shadow log could only compare a candidate across all
+  rules at once. A plain tally also hid how little a small sample says:
+  zero leaks in 20 verdicts is not evidence of a safe judge.
+- **Now:**
+  - **Every preset runs its rules labelled with their judging task**
+    (`withJudgeTasks`, `rules/judge-task.ts`): the innermost name of the
+    rule's wrapper chain, e.g. `enforceTdd`. Rule names in Probity's trace
+    are unchanged. `withExtractionUnderGreen`'s own judge call is
+    `extractionUnderGreen`. Rules added outside a preset can be wrapped in
+    `withJudgeTasks([...])`.
+  - **`shadowJudge` logs each verdict's `task`.**
+  - **The report** gives leaks as a share of the primary's denials and
+    friction as a share of its passes, each with its one-sided 95%
+    Clopper-Pearson upper bound (`rateUpperBound`), adds a table by task,
+    and names the task of each listed disagreement.
+
 ## 0.4.49
 
 The Claude judge runs the Claude Code installed on the machine, not the

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
 import { isGitCommit, gitToplevel, nestedCommitTree } from './commit-target.js'
+import { withJudgeTask } from './judge-task.js'
 
 /**
  * Language-neutral gate rules. These accumulated in the Kotlin preset
@@ -568,14 +569,16 @@ export function withExtractionUnderGreen(
     if (shown.length === 0) return rule(action, ctx)
 
     try {
-      const verdict = await ctx.agent.reason(
+      // A different question from the wrapped TDD rule's (judge-task.ts).
+      const agent = ctx.agent
+      const verdict = await withJudgeTask('extractionUnderGreen', () => agent.reason(
         [
           EXTRACTION_INSTRUCTIONS,
           `## Existing production sources\n\n${shown.join('\n\n')}`,
           `## Pending new file\n\nFile: ${action.path}\n\n${action.content}`,
           EXTRACTION_RESPONSE_SPEC,
         ].join('\n\n'),
-      )
+      ))
       if (verdict.kind === 'pass') {
         return {
           kind: 'pass',
