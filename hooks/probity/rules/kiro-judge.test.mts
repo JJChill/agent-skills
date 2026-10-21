@@ -283,3 +283,40 @@ test('runs a real process: prompt on stdin, answer on stdout, killed on timeout'
   const missing = await kiroJudge({ command: join(dir, 'no-such-kiro'), cwd: dir }).reason('p')
   assert.match(missing.reason, /^Kiro judge unavailable: .*no-such-kiro was not found on PATH/)
 })
+
+// A config can pick the model Probity's Claude judge runs on (Probity's own
+// judge leaves it to the Agent SDK's default), e.g. a cheaper one for a
+// narrow judge, or a pinned one so verdicts don't shift with the default.
+function sdkQuery(result: string) {
+  const seen: Array<Record<string, unknown>> = []
+  const query = (args: { prompt: string; options?: Record<string, unknown> }) => {
+    seen.push(args.options ?? {})
+    return (async function* () {
+      yield { type: 'result', subtype: 'success', result }
+    })()
+  }
+  return { query, seen }
+}
+
+test('claudeJudge runs on the model it is given', async () => {
+  const sdk = sdkQuery('{"kind":"pass","reason":"ok"}')
+  const judge = claudeJudge({ model: 'claude-haiku-5-5', query: sdk.query })
+  const verdict = await judge.reason('p')
+  assert.equal(verdict.kind, 'pass')
+  assert.equal(sdk.seen.length, 1)
+  assert.equal(sdk.seen[0]!.model, 'claude-haiku-5-5')
+  // Probity's own judge settings are kept: one turn, no tools.
+  assert.equal(sdk.seen[0]!.maxTurns, 1)
+  assert.deepEqual(sdk.seen[0]!.tools, [])
+})
+
+test('claudeJudge without a model leaves the choice to the Agent SDK', async () => {
+  const sdk = sdkQuery('{"kind":"violation","reason":"no red"}')
+  const verdict = await claudeJudge({ query: sdk.query }).reason('p')
+  assert.equal(verdict.kind, 'violation')
+  assert.equal('model' in sdk.seen[0]!, false)
+})
+
+test('a claudeJudge on a chosen model is remembered by judgeChain apart from the default one', () => {
+  assert.equal((claudeJudge({ model: 'claude-haiku-5-5' }) as Agent & { name?: string }).name, 'claude:claude-haiku-5-5')
+})

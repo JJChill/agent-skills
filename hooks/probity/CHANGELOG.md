@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.47
+
+`claudeJudge({ model })` picks the Claude model the judge runs on.
+
+- **What was missing.** Probity's Claude judge names no model, so every
+  verdict ran on the Agent SDK's default. A config could not choose a
+  cheaper model, or pin one so verdicts don't change when the default
+  does.
+- **Now:** `claudeJudge({ model: 'claude-haiku-5-5' })` runs each verdict
+  on that model and keeps Probity's other judge settings (one turn, no
+  tools, no thinking). It works in a `judgeChain` or as `ai` on its own.
+  With a model, the judge is named `claude:<model>`, so `judgeChain`
+  tracks its availability apart from the default judge. Without one,
+  nothing changes.
+
 ## 0.4.46
 
 Commits pass again after a green run, and an issue body that mentions a
