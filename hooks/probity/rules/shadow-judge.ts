@@ -5,6 +5,7 @@ import { dirname } from 'node:path'
 import type { Agent, Verdict } from '@nizos/probity'
 
 import { isJudgeUnavailable } from './gates.js'
+import { judgeTask } from './judge-task.js'
 import type { NamedJudge } from './kiro-judge.js'
 
 // Probity doesn't export its telemetry type; derive it from the verdict.
@@ -61,6 +62,8 @@ type LoggedVerdict = {
 
 export type ShadowLogEntry = {
   at: string
+  /** The judging task of the rule that asked (judge-task.ts), when it was labelled. */
+  task?: string
   promptSha256: string
   prompt?: string
   primary: LoggedVerdict & { kind: Verdict['kind']; reason: string }
@@ -101,6 +104,7 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
     ...((primary as NamedJudge).name !== undefined && { name: primaryName }),
     reason: async (prompt) => {
       const started = Date.now()
+      const task = judgeTask()
       const timeoutMs = options.candidateTimeoutMs ?? DEFAULT_CANDIDATE_TIMEOUT_MS
       const shadows = candidates.map((candidate, i) =>
         askCandidate(candidate, judgeName(candidate, `candidate-${i + 1}`), prompt, started, timeoutMs),
@@ -109,6 +113,7 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
       const primaryMs = Date.now() - started
       const entry: ShadowLogEntry = {
         at: new Date(started).toISOString(),
+        ...(task && { task }),
         promptSha256: createHash('sha256').update(prompt).digest('hex'),
         ...(options.includePrompt !== false && { prompt }),
         primary: { ...logged(primaryName, verdict, primaryMs), kind: verdict.kind, reason: verdict.reason },
@@ -125,10 +130,12 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
   }
 }
 
-export type ShadowDisagreement = { at: string; promptSha256: string; primaryReason: string; candidateReason: string }
+export type ShadowDisagreement = { at: string; task?: string; promptSha256: string; primaryReason: string; candidateReason: string }
 
 export type ShadowSummary = {
   candidate: string
+  /** The judging task this row covers; undefined for the row over all tasks. */
+  task?: string
   /** Verdicts where both judges answered. */
   compared: number
   agreed: number
@@ -136,6 +143,14 @@ export type ShadowSummary = {
   leaks: ShadowDisagreement[]
   /** The candidate denied what the primary passed: interruptions it would have added. */
   friction: ShadowDisagreement[]
+  /** Compared verdicts the primary denied: the denominator of the leak rate. */
+  primaryDenials: number
+  /** Compared verdicts the primary passed: the denominator of the friction rate. */
+  primaryPasses: number
+  /** 95% upper bound on the candidate's leak rate (null with no denials to go by). */
+  leakRateUpper: number | null
+  /** 95% upper bound on the candidate's friction rate. */
+  frictionRateUpper: number | null
   /** The candidate errored, timed out, or reported itself unavailable. */
   unavailable: number
   /** The primary was unavailable, so there was nothing to compare against. */
@@ -169,61 +184,125 @@ function addTokens(into: TokensByModel, meta: AgentTelemetry | undefined): void 
   }
 }
 
-/** Per-candidate agreement with the primary judge over a shadow log. */
+function logChoose(n: number, k: number): number {
+  let sum = 0
+  for (let i = 1; i <= k; i++) sum += Math.log(n - k + i) - Math.log(i)
+  return sum
+}
+
+/** P(X <= k) for X ~ Binomial(n, p). */
+function binomialCdf(k: number, n: number, p: number): number {
+  if (p <= 0) return 1
+  if (p >= 1) return k >= n ? 1 : 0
+  let total = 0
+  for (let i = 0; i <= k; i++) total += Math.exp(logChoose(n, i) + i * Math.log(p) + (n - i) * Math.log(1 - p))
+  return total
+}
+
+/**
+ * The one-sided 95% Clopper-Pearson upper bound on a rate seen `k` times
+ * in `n`: the highest true rate still consistent with so few. Null when
+ * `n` is 0. Zero leaks in 20 verdicts still allows about 14%.
+ */
+export function rateUpperBound(k: number, n: number): number | null {
+  if (n === 0) return null
+  if (k >= n) return 1
+  let low = k / n
+  let high = 1
+  for (let i = 0; i < 60; i++) {
+    const mid = (low + high) / 2
+    if (binomialCdf(k, n, mid) > 0.05) low = mid
+    else high = mid
+  }
+  return (low + high) / 2
+}
+
+type Tally = ShadowSummary & { durations: number[]; primaryDurations: number[] }
+
+function emptyTally(candidate: string, task: string | undefined): Tally {
+  return {
+    candidate,
+    ...(task !== undefined && { task }),
+    compared: 0,
+    agreed: 0,
+    leaks: [],
+    friction: [],
+    primaryDenials: 0,
+    primaryPasses: 0,
+    leakRateUpper: null,
+    frictionRateUpper: null,
+    unavailable: 0,
+    skipped: 0,
+    tokens: {},
+    primaryTokens: {},
+    medianMs: null,
+    primaryMedianMs: null,
+    durations: [],
+    primaryDurations: [],
+  }
+}
+
+function count(row: Tally, entry: ShadowLogEntry, candidate: LoggedVerdict): void {
+  addTokens(row.tokens, candidate.meta)
+  addTokens(row.primaryTokens, entry.primary.meta)
+  row.durations.push(candidate.durationMs)
+  row.primaryDurations.push(entry.primary.durationMs)
+  if (isJudgeUnavailable(entry.primary.reason)) {
+    row.skipped++
+    return
+  }
+  if (candidate.error !== undefined || candidate.timedOut || !candidate.kind || isJudgeUnavailable(candidate.reason ?? '')) {
+    row.unavailable++
+    return
+  }
+  row.compared++
+  if (entry.primary.kind === 'violation') row.primaryDenials++
+  else row.primaryPasses++
+  if (candidate.kind === entry.primary.kind) {
+    row.agreed++
+    return
+  }
+  const disagreement = {
+    at: entry.at,
+    ...(entry.task && { task: entry.task }),
+    promptSha256: entry.promptSha256,
+    primaryReason: entry.primary.reason,
+    candidateReason: candidate.reason ?? '',
+  }
+  if (candidate.kind === 'pass') row.leaks.push(disagreement)
+  else row.friction.push(disagreement)
+}
+
+/**
+ * Agreement with the primary judge over a shadow log: per candidate, a
+ * row over all tasks, then one row per judging task (most verdicts
+ * first; unlabelled verdicts under `(unlabelled)`).
+ */
 export function summarizeShadowLog(entries: readonly ShadowLogEntry[]): ShadowSummary[] {
-  const rows = new Map<string, ShadowSummary & { durations: number[]; primaryDurations: number[] }>()
+  const overall = new Map<string, Tally>()
+  const byTask = new Map<string, Map<string, Tally>>()
   for (const entry of entries) {
-    const primaryDown = isJudgeUnavailable(entry.primary.reason)
+    const task = entry.task ?? '(unlabelled)'
     for (const candidate of entry.candidates) {
-      let row = rows.get(candidate.name)
-      if (!row) {
-        row = {
-          candidate: candidate.name,
-          compared: 0,
-          agreed: 0,
-          leaks: [],
-          friction: [],
-          unavailable: 0,
-          skipped: 0,
-          tokens: {},
-          primaryTokens: {},
-          medianMs: null,
-          primaryMedianMs: null,
-          durations: [],
-          primaryDurations: [],
-        }
-        rows.set(candidate.name, row)
+      if (!overall.has(candidate.name)) {
+        overall.set(candidate.name, emptyTally(candidate.name, undefined))
+        byTask.set(candidate.name, new Map())
       }
-      addTokens(row.tokens, candidate.meta)
-      addTokens(row.primaryTokens, entry.primary.meta)
-      row.durations.push(candidate.durationMs)
-      row.primaryDurations.push(entry.primary.durationMs)
-      if (primaryDown) {
-        row.skipped++
-        continue
-      }
-      if (candidate.error !== undefined || candidate.timedOut || !candidate.kind || isJudgeUnavailable(candidate.reason ?? '')) {
-        row.unavailable++
-        continue
-      }
-      row.compared++
-      if (candidate.kind === entry.primary.kind) {
-        row.agreed++
-        continue
-      }
-      const disagreement = {
-        at: entry.at,
-        promptSha256: entry.promptSha256,
-        primaryReason: entry.primary.reason,
-        candidateReason: candidate.reason ?? '',
-      }
-      if (candidate.kind === 'pass') row.leaks.push(disagreement)
-      else row.friction.push(disagreement)
+      const tasks = byTask.get(candidate.name)!
+      if (!tasks.has(task)) tasks.set(task, emptyTally(candidate.name, task))
+      count(overall.get(candidate.name)!, entry, candidate)
+      count(tasks.get(task)!, entry, candidate)
     }
   }
-  return [...rows.values()].map(({ durations, primaryDurations, ...row }) => ({
+  const finish = ({ durations, primaryDurations, ...row }: Tally): ShadowSummary => ({
     ...row,
+    leakRateUpper: rateUpperBound(row.leaks.length, row.primaryDenials),
+    frictionRateUpper: rateUpperBound(row.friction.length, row.primaryPasses),
     medianMs: median(durations),
     primaryMedianMs: median(primaryDurations),
-  }))
+  })
+  return [...overall.entries()].flatMap(([name, row]) => [
+    finish(row),
+    ...[...byTask.get(name)!.values()].sort((a, b) => b.durations.length - a.durations.length).map(finish),
+  ])
 }

@@ -11,7 +11,8 @@ import test from 'node:test'
 
 import type { Agent, Verdict } from '@nizos/probity'
 
-import { shadowJudge, summarizeShadowLog, type ShadowLogEntry } from './shadow-judge.ts'
+import { withJudgeTask } from './judge-task.ts'
+import { rateUpperBound, shadowJudge, summarizeShadowLog, type ShadowLogEntry } from './shadow-judge.ts'
 
 function dir(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'shadow-judge-'))
@@ -131,7 +132,7 @@ test('summarizeShadowLog splits disagreements into leaks and friction, apart fro
     // The primary was unavailable: nothing to compare against.
     entry(deny('Kiro judge unavailable: kiro-cli was not found on PATH'), { kind: 'pass', reason: 'ok' }),
   ])
-  const haiku = summary.find((row) => row.candidate === 'haiku')!
+  const haiku = summary.find((row) => row.candidate === 'haiku' && row.task === undefined)!
   assert.equal(haiku.compared, 4)
   assert.equal(haiku.agreed, 2)
   assert.equal(haiku.leaks.length, 1)
@@ -142,4 +143,50 @@ test('summarizeShadowLog splits disagreements into leaks and friction, apart fro
   assert.deepEqual(haiku.primaryTokens, { opus: { input: 80, output: 8 } })
   assert.equal(haiku.medianMs, 400)
   assert.equal(haiku.primaryMedianMs, 1000)
+})
+
+test('each verdict is logged with the judging task of the rule that asked', async (t) => {
+  const log = join(dir(t), 'shadow.jsonl')
+  const shadow = shadowJudge(judge('claude', async () => pass()).agent, [judge('c', async () => pass()).agent], { log })
+  await withJudgeTask('enforceTdd', () => shadow.reason('p'))
+  await shadow.reason('q')
+  const [labelled, unlabelled] = readLog(log)
+  assert.equal(labelled!.task, 'enforceTdd')
+  assert.equal('task' in unlabelled!, false)
+})
+
+function tasked(task: string | undefined, primary: Verdict, candidate: Verdict): ShadowLogEntry {
+  return { ...entry(primary, { kind: candidate.kind, reason: candidate.reason }), ...(task && { task }) }
+}
+
+test('summarizeShadowLog adds a row per judging task, with leak and friction rates bounded for small samples', () => {
+  const log = [
+    ...Array.from({ length: 20 }, () => tasked('enforceAcceptanceLanguage', deny(), deny())),
+    ...Array.from({ length: 20 }, () => tasked('enforceAcceptanceLanguage', pass(), pass())),
+    ...Array.from({ length: 3 }, () => tasked('enforceTdd', deny(), pass())),
+    ...Array.from({ length: 7 }, () => tasked('enforceTdd', deny(), deny())),
+    tasked('enforceTdd', pass(), deny()),
+    tasked(undefined, pass(), pass()),
+  ]
+  const rows = summarizeShadowLog(log).filter((row) => row.candidate === 'haiku')
+  assert.deepEqual(rows.map((row) => row.task), [undefined, 'enforceAcceptanceLanguage', 'enforceTdd', '(unlabelled)'])
+  const [all, language, tdd] = rows
+  assert.equal(all!.compared, 52)
+  assert.equal(language!.leaks.length, 0)
+  assert.equal(language!.primaryDenials, 20)
+  // No leak in 20 denials still allows a true leak rate near 14%.
+  assert.ok(Math.abs(language!.leakRateUpper! - (1 - 0.05 ** (1 / 20))) < 1e-6)
+  assert.equal(tdd!.leaks.length, 3)
+  assert.equal(tdd!.primaryDenials, 10)
+  assert.equal(tdd!.friction.length, 1)
+  assert.equal(tdd!.primaryPasses, 1)
+  assert.equal(tdd!.frictionRateUpper, 1)
+})
+
+test('rateUpperBound is the one-sided 95% Clopper-Pearson bound', () => {
+  assert.equal(rateUpperBound(0, 0), null)
+  assert.equal(rateUpperBound(5, 5), 1)
+  assert.ok(Math.abs(rateUpperBound(0, 100)! - (1 - 0.05 ** (1 / 100))) < 1e-6)
+  // Known value: 3 in 60 gives about 12.5%.
+  assert.ok(Math.abs(rateUpperBound(3, 60)! - 0.1253) < 0.002, String(rateUpperBound(3, 60)))
 })

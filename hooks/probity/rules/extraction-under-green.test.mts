@@ -180,3 +180,15 @@ test('with the Kotlin green-run options, a red iosSimulatorArm64Test run leaves 
   assert.equal(judged, 0, 'the extraction judge is not asked')
   assert.equal(wrappedCalls, 1)
 })
+
+// The extraction check asks the judge a different question from the TDD
+// rule it wraps, so shadowJudge files its verdicts under their own task.
+test('the extraction judge call is labelled as its own judging task', async () => {
+  const { judgeTask, withJudgeTask } = await import('./judge-task.ts')
+  const s = setup()
+  const tasks: Array<string | undefined> = []
+  const agent = s.ctx.agent!
+  const ctx = { ...s.ctx, agent: { reason: (prompt: string) => (tasks.push(judgeTask()), agent.reason(prompt)) } } as RuleContext
+  await withJudgeTask('enforceTdd', () => s.rule(s.action, ctx))
+  assert.deepEqual(tasks, ['extractionUnderGreen'])
+})

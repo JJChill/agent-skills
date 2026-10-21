@@ -10,9 +10,10 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const SCRIPT = join(HERE, 'shadow-report.ts')
 const TSX = join(HERE, '..', 'node_modules', '.bin', 'tsx')
 
-function line(primaryKind, candidateKind, extra = {}) {
+function line(primaryKind, candidateKind, extra = {}, task) {
   return JSON.stringify({
     at: '2026-10-21T10:00:00.000Z',
+    ...(task && { task }),
     promptSha256: `sha-${primaryKind}-${candidateKind}`,
     primary: { name: 'claude', kind: primaryKind, reason: `primary says ${primaryKind}`, durationMs: 8000 },
     candidates: [{ name: 'claude:claude-haiku-5-5', kind: candidateKind, reason: `haiku says ${candidateKind}`, durationMs: 2000, ...extra }],
@@ -35,8 +36,8 @@ test('reports agreement, leaks and friction per candidate', (t) => {
   assert.match(res.stdout, /1 unreadable line skipped/)
   assert.match(res.stdout, /claude:claude-haiku-5-5/)
   assert.match(res.stdout, /agreed 2 of 4 \(50\.0%\)/)
-  assert.match(res.stdout, /leaks 1 /)
-  assert.match(res.stdout, /friction 1 /)
+  assert.match(res.stdout, /leaks 1 of 2 primary denials \(50\.0%, up to 97\.5% at 95%\)/)
+  assert.match(res.stdout, /friction 1 of 2 primary passes \(50\.0%, up to 97\.5% at 95%\)/)
   assert.match(res.stdout, /median 2\.0 s \(primary 8\.0 s\)/)
   assert.match(res.stdout, /tokens:\n    claude-haiku-5-5: in 2,000, out 100/)
   assert.match(res.stdout, /primary tokens: none recorded/)
@@ -57,4 +58,19 @@ test('a missing log is an error with usage', (t) => {
   const res = spawnSync(TSX, [SCRIPT, join(tmpdir(), 'no-such-shadow.jsonl')], { encoding: 'utf8' })
   assert.equal(res.status, 1)
   assert.match(res.stderr, /cannot read/)
+})
+
+test('a table breaks each candidate down by judging task', (t) => {
+  const lines = [
+    ...Array.from({ length: 30 }, () => line('violation', 'violation', {}, 'enforceAcceptanceLanguage')),
+    line('violation', 'pass', {}, 'enforceTdd'),
+    line('pass', 'pass', {}, 'enforceTdd'),
+  ]
+  const res = report(t, lines.join('\n') + '\n', ['--show', 'leaks'])
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /by task:/)
+  assert.match(res.stdout, /enforceAcceptanceLanguage +30 +100\.0% +0\/30 \(≤ ?9\.5%\) +-/)
+  assert.match(res.stdout, /enforceTdd +2 +50\.0% +1\/1 \(≤ ?100\.0%\) +0\/1 \(≤ ?95\.0%\)/)
+  // A listed disagreement names its task.
+  assert.match(res.stdout, /sha-violation-pass  enforceTdd/)
 })

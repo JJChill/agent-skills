@@ -54,6 +54,7 @@ import { requireSpecBackedAcceptanceTest } from '../rules/spec-test-parity.js'
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
+import { withJudgeTasks } from '../rules/judge-task.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import { testIsolationBlock } from './test-isolation.js'
 import { fixedWaitBlock } from './fixed-waits.js'
@@ -386,8 +387,8 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
     requireGreenTestRun({ command: options.commitCommand ?? GRADLE_TEST_COMMAND }),
   ]
 
-  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+  return withJudgeTasks(withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
     root,
     enabled: options.shellWriteScreen,
-  })
+  }))
 }

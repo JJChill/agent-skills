@@ -38,6 +38,7 @@ import {
 import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
+import { withJudgeTasks } from '../rules/judge-task.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import { testIsolationBlock } from './test-isolation.js'
 import { scenarioFidelityBlock } from './scenario-fidelity.js'
@@ -419,7 +420,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
     }),
   )
 
-  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+  return withJudgeTasks(withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
     enabled: options.shellWriteScreen,
-  })
+  }))
 }

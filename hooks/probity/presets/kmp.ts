@@ -35,6 +35,7 @@ import {
 } from '../rules/acceptance-language.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
+import { withJudgeTasks } from '../rules/judge-task.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import { testIsolationBlock } from './test-isolation.js'
 import { fixedWaitBlock } from './fixed-waits.js'
@@ -584,8 +585,8 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
     requireGreenTestRun({ command: GRADLE_TEST_COMMAND }),
   ]
 
-  return withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+  return withJudgeTasks(withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
     root,
     enabled: options.shellWriteScreen,
-  })
+  }))
 }
