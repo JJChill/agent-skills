@@ -10,7 +10,7 @@ import test from 'node:test'
 import type { Agent, Rule, RuleContext } from '@nizos/probity'
 
 import { isJudgeUnavailable, withJudgeFailureDiagnostics } from './gates.ts'
-import { KIRO_JUDGE_AGENT, claudeJudge, judgeChain, kiroJudge, type KiroRun, type KiroRunResult } from './kiro-judge.ts'
+import { KIRO_JUDGE_AGENT, claudeJudge, installedClaude, judgeChain, kiroJudge, type KiroRun, type KiroRunResult } from './kiro-judge.ts'
 
 const ok = (stdout: string, extra: Partial<KiroRunResult> = {}): KiroRunResult => ({
   exitCode: 0,
@@ -319,4 +319,88 @@ test('claudeJudge without a model leaves the choice to the Agent SDK', async () 
 
 test('a claudeJudge on a chosen model is remembered by judgeChain apart from the default one', () => {
   assert.equal((claudeJudge({ model: 'claude-haiku-5-5' }) as Agent & { name?: string }).name, 'claude:claude-haiku-5-5')
+})
+
+// The judge runs the Claude Code installed on the machine, not the copy
+// bundled with Probity's Agent SDK, so it follows the user's own updates
+// (and their CLI's defaults) instead of whatever SDK version Probity pins.
+
+/** Runs `body` with these environment variables set (undefined removes one), then restores them. */
+async function withEnv(vars: Record<string, string | undefined>, body: () => Promise<void> | void) {
+  const saved = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]))
+  const apply = (values: Record<string, string | undefined>) => {
+    for (const [key, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+  apply(vars)
+  try {
+    await body()
+  } finally {
+    apply(saved)
+  }
+}
+
+function fakeClaude(dir: string, name = 'claude', mode = 0o755): string {
+  const path = join(dir, name)
+  writeFileSync(path, '#!/bin/sh\n')
+  chmodSync(path, mode)
+  return path
+}
+
+test('installedClaude prefers the binary running this Claude Code session, then claude on PATH', async () => {
+  const session = cwd()
+  const onPath = cwd()
+  const running = fakeClaude(session, '2.1.306')
+  const found = fakeClaude(onPath)
+  await withEnv({ CLAUDE_CODE_EXECPATH: running, PATH: onPath }, () => assert.equal(installedClaude(), running))
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: `${cwd()}:${onPath}` }, () => assert.equal(installedClaude(), found))
+  // A stale or unusable session path falls through to PATH.
+  await withEnv({ CLAUDE_CODE_EXECPATH: join(session, 'gone'), PATH: onPath }, () => assert.equal(installedClaude(), found))
+  await withEnv({ CLAUDE_CODE_EXECPATH: session, PATH: onPath }, () => assert.equal(installedClaude(), found))
+})
+
+test('installedClaude skips a claude that cannot be executed, and finds none on an empty PATH', async () => {
+  const dir = cwd()
+  fakeClaude(dir, 'claude', 0o644)
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: dir }, () => assert.equal(installedClaude(), null))
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: '' }, () => assert.equal(installedClaude(), null))
+})
+
+test('claudeJudge runs the installed claude by default, and the bundled one when none is installed', async () => {
+  const dir = cwd()
+  const installed = fakeClaude(dir)
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: dir }, async () => {
+    const sdk = sdkQuery('{"kind":"pass","reason":"ok"}')
+    await claudeJudge({ query: sdk.query }).reason('p')
+    assert.equal(sdk.seen[0]!.pathToClaudeCodeExecutable, installed)
+  })
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: '' }, async () => {
+    const sdk = sdkQuery('{"kind":"pass","reason":"ok"}')
+    await claudeJudge({ query: sdk.query }).reason('p')
+    assert.equal('pathToClaudeCodeExecutable' in sdk.seen[0]!, false)
+  })
+})
+
+test('claudeJudge executable picks the bundled claude, a given path, or insists on an installed one', async () => {
+  const dir = cwd()
+  fakeClaude(dir)
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: dir }, async () => {
+    const bundled = sdkQuery('{"kind":"pass","reason":"ok"}')
+    await claudeJudge({ executable: 'bundled', query: bundled.query }).reason('p')
+    assert.equal('pathToClaudeCodeExecutable' in bundled.seen[0]!, false)
+
+    const given = sdkQuery('{"kind":"pass","reason":"ok"}')
+    await claudeJudge({ executable: '/opt/claude/bin/claude', query: given.query }).reason('p')
+    assert.equal(given.seen[0]!.pathToClaudeCodeExecutable, '/opt/claude/bin/claude')
+  })
+  await withEnv({ CLAUDE_CODE_EXECPATH: undefined, PATH: '' }, async () => {
+    const sdk = sdkQuery('{"kind":"pass","reason":"ok"}')
+    const verdict = await claudeJudge({ executable: 'installed', query: sdk.query }).reason('p')
+    assert.equal(verdict.kind, 'violation')
+    assert.match(verdict.reason, /^Claude judge unavailable: no installed claude found/)
+    assert.ok(isJudgeUnavailable(verdict.reason))
+    assert.equal(sdk.seen.length, 0)
+  })
 })

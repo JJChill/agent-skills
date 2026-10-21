@@ -38,15 +38,18 @@ import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from '@nizos/probity'
 
+import { claudeJudge } from '@jjchill/probity-rules'
 import { kmpRuleEntries } from '@jjchill/probity-rules/presets/kmp'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   rules: kmpRuleEntries(ROOT),
+  // The installed Claude Code judges, not the copy bundled with Probity's
+  // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").
+  ai: claudeJudge(),
   // To judge on kiro-cli, falling back to the Claude judge where
-  // kiro-cli is missing or down (hooks/PROBITY.md, "Choosing the AI
-  // judge"), import { claudeJudge, judgeChain, kiroJudge } from
-  // '@jjchill/probity-rules' and add:
+  // kiro-cli is missing or down, import { judgeChain, kiroJudge } too and
+  // use instead:
   //   ai: judgeChain([kiroJudge(), claudeJudge()]),
 })

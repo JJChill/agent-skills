@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.49
+
+The Claude judge runs the Claude Code installed on the machine, not the
+copy bundled with Probity's Agent SDK.
+
+- **What was wrong.** Probity's Claude judge starts the `claude` binary
+  bundled with the Agent SDK version Probity pins (0.3.204 with Probity
+  1.10). That binary's defaults decide the judge's model, so verdicts
+  ran on `claude-opus-4-8` while the user's own Claude Code had moved
+  on, and they would shift again whenever a Probity upgrade bumped the
+  SDK.
+- **Now:**
+  - **`claudeJudge()` runs the installed Claude Code**: the binary
+    running the current session (`CLAUDE_CODE_EXECPATH`, which hooks
+    inherit), else the first `claude` on `PATH`, else the bundled copy.
+    `executable: 'installed' | 'bundled' | <path>` overrides it;
+    `'installed'` reports the judge unavailable when there is none, so a
+    `judgeChain` moves on. `installedClaude()` is exported.
+  - **The config templates set `ai: claudeJudge()`.** Without an `ai`,
+    Probity uses its own judge, which always runs the bundled copy.
+    `/probity-update` proposes the line for configs that set none.
+
 ## 0.4.48
 
 `shadowJudge` measures a candidate judge, such as a cheaper model, on a
