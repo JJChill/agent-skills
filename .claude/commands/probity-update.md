@@ -48,6 +48,8 @@ From 0.4.21, every preset denies a shell command that writes a file one of its b
 
 From 0.4.24, the KMP and Kotlin presets take `harnessGlobs`: if the project has a device or app harness whose checks can only run in a signed app (hooks/PROBITY.md, "Adapters only an app can exercise"), propose adding its paths, e.g. `harnessGlobs: ['harness/**']`.
 
+From 0.4.49, `claudeJudge()` runs the Claude Code installed on the machine instead of the copy bundled with Probity's Agent SDK, and the templates set `ai: claudeJudge()`. If the project's config sets no `ai`, its verdicts still run on the bundled copy: propose adding `ai: claudeJudge()` (imported from `@jjchill/probity-rules`). A config that already uses `claudeJudge()`, alone or in a `judgeChain`, needs no edit.
+
 Also check the Claude Code hook command in `.claude/settings.json`. From 0.4.2, it should run `./node_modules/.bin/probity-claude` instead of `./node_modules/.bin/probity --agent claude-code`, so work done inside sub-agents is judged against the sub-agent's own transcript. Propose that edit with the config edits.
 
 ## 5. Refresh the Kiro shim

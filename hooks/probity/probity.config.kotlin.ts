@@ -34,8 +34,14 @@ import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from '@nizos/probity'
 
+import { claudeJudge } from '@jjchill/probity-rules'
 import { kotlinRuleEntries } from '@jjchill/probity-rules/presets/kotlin'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({ rules: kotlinRuleEntries(ROOT) })
+export default defineConfig({
+  rules: kotlinRuleEntries(ROOT),
+  // The installed Claude Code judges, not the copy bundled with Probity's
+  // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").
+  ai: claudeJudge(),
+})

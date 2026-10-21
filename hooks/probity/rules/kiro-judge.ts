@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import type { Agent, Verdict } from '@nizos/probity'
@@ -333,8 +333,57 @@ export type ClaudeJudgeOptions = {
    * none, so the Agent SDK picks, as with Probity's own judge.
    */
   model?: string
+  /**
+   * Which Claude Code binary runs the judge:
+   * - default: the installed one ({@link installedClaude}), else the one
+   *   bundled with Probity's Agent SDK;
+   * - `'installed'`: the installed one, or "Claude judge unavailable" when
+   *   there is none, so a chain moves on;
+   * - `'bundled'`: the SDK's own, as Probity's judge runs it;
+   * - a path: that binary.
+   */
+  executable?: 'installed' | 'bundled' | (string & {})
   /** Replaces the Agent SDK's `query` (tests). */
   query?: ClaudeQuery
+}
+
+function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The Claude Code installed on this machine: the binary running the
+ * current Claude Code session (`CLAUDE_CODE_EXECPATH`, which hooks
+ * inherit), else the first `claude` on PATH. Null when there is none.
+ */
+export function installedClaude(): string | null {
+  const session = process.env.CLAUDE_CODE_EXECPATH
+  if (session && isExecutableFile(session)) return session
+  const name = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (dir && isExecutableFile(join(dir, name))) return join(dir, name)
+  }
+  return null
+}
+
+class NoInstalledClaude extends Error {}
+
+/** The binary path for `executable`, undefined for the SDK's bundled one. */
+function claudeExecutable(executable: ClaudeJudgeOptions['executable']): string | undefined {
+  if (executable === 'bundled') return undefined
+  if (executable !== undefined && executable !== 'installed') return executable
+  const found = installedClaude()
+  if (found) return found
+  if (executable === 'installed') {
+    throw new NoInstalledClaude('no installed claude found (CLAUDE_CODE_EXECPATH or claude on PATH)')
+  }
+  return undefined
 }
 
 /**
@@ -343,6 +392,9 @@ export type ClaudeJudgeOptions = {
  * does not export it, so it is loaded from the installed `@nizos/probity`
  * on first use. If that fails (a Probity release that moved it), the
  * verdict says "Claude judge unavailable", so a chain moves on.
+ *
+ * It runs the installed Claude Code when there is one (see `executable`),
+ * so verdicts follow the user's own CLI rather than the SDK's bundled copy.
  *
  * With `model`, each verdict runs on that model, and Probity's own judge
  * settings (one turn, no tools, no thinking) are kept. The judge is then
@@ -358,9 +410,12 @@ export function claudeJudge(options: ClaudeJudgeOptions = {}): NamedJudge {
         loading ??= loadClaudeCodeAgent(options)
         agent = await loading
       } catch (error) {
+        loading = undefined
         return {
           kind: 'violation',
-          reason: `Claude judge unavailable: cannot load Probity's Claude Code judge (${message(error)})`,
+          reason: error instanceof NoInstalledClaude
+            ? `Claude judge unavailable: ${error.message}`
+            : `Claude judge unavailable: cannot load Probity's Claude Code judge (${message(error)})`,
         }
       }
       return agent.reason(prompt)
@@ -368,20 +423,25 @@ export function claudeJudge(options: ClaudeJudgeOptions = {}): NamedJudge {
   }
 }
 
-async function loadClaudeCodeAgent({ model, query }: ClaudeJudgeOptions): Promise<Agent> {
+async function loadClaudeCodeAgent({ model, query, executable }: ClaudeJudgeOptions): Promise<Agent> {
+  const binary = claudeExecutable(executable)
   const index = createRequire(import.meta.url).resolve('@nizos/probity')
   const url = new URL('./vendors/claude-code/agent.js', pathToFileURL(index))
   const module = (await import(url.href)) as { claudeCode?: (deps?: { queryFn?: ClaudeQuery }) => Agent }
   if (typeof module.claudeCode !== 'function') {
     throw new Error(`${url.pathname} has no claudeCode export`)
   }
-  if (!model && !query) return module.claudeCode()
+  if (!model && !query && !binary) return module.claudeCode()
   // The SDK Probity itself depends on, resolved from Probity's install.
   const sdkQuery =
     query ??
     ((await import(pathToFileURL(createRequire(index).resolve('@anthropic-ai/claude-agent-sdk')).href)) as { query: ClaudeQuery }).query
   return module.claudeCode({
-    queryFn: (args) => sdkQuery(model ? { ...args, options: { ...args.options, model } } : args),
+    queryFn: (args) =>
+      sdkQuery({
+        ...args,
+        options: { ...args.options, ...(model && { model }), ...(binary && { pathToClaudeCodeExecutable: binary }) },
+      }),
   })
 }
 

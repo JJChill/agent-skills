@@ -36,6 +36,7 @@
  */
 import { defineConfig } from '@nizos/probity'
 
+import { claudeJudge } from '@jjchill/probity-rules'
 import { jsRuleEntries } from '@jjchill/probity-rules/presets/js'
 
 export default defineConfig({
@@ -44,4 +45,7 @@ export default defineConfig({
     // domainDiscriminants: ['role'],
     // coreExportsInJudge: true,
   }),
+  // The installed Claude Code judges, not the copy bundled with Probity's
+  // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").
+  ai: claudeJudge(),
 })

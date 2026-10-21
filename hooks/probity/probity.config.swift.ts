@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 
 import { defineConfig } from '@nizos/probity'
 
+import { claudeJudge } from '@jjchill/probity-rules'
 import { swiftRuleEntries } from '@jjchill/probity-rules/presets/swift'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -48,4 +49,7 @@ export default defineConfig({
     // domainDiscriminants: ['role'],
     // coreExportsInJudge: true,
   }),
+  // The installed Claude Code judges, not the copy bundled with Probity's
+  // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").
+  ai: claudeJudge(),
 })
