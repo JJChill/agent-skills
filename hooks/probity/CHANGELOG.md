@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.46
+
+Commits pass again after a green run, and an issue body that mentions a
+commit is no longer gated (#138).
+
+- **What was wrong.** Claude Code now writes `api-request-blob` entries
+  to the session transcript. Each records an assistant message a second
+  time, after that call's tool_result, with the same tool_use id. Probity
+  reads every tool_use as a new call, so each run appeared twice in
+  history, the second time with empty output. `requireGreenTestRun`
+  judged that empty copy as the last test run and denied every commit,
+  however green the run was. Rules that read history, the TDD judge
+  included, saw each call twice.
+- **Now:**
+  - **`probity-claude` drops request blobs.** When the transcript has
+    any, Probity gets a private copy without them (after taking the tail
+    of an oversized transcript), deleted when Probity exits. Projects
+    hooked through the bare `probity` bin still see the duplicates.
+  - **A substitution counts only if its own command commits.** A body
+    passed as `--body "$(cat <<'EOF' … EOF)"` that mentions `git commit`
+    is data again, and so are backticks inside single quotes, which the
+    shell never runs. `"$(git commit …)"`, backticks inside double
+    quotes, and a substitution in an unquoted heredoc still count.
+  - **A red-run deny names the run it judged**, shortened to 200
+    characters: ``Judged run: `./gradlew check …` ``.
+- **Ruled out.** The failure pattern never read command text, so a
+  `grep -E "BUILD|FAILED"` filter in the command does not make a run red.
+
 ## 0.4.45
 
 A red test denied as retrofitting now names the restart-the-cycle path

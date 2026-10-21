@@ -59,7 +59,7 @@ const SCRIPT_WRITE_APIS = [
 ]
 
 type Heredoc = { body: string; expands: boolean }
-type Token = { kind: 'word'; text: string; heredoc?: Heredoc } | { kind: 'op'; text: string }
+type Token = { kind: 'word'; text: string; heredoc?: Heredoc; substitutions: string[] } | { kind: 'op'; text: string }
 
 export type SimpleCommand = {
   words: string[]
@@ -68,18 +68,53 @@ export type SimpleCommand = {
   /** Heredoc bodies the shell expands (unquoted delimiter): `$(…)` and
    *  backticks in them run (issue #121). */
   expandingStdin: string[]
+  /** The commands inside the `$(…)` and backticks the shell runs in this
+   *  command's words: not single-quoted ones (issue #138). */
+  substitutions: string[]
   inputFiles: string[]
   /** The pipeline stage writing to this command's stdin, if any. */
   pipedFrom?: SimpleCommand
 }
 
+/** The end of the `$(…)` opening at `start`: the index after its `)`. */
+function substitutionEnd(text: string, start: number): number {
+  let depth = 0
+  let i = start
+  for (; i < text.length; i++) {
+    if (text[i] === '(') depth++
+    else if (text[i] === ')' && --depth === 0) break
+  }
+  return i + 1
+}
+
+/** The commands inside the `$(…)` and backticks of text the shell
+ *  expands as a whole, like an unquoted heredoc body. */
+export function substitutionsIn(text: string): string[] {
+  const found: string[] = []
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === '$' && text[i + 1] === '(') {
+      const end = substitutionEnd(text, i)
+      found.push(text.slice(i + 2, end - 1))
+      i = end
+    } else if (text[i] === '`') {
+      const close = text.indexOf('`', i + 1)
+      const stop = close === -1 ? text.length : close
+      found.push(text.slice(i + 1, stop))
+      i = stop + 1
+    } else i++
+  }
+  return found
+}
+
 /** Splits a shell command into words and operators, reading heredoc
  *  bodies into the word token of their delimiter. Quoting is removed;
- *  `$(…)` and backticks stay inside their word as written. */
+ *  `$(…)` and backticks stay inside their word as written, and the ones
+ *  outside single quotes are also listed as the word's substitutions. */
 function tokenize(command: string): Token[] {
   const tokens: Token[] = []
   const pending: { delimiter: string; strip: boolean; target: Heredoc }[] = []
   let word = ''
+  let substitutions: string[] = []
   let inWord = false
   let quoted = false
   let expectDelimiter: string | undefined
@@ -91,12 +126,13 @@ function tokenize(command: string): Token[] {
       // A quoted delimiter (<<'EOF', <<"EOF", <<\EOF) turns expansion off.
       const target = { body: '', expands: !quoted }
       pending.push({ delimiter: word, strip: expectDelimiter === '<<-', target })
-      tokens.push({ kind: 'word', text: word, heredoc: target })
+      tokens.push({ kind: 'word', text: word, heredoc: target, substitutions })
       expectDelimiter = undefined
     } else {
-      tokens.push({ kind: 'word', text: word })
+      tokens.push({ kind: 'word', text: word, substitutions })
     }
     word = ''
+    substitutions = []
     inWord = false
     quoted = false
   }
@@ -157,6 +193,22 @@ function tokenize(command: string): Token[] {
     if (c === '"') {
       i++
       while (i < command.length && command[i] !== '"') {
+        if (command[i] === '$' && command[i + 1] === '(') {
+          // A substitution may hold quotes of its own: `"$(cat <<'EOF' …)"`.
+          const end = substitutionEnd(command, i)
+          substitutions.push(command.slice(i + 2, end - 1))
+          word += command.slice(i, end)
+          i = end
+          continue
+        }
+        if (command[i] === '`') {
+          const close = command.indexOf('`', i + 1)
+          const stop = close === -1 ? command.length : close
+          substitutions.push(command.slice(i + 1, stop))
+          word += command.slice(i, stop + 1)
+          i = stop + 1
+          continue
+        }
         if (command[i] === '\\' && /["\\$`]/.test(command[i + 1] ?? '')) i++
         word += command[i]
         i++
@@ -167,19 +219,17 @@ function tokenize(command: string): Token[] {
       continue
     }
     if (c === '$' && command[i + 1] === '(') {
-      let depth = 0
-      const start = i
-      for (; i < command.length; i++) {
-        if (command[i] === '(') depth++
-        else if (command[i] === ')' && --depth === 0) break
-      }
-      word += command.slice(start, ++i)
+      const end = substitutionEnd(command, i)
+      substitutions.push(command.slice(i + 2, end - 1))
+      word += command.slice(i, end)
+      i = end
       inWord = true
       continue
     }
     if (c === '`') {
       const end = command.indexOf('`', i + 1)
       const stop = end === -1 ? command.length : end
+      substitutions.push(command.slice(i + 1, stop))
       word += command.slice(i, stop + 1)
       inWord = true
       i = stop + 1
@@ -208,7 +258,7 @@ function tokenize(command: string): Token[] {
 
 function parse(tokens: Token[]): SimpleCommand[] {
   const commands: SimpleCommand[] = []
-  const empty = (): SimpleCommand => ({ words: [], redirects: [], stdin: [], expandingStdin: [], inputFiles: [] })
+  const empty = (): SimpleCommand => ({ words: [], redirects: [], stdin: [], expandingStdin: [], substitutions: [], inputFiles: [] })
   let current = empty()
   const flush = (pipe: boolean) => {
     const done = current.words.length || current.redirects.length || current.stdin.length ? current : undefined
@@ -220,6 +270,7 @@ function parse(tokens: Token[]): SimpleCommand[] {
     const token = tokens[t]!
     if (token.kind === 'word') {
       current.words.push(token.text)
+      current.substitutions.push(...token.substitutions)
       continue
     }
     if (SEPARATORS.has(token.text)) {

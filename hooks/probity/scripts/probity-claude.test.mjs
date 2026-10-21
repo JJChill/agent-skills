@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { PROBITY_MAX_TRANSCRIPT_BYTES, activeConfig, afterState, debugArgs, isInstallCommand, preparePayload, probityDirectory, subagentTranscript, targetsConfig, transcriptTail } from './probity-claude.mjs'
+import { PROBITY_MAX_TRANSCRIPT_BYTES, activeConfig, afterState, debugArgs, isInstallCommand, preparePayload, probityDirectory, subagentTranscript, targetsConfig, transcriptTail, withoutRequestBlobs } from './probity-claude.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const WRAPPER = join(HERE, 'probity-claude.mjs')
@@ -163,6 +163,67 @@ test('end to end: an over-limit transcript still yields the recent history, not 
   const reason = runWrapper(project, { transcript_path: parent })
   assert.doesNotMatch(reason, /rule error|exceeds/)
   assert.match(reason, /gradlew build => BUILD SUCCESSFUL/)
+})
+
+// Issue #138: Claude Code now also writes `api-request-blob` entries,
+// each re-recording an assistant message after its tool_result. Probity
+// emits every tool_use it reads, so each call came back a second time
+// with an empty output, and the commit gate judged that empty duplicate
+// as the last test run. The wrapper hands Probity a copy without them.
+
+/** A Bash call followed by the api-request-blob that re-records its tool_use. */
+function bashCallWithBlob(id, command, output) {
+  const blob = {
+    type: 'api-request-blob',
+    sessionId: 'session-1',
+    hash: 'abc123',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cd /repo && ${command}` }, caller: { type: 'direct' } }] },
+  }
+  return bashCall(id, command, output) + '\n' + JSON.stringify(blob)
+}
+
+test('withoutRequestBlobs leaves a transcript with no request blobs alone', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  writeFileSync(path, bashCall('toolu_1', 'echo hi', 'hi') + '\n')
+  assert.equal(withoutRequestBlobs(path), null)
+})
+
+test('withoutRequestBlobs copies the transcript to a private file without its request blobs', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  // A tool input that merely contains the marker is a real call and stays.
+  const quoting = bashCall('toolu_2', `echo '{"type":"api-request-blob"}'`, 'quoted')
+  writeFileSync(path, bashCallWithBlob('toolu_1', './gradlew check', 'BUILD SUCCESSFUL in 1s') + '\n' + quoting + '\n')
+  const copy = withoutRequestBlobs(path)
+  t.after(() => copy && rmSync(dirname(copy), { recursive: true, force: true }))
+  assert.ok(copy, 'expected a filtered copy')
+  assert.ok(copy.endsWith('.jsonl'))
+  const kept = readFileSync(copy, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.deepEqual(kept.map((entry) => entry.type), ['assistant', 'user', 'assistant', 'user'])
+  assert.equal(statSync(copy).mode & 0o777, 0o600)
+})
+
+test('preparePayload drops request blobs from an oversized transcript\'s tail too, and cleanup removes every copy', (t) => {
+  const dir = tempDir(t)
+  const path = join(dir, 's.jsonl')
+  writeFileSync(path, bashCall('toolu_old', 'echo old', 'old') + '\n' + bashCallWithBlob('toolu_new', 'echo new', 'new') + '\n')
+  const { input, cleanup } = preparePayload(JSON.stringify({ transcript_path: path }), { maxBytes: 100, tailBytes: 1000 })
+  const chosen = JSON.parse(input).transcript_path
+  assert.notEqual(chosen, path)
+  const kept = readFileSync(chosen, 'utf8')
+  assert.match(kept, /echo new/)
+  assert.doesNotMatch(kept, /api-request-blob/)
+  cleanup()
+  assert.equal(existsSync(chosen), false)
+})
+
+test('end to end: a green run re-recorded by a request blob is seen once, with its output', (t) => {
+  const { dir, parent } = session(t)
+  const project = historyProject(dir)
+  writeFileSync(parent, bashCallWithBlob('toolu_check', './gradlew check', 'BUILD SUCCESSFUL in 1s') + '\n')
+  const reason = runWrapper(project, { transcript_path: parent })
+  assert.match(reason, /seen: \.\/gradlew check => BUILD SUCCESSFUL in 1s$/)
 })
 
 // Issue #66: the hook runs `cd "$CLAUDE_PROJECT_DIR" && probity-claude`.

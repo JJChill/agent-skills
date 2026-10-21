@@ -351,11 +351,20 @@ export function requireGreenTestRun(options: {
         reason:
           'The last recorded test run after your changes was not ' +
           'green — a recorded invocation is not a passing suite. Fix ' +
-          `the failures (or the build) and rerun before committing.${extra}`,
+          `the failures (or the build) and rerun before committing.${extra}` +
+          // Name the run, so a surprising deny shows which one was judged (issue #138).
+          ` Judged run: \`${shortened(lastRun.kind === 'command' ? lastRun.command : '')}\``,
       }
     }
     return { kind: 'pass' }
   }
+}
+
+const JUDGED_COMMAND_EXCERPT = 200
+
+function shortened(command: string): string {
+  const line = command.trim().replace(/\s+/g, ' ')
+  return line.length > JUDGED_COMMAND_EXCERPT ? `${line.slice(0, JUDGED_COMMAND_EXCERPT)}…` : line
 }
 
 // Probity doesn't export its canonical event type; derive it from the context.

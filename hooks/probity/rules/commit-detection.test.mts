@@ -28,6 +28,9 @@ const commits: [string, string][] = [
   ['backticks in double quotes', 'gh issue comment 1 --body "`git commit -m x`"'],
   ['substitution in an expanding heredoc', 'cat > f.md <<EOF\n$(git commit -m x)\nEOF'],
   ['second command of a list', 'echo done; git commit -m x'],
+  ['substitution in an issue body', 'gh issue create --title t --body "$(git commit -m x)"'],
+  ['substitution inside a substitution', 'gh issue create --title t --body "$(echo "$(git commit -m x)")"'],
+  ['expanding heredoc inside a substitution', 'gh issue create --title t --body "$(cat <<EOF\n$(git commit -m x)\nEOF\n)"'],
   ['unparseable', 'git commit -m "unterminated'],
 ]
 
@@ -41,6 +44,9 @@ const notCommits: [string, string][] = [
   ['unquoted heredoc without substitution', 'cat > f.md <<EOF\nthen git commit\nEOF'],
   ['heredoc piped into a data command', "cat <<'EOF' | tee f.md\ngit commit -m x\nEOF"],
   ['no git at all', 'npm test'],
+  // Issue #138: the usual way an agent files an issue body.
+  ['quoted heredoc in an issue body', "gh issue create --title t --body \"$(cat <<'EOF'\nThe gate denied `git commit` after a green run.\nEOF\n)\""],
+  ['backticks in single quotes', "gh issue create --title t --body 'The gate denied `git commit` here.'"],
 ]
 
 for (const [name, command] of commits) {

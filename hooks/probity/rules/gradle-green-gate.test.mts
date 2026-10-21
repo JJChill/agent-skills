@@ -279,3 +279,16 @@ test('caller-supplied patterns plus a quiet passing Gradle run still stay red wi
   )
   assert.equal(result.kind, 'violation')
 })
+
+// Issue #138: a deny said only "not green", so the author could not see
+// which recorded invocation the gate had judged as the last run.
+test('a red verdict names the run it judged, shortened', async () => {
+  const verdict = await verdictFor('./gradlew check --console=plain', 'Execution failed for task :app:test')
+  assert.equal(verdict.kind, 'violation')
+  assert.match(verdict.reason, /Judged run: `\.\/gradlew check --console=plain`/)
+
+  const long = `./gradlew check ${'-Pflag=value '.repeat(40)}`
+  const shortened = await verdictFor(long, '')
+  assert.match(shortened.reason, /Judged run: `\.\/gradlew check -Pflag=value [^`]{0,180}…`/)
+  assert.ok(!shortened.reason.includes(long.trim()))
+})
