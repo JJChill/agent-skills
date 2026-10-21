@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.48
+
+`shadowJudge` measures a candidate judge, such as a cheaper model, on a
+project's real traffic, and `probity-shadow-report` scores it.
+
+- **What was missing.** To decide whether a cheaper judge is good
+  enough, you need its verdicts on the prompts your rules actually send.
+  Probity's `--debug` trace records verdicts but not prompts, so they
+  could not be replayed on another model.
+- **Now:**
+  - **`shadowJudge(primary, candidates, { log })`** asks the primary and
+    every candidate the same prompt in parallel, returns the primary's
+    verdict, and appends the prompt and all verdicts (with per-model
+    token use) to a JSONL log. A candidate that fails, hangs past
+    `candidateTimeoutMs` (default 60 s) or can't be logged never changes
+    or blocks the verdict. `includePrompt: false` keeps only a hash.
+  - **`probity-shadow-report <log> [--show leaks|friction|all]`** prints
+    agreement per candidate, splitting disagreements into leaks (it
+    passed what the primary denied) and friction (it denied what the
+    primary passed), with latency and tokens per model.
+- **Cost while measuring.** Each candidate adds its own spend, and a
+  write waits for the slowest candidate up to the timeout.
+
 ## 0.4.47
 
 `claudeJudge({ model })` picks the Claude model the judge runs on.

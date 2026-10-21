@@ -1,6 +1,6 @@
 {
   "name": "@jjchill/probity-rules",
-  "version": "0.4.47",
+  "version": "0.4.48",
   "description": "Versioned Probity rule presets and CLI tooling for the agent-skills catalog (test-driven-development, ports-and-adapters, acceptance-testing, spec-test parity, ubiquitous-language) — see hooks/PROBITY.md.",
   "license": "MIT",
   "repository": {
@@ -17,6 +17,7 @@
   },
   "bin": {
     "probity-scope-report": "dist/scripts/scope-report.js",
+    "probity-shadow-report": "dist/scripts/shadow-report.js",
     "probity-spec-parity": "scripts/spec-parity.mjs",
     "probity-claude": "scripts/probity-claude.mjs"
   },
