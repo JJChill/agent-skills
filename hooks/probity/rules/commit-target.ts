@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, relative, resolve, sep } from 'node:path'
 
-import { COMMAND_PREFIXES, parseShell, type SimpleCommand } from './shell-writes.js'
+import { COMMAND_PREFIXES, parseShell, substitutionsIn, type SimpleCommand } from './shell-writes.js'
 
 /**
  * Which git working tree a `git commit` command records into, so commit
@@ -31,8 +31,6 @@ const DATA_COMMANDS = new Set([
 ])
 // git's global options that take a separate value (`git -C <dir> commit`).
 const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--super-prefix'])
-const SUBSTITUTION = /\$\(|`/
-
 function gitSubcommand(args: string[]): string | undefined {
   for (let k = 0; k < args.length; k++) {
     const arg = args[k]!
@@ -43,9 +41,10 @@ function gitSubcommand(args: string[]): string | undefined {
 }
 
 function runsGitCommit(command: SimpleCommand): boolean {
-  // `$(…)` and backticks run wherever the shell expands them.
-  const expanded = [...command.words, ...command.expandingStdin]
-  if (expanded.some((text) => SUBSTITUTION.test(text) && GIT_COMMIT.test(text))) return true
+  // `$(…)` and backticks run wherever the shell expands them, so judge
+  // the command inside: `$(cat <<'EOF' … EOF)` only prints its text.
+  const inner = [...command.substitutions, ...command.expandingStdin.flatMap(substitutionsIn)]
+  if (inner.some(isGitCommit)) return true
   let k = 0
   while (k < command.words.length && (/^[A-Za-z_]\w*=/.test(command.words[k]!) || COMMAND_PREFIXES.has(command.words[k]!))) k++
   const name = basename(command.words[k] ?? '')

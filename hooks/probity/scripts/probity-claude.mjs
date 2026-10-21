@@ -24,6 +24,12 @@
  * deletes the copy when Probity exits. The gates only need recent
  * events: the last test run, the red before a green.
  *
+ * It also drops Claude Code's `api-request-blob` entries (issue #138).
+ * Each re-records a tool_use after its result, so Probity saw every call
+ * twice, the second time with no output, and the commit gate judged that
+ * empty copy as the last test run. When the transcript has any, Probity
+ * gets a private copy without them.
+ *
  * And it runs Probity in the right tree (issue #66). The hook `cd`s to
  * $CLAUDE_PROJECT_DIR, which still names the main checkout after a
  * session moves into a worktree (EnterWorktree, or an `isolation:
@@ -141,11 +147,48 @@ export function transcriptTail(
   return tail
 }
 
+// Claude Code re-records each assistant message in an entry of this type,
+// written after the call's tool_result (issue #138).
+const REQUEST_BLOB = '"type":"api-request-blob"'
+
+/**
+ * A private copy of `path` without its `api-request-blob` entries, or
+ * null when it has none. Each blob repeats a tool_use (same id, the input
+ * as sent), and Probity emits every tool_use it reads, so each call
+ * appeared twice in history: the real one, then a copy with empty output
+ * that the commit gate took for the last test run.
+ */
+export function withoutRequestBlobs(path) {
+  let content
+  try {
+    if (!lstatSync(path).isFile()) return null
+    content = readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+  if (!content.includes(REQUEST_BLOB)) return null
+  const isBlob = (line) => {
+    if (!line.includes(REQUEST_BLOB)) return false
+    try {
+      return JSON.parse(line)?.type === 'api-request-blob'
+    } catch {
+      return false
+    }
+  }
+  const lines = content.split('\n')
+  const kept = lines.filter((line) => !isBlob(line))
+  if (kept.length === lines.length) return null
+  const dir = mkdtempSync(join(tmpdir(), 'probity-claude-'))
+  const copy = join(dir, basename(path))
+  writeFileSync(copy, kept.join('\n'), { mode: 0o600 })
+  return copy
+}
+
 /**
  * The stdin to hand Probity — the payload with its transcript repointed
- * at a sub-agent's transcript and/or at the tail of an oversized one —
- * plus a cleanup that deletes any temp copy. Unparseable input passes
- * through unchanged.
+ * at a sub-agent's transcript and/or at the tail of an oversized one,
+ * without request blobs — plus a cleanup that deletes any temp copy.
+ * Unparseable input passes through unchanged.
  */
 export function preparePayload(raw, limits = {}) {
   const unchanged = { input: raw, cleanup: () => {} }
@@ -159,12 +202,15 @@ export function preparePayload(raw, limits = {}) {
   const transcript = subagentTranscript(payload) ?? original
   if (typeof transcript !== 'string') return unchanged
   const tail = transcriptTail(transcript, limits)
-  const chosen = tail ?? transcript
+  const filtered = withoutRequestBlobs(tail ?? transcript)
+  const chosen = filtered ?? tail ?? transcript
   if (chosen === original) return unchanged
   return {
     input: JSON.stringify({ ...payload, transcript_path: chosen }),
     cleanup: () => {
-      if (tail) rmSync(dirname(tail), { recursive: true, force: true })
+      for (const copy of [tail, filtered]) {
+        if (copy) rmSync(dirname(copy), { recursive: true, force: true })
+      }
     },
   }
 }
