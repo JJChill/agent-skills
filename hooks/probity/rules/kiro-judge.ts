@@ -324,21 +324,38 @@ function balancedEnd(text: string, start: number): number | undefined {
   return undefined
 }
 
+/** The Claude Agent SDK's `query`, as Probity's Claude judge calls it. */
+export type ClaudeQuery = (args: { prompt: string; options?: Record<string, unknown> }) => AsyncIterable<unknown>
+
+export type ClaudeJudgeOptions = {
+  /**
+   * Claude model id the judge runs on, e.g. `claude-haiku-5-5`. Default:
+   * none, so the Agent SDK picks, as with Probity's own judge.
+   */
+  model?: string
+  /** Replaces the Agent SDK's `query` (tests). */
+  query?: ClaudeQuery
+}
+
 /**
  * Probity's default judge (the Claude Agent SDK on the user's Claude
- * login), for use inside {@link judgeChain}. Probity does not export
- * it, so it is loaded from the installed `@nizos/probity` on first
- * use. If that fails (a Probity release that moved it), the verdict
- * says "Claude judge unavailable", so a chain moves on.
+ * login), for use inside {@link judgeChain} or as `ai` on its own. Probity
+ * does not export it, so it is loaded from the installed `@nizos/probity`
+ * on first use. If that fails (a Probity release that moved it), the
+ * verdict says "Claude judge unavailable", so a chain moves on.
+ *
+ * With `model`, each verdict runs on that model, and Probity's own judge
+ * settings (one turn, no tools, no thinking) are kept. The judge is then
+ * named `claude:<model>`, so `judgeChain` skips it apart from the default.
  */
-export function claudeJudge(): NamedJudge {
+export function claudeJudge(options: ClaudeJudgeOptions = {}): NamedJudge {
   let loading: Promise<Agent> | undefined
   return {
-    name: 'claude',
+    name: options.model ? `claude:${options.model}` : 'claude',
     reason: async (prompt) => {
       let agent: Agent
       try {
-        loading ??= loadClaudeCodeAgent()
+        loading ??= loadClaudeCodeAgent(options)
         agent = await loading
       } catch (error) {
         return {
@@ -351,14 +368,21 @@ export function claudeJudge(): NamedJudge {
   }
 }
 
-async function loadClaudeCodeAgent(): Promise<Agent> {
+async function loadClaudeCodeAgent({ model, query }: ClaudeJudgeOptions): Promise<Agent> {
   const index = createRequire(import.meta.url).resolve('@nizos/probity')
   const url = new URL('./vendors/claude-code/agent.js', pathToFileURL(index))
-  const module = (await import(url.href)) as { claudeCode?: () => Agent }
+  const module = (await import(url.href)) as { claudeCode?: (deps?: { queryFn?: ClaudeQuery }) => Agent }
   if (typeof module.claudeCode !== 'function') {
     throw new Error(`${url.pathname} has no claudeCode export`)
   }
-  return module.claudeCode()
+  if (!model && !query) return module.claudeCode()
+  // The SDK Probity itself depends on, resolved from Probity's install.
+  const sdkQuery =
+    query ??
+    ((await import(pathToFileURL(createRequire(index).resolve('@anthropic-ai/claude-agent-sdk')).href)) as { query: ClaudeQuery }).query
+  return module.claudeCode({
+    queryFn: (args) => sdkQuery(model ? { ...args, options: { ...args.options, model } } : args),
+  })
 }
 
 /** A judge with a name `judgeChain` can remember it by across hook runs. */
