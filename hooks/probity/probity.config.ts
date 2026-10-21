@@ -34,12 +34,12 @@
  * test for existing behavior is born green). Wire them when you start
  * backfilling coverage; see hooks/PROBITY.md.
  */
-import { defineConfig } from '@nizos/probity'
-
-import { claudeJudge } from '@jjchill/probity-rules'
+import { claudeJudge, probityConfig } from '@jjchill/probity-rules'
 import { jsRuleEntries } from '@jjchill/probity-rules/presets/js'
 
-export default defineConfig({
+// probityConfig is defineConfig plus a judging-task label on every rule,
+// rules you add here included (hooks/PROBITY.md, "Choosing the AI judge").
+export default probityConfig({
   rules: jsRuleEntries({
     // glossaryPath: fileURLToPath(new URL('./docs/GLOSSARY.md', import.meta.url)),
     // domainDiscriminants: ['role'],

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.51
+
+New rules get a judging-task label without anyone remembering to add it.
+
+- **What was missing.** The presets label their own rules (0.4.50), but
+  a rule a project adds next to a preset reached the judge unlabelled,
+  and a new preset in this package could be added without the label and
+  pass CI.
+- **Now:**
+  - **`probityConfig({...})`** is Probity's `defineConfig` with every rule
+    the config lists labelled. The templates use it, and
+    `/probity-update` proposes the switch. Rules that are already
+    labelled are not wrapped twice.
+  - **A test lists `presets/`** and checks that every `*RuleEntries`
+    preset it finds runs each rule under its own task, so a new preset
+    without the label fails CI.
+  - **`probity-shadow-report` flags unlabelled verdicts**: how many, and
+    how to label them.
+- **Still manual.** A rule that asks the judge a second, different
+  question has to label that call with `withJudgeTask`. Nothing detects
+  a missing one.
+
 ## 0.4.50
 
 `probity-shadow-report` breaks each candidate judge down by judging task,

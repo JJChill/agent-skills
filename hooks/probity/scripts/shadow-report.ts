@@ -112,6 +112,14 @@ const out: string[] = []
 const span = entries.length ? `, ${entries[0]!.at} to ${entries.at(-1)!.at}` : ''
 out.push(`Shadow log ${path}: ${entries.length} verdicts${span}`)
 if (unreadable) out.push(`${unreadable} unreadable line${unreadable === 1 ? '' : 's'} skipped`)
+const unlabelled = entries.filter((entry) => !entry.task).length
+if (unlabelled) {
+  out.push(
+    `${unlabelled} of ${entries.length} verdicts (${percent(unlabelled / entries.length)}) have no judging task, ` +
+      'so the by-task table cannot place them. Rules added outside a preset need probityConfig() in place of ' +
+      'defineConfig(), or withJudgeTasks([...]) around them; verdicts logged before 0.4.50 have none.',
+  )
+}
 const rows = summarizeShadowLog(entries)
 for (const row of rows.filter((candidate) => candidate.task === undefined)) {
   const rate = row.compared ? ` (${percent(row.agreed / row.compared)})` : ''
