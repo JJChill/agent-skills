@@ -35,11 +35,17 @@ export function taskOf(ruleName: string): string {
   return ruleName.match(/(\w+)\)*$/)?.[1] ?? '(unnamed)'
 }
 
+// Marks a rule this module already labelled, so a preset's rules wrapped
+// again by `probityConfig` are not nested twice.
+const LABELLED = Symbol('judgeTaskLabelled')
+
 function labelled(rule: Rule): Rule {
+  if ((rule as Rule & { [LABELLED]?: true })[LABELLED]) return rule
   const task = taskOf(rule.name)
   const wrapped: Rule = (action, ctx) => current.run(task, () => rule(action, ctx))
   // Probity names a rule in its trace and deny text by `name`.
   Object.defineProperty(wrapped, 'name', { value: rule.name })
+  Object.defineProperty(wrapped, LABELLED, { value: true })
   return wrapped
 }
 

@@ -32,14 +32,14 @@
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { defineConfig } from '@nizos/probity'
-
-import { claudeJudge } from '@jjchill/probity-rules'
+import { claudeJudge, probityConfig } from '@jjchill/probity-rules'
 import { kotlinRuleEntries } from '@jjchill/probity-rules/presets/kotlin'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({
+// probityConfig is defineConfig plus a judging-task label on every rule,
+// rules you add here included (hooks/PROBITY.md, "Choosing the AI judge").
+export default probityConfig({
   rules: kotlinRuleEntries(ROOT),
   // The installed Claude Code judges, not the copy bundled with Probity's
   // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").

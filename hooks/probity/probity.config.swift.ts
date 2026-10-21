@@ -36,14 +36,14 @@
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { defineConfig } from '@nizos/probity'
-
-import { claudeJudge } from '@jjchill/probity-rules'
+import { claudeJudge, probityConfig } from '@jjchill/probity-rules'
 import { swiftRuleEntries } from '@jjchill/probity-rules/presets/swift'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
-export default defineConfig({
+// probityConfig is defineConfig plus a judging-task label on every rule,
+// rules you add here included (hooks/PROBITY.md, "Choosing the AI judge").
+export default probityConfig({
   rules: swiftRuleEntries(ROOT, {
     // drivingAdapterGlobs: ['App/Sources/**/Views/**', 'App/Sources/**/*View.swift', '!**/*Tests.swift', '!**/Previews/**'],
     // domainDiscriminants: ['role'],

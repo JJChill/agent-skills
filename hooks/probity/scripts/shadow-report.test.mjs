@@ -74,3 +74,15 @@ test('a table breaks each candidate down by judging task', (t) => {
   // A listed disagreement names its task.
   assert.match(res.stdout, /sha-violation-pass  enforceTdd/)
 })
+
+test('unlabelled verdicts are flagged with how to label them', (t) => {
+  const res = report(t, [line('pass', 'pass', {}, 'enforceTdd'), line('pass', 'pass'), line('violation', 'violation')].join('\n') + '\n')
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /2 of 3 verdicts \(66\.7%\) have no judging task/)
+  assert.match(res.stdout, /probityConfig\(\)/)
+})
+
+test('a log where every verdict has a task carries no such warning', (t) => {
+  const res = report(t, line('pass', 'pass', {}, 'enforceTdd') + '\n')
+  assert.doesNotMatch(res.stdout, /no judging task/)
+})
