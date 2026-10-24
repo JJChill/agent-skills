@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.52
+
+The Language Test judges a step the same way in every feature file and
+sees a whole glossary (#146).
+
+- **What was missing.** The judge saw only the file being written and
+  the first 8,000 characters of the glossary:
+  - **One step, two verdicts.** `And nothing was asked of the service`
+    passed in a feature file that already used it, then was rejected
+    minutes later in another file as protocol mechanics.
+  - **A glossary verb rejected.** In mysudo-core-sdk the glossary is
+    21,000 characters long. The entry that uses "provision" lies past
+    the cut, so "provisioned" in a scenario title was rejected as
+    back-end vocabulary.
+- **Now:**
+  - **Settled wording.** With `specsDir`, the prompt lists each step the
+    write adds that another specification already uses word for word,
+    with where it is used. The judge doesn't block on those. If such a
+    step leaks mechanics, it says so in the reason and still passes,
+    since the fix belongs across all the specifications at once. Every
+    preset passes its specs directory.
+  - **The glossary limit** is raised from 8,000 to 32,000 characters.
+    A glossary over the limit is cut with a note that a missing term
+    is no reason to block.
+  - **Word forms.** A word the glossary or the specifications already
+    use for a domain action counts as domain language in any grammatical
+    form ("provisioned" and "Provisioning").
+- **Cost.** The prompt grows with the glossary, to about 41,500
+  characters on mysudo-core-sdk. Scanning the specs adds about 50 ms
+  per judged write.
+- **Decision to check.** A settled step is passed even if the judge
+  thinks it leaks, so one leak accepted in the past can spread. The
+  alternative, a judge that can reject wording the specs already use,
+  is the inconsistency this release removes. The judge still names the
+  leak in its reason, so it can be fixed across the specifications.
+
 ## 0.4.51
 
 New rules get a judging-task label without anyone remembering to add it.

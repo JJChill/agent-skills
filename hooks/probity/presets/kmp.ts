@@ -496,7 +496,7 @@ export function kmpRuleEntries(root: string, options: KmpPresetOptions = {}): Ru
       // the validator).
       rules: [
         withAcceptanceLanguageFastPath(
-          enforceAcceptanceLanguage({ glossaryPath: glossary }),
+          enforceAcceptanceLanguage({ glossaryPath: glossary, specsDir }),
         ),
       ],
     },

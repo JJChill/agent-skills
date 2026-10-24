@@ -357,7 +357,7 @@ export function kotlinRuleEntries(root: string, options: KotlinPresetOptions = {
       files: acceptanceLanguageGlobs,
       rules: [
         withAcceptanceLanguageFastPath(
-          enforceAcceptanceLanguage({ glossaryPath: glossary }),
+          enforceAcceptanceLanguage({ glossaryPath: glossary, specsDir: join(root, 'docs/specs') }),
         ),
       ],
     },

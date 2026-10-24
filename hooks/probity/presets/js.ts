@@ -370,7 +370,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   //   })
   entries.push({
     files: specGlobs,
-    rules: [enforceAcceptanceLanguage({ glossaryPath: options.glossaryPath })],
+    rules: [enforceAcceptanceLanguage({ glossaryPath: options.glossaryPath, specsDir: options.specsDir })],
   })
 
   // Test isolation on the acceptance DSL (issue #119): opt-in, for
