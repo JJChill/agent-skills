@@ -421,7 +421,7 @@ function swiftEntries(root: string, options: SwiftPresetOptions): RuleEntry[] {
         'AcceptanceTests/Scenarios/**',
         'AcceptanceTests/DSL/**',
       ],
-      rules: [enforceAcceptanceLanguage({ glossaryPath: glossary })],
+      rules: [enforceAcceptanceLanguage({ glossaryPath: glossary, specsDir: join(root, 'docs/specs') })],
     },
 
     // Scenario fidelity (issue #120): a changed Covers-tagged test
