@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.54
+
+Scenario fidelity lets a scenario and its test gain a step together
+(#155).
+
+- **What was missing.** In mysudo-core-sdk a new business rule gave
+  seven claimed scenarios an extra precondition, and their tests the
+  matching DSL call. Each write was judged against the other side's old
+  text: the test write was refused because the scenario didn't state the
+  step, the spec write because the test didn't establish it. Marking the
+  scenario `@wip` didn't help, so the only route was to remove each
+  test's `Covers:` claim and add it back.
+- **Now:** a scenario marked wip (`@wip`, `@planned`, `(wip)`) is not
+  held to its claims on a spec write. The step lands in three writes:
+  1. mark the scenario wip and add the step;
+  2. update the claiming test, which is judged against the new text;
+  3. remove the marker, which judges every claim on the scenario again.
+     A Gherkin `@wip` tag line sits outside the scenario's text, so its
+     removal now counts as a change too.
+- **Limit:** a scenario left wip is not judged against its claims until
+  the marker comes off.
+
 ## 0.4.53
 
 The commit-on-green gate judges the worktree being committed, not the
