@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.53
+
+The commit-on-green gate judges the worktree being committed, not the
+last test run anywhere in the session (#152).
+
+- **What was missing.** In mysudo-core-sdk one session had two sibling
+  worktrees open. A docs commit in `-234`, whose build was green, was
+  blocked by a deliberate red TDD run in `-382`:
+  `requireGreenTestRun` took the last matching run in the transcript,
+  wherever it ran.
+- **Now:** when the repository has more than one worktree, the gate
+  leaves out:
+  - **runs placed in another worktree**: a command that starts with
+    `cd <absolute path> &&` (or `;`) into a different worktree;
+  - **writes to another worktree**, which no longer demand a rerun
+    in this one.
+- **Still counted everywhere:** a run with no leading `cd`, or a
+  relative one. The transcript doesn't record where a command ran, so
+  the gate can't tell, and stays fail closed. A nested worktree
+  (`.claude/worktrees/<name>`) is told apart from the main checkout
+  that contains it.
+
 ## 0.4.52
 
 The Language Test judges a step the same way in every feature file and
