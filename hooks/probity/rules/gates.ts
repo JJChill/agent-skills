@@ -4,7 +4,16 @@ import { join } from 'node:path'
 
 import type { Action, Rule, RuleContext, RuleResult } from '@nizos/probity'
 
-import { isGitCommit, gitToplevel, nestedCommitTree } from './commit-target.js'
+import {
+  canonical,
+  commitDirectory,
+  gitToplevel,
+  isGitCommit,
+  leadingCdDirectory,
+  nestedCommitTree,
+  owningTree,
+  worktreeRoots,
+} from './commit-target.js'
 import { withJudgeTask } from './judge-task.js'
 
 /**
@@ -325,14 +334,28 @@ export function requireGreenTestRun(options: {
     } catch (error) {
       return transcriptLimitViolation(error)
     }
+    // With several worktrees of one repo in a session, a write or a run
+    // that is placed in a different worktree says nothing about this
+    // commit (issue #152). A run places itself only by a leading absolute
+    // `cd`; anything not placed still counts, so the gate fails closed.
+    const commitTree = canonical(
+      gitToplevel(commitDirectory(action.command)) ?? gitToplevel(process.cwd()) ?? process.cwd(),
+    )
+    const roots = worktreeRoots(commitTree)
+    const elsewhere = (path: string | null): boolean => {
+      if (path === null || roots.length < 2) return false
+      const owner = owningTree(path, roots)
+      return owner !== null && owner !== commitTree
+    }
     const lastWrite = history.reduce(
-      (last, event, index) => (event.kind === 'write' ? index : last),
+      (last, event, index) => (event.kind === 'write' && !elsewhere(event.path) ? index : last),
       -1,
     )
     const runs = history.filter(
       (event, index) =>
         index > lastWrite &&
         event.kind === 'command' &&
+        !elsewhere(leadingCdDirectory(event.command)) &&
         options.command.test(event.command) &&
         (!options.commandPredicate || options.commandPredicate(event.command)),
     )
