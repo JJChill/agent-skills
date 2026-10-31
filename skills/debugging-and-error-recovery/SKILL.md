@@ -79,7 +79,8 @@ Can you reproduce the failure?
 └── NO
     ├── Gather more context (logs, environment details)
     ├── Work from the facts (Step 0): one hypothesis that fits every fact
-    │   can be found and fixed without a repro
+    │   can be found and fixed; guard it with a signal (Step 5)
+    │   when no test can reproduce it
     ├── Try reproducing in a minimal environment
     └── If truly non-reproducible, document conditions and monitor
 ```
@@ -318,6 +319,7 @@ Add logging only when it helps. Remove it when done.
 - Error boundaries with error reporting
 - API error logging with request context
 - Performance metrics at key user flows
+- The decisive signal from a diagnosis (Step 5)
 
 ## Common Rationalizations
 
