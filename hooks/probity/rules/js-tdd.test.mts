@@ -167,3 +167,69 @@ test('an import in a new file goes to the judge', async () => {
   await presetTddRule()({ kind: 'write', path: '/repo/src/core/new.ts', content: "import { a } from './a'\n" }, ctx)
   assert.equal(calls, 1)
 })
+
+// ── Review of #169–#171: writes that must still reach the judge ─────
+// Each changes behavior or weakens the suite, so skipping the judge
+// would let a TDD violation through.
+
+const withOne = (suite: string, extra = '') =>
+  suite.replace('\n})\n', `\n  it('spills into a second parcel', () => { expect(3).toBe(3) })\n${extra}})\n`)
+
+for (const [label, path, before, after] of [
+  ['one new test plus a weakened assertion', testPath, SUITE, withOne(SUITE).replace('toBe(2)', 'toBeDefined()')],
+  ['one new test plus .only on an existing test', testPath, SUITE, withOne(SUITE).replace("it('matches a whole", "it.only('matches a whole")],
+  ['one new test plus .skip on an existing test', testPath, SUITE, withOne(SUITE).replace("it('matches part", "it.skip('matches part")],
+  ['two tests added and one deleted', testPath, SUITE, SUITE.replace("  it('matches part of a parcel', () => { expect(2).toBe(2) })\n", "  it('c', () => {})\n  it('d', () => {})\n")],
+  ['one new test plus production code in the test file', testPath, SUITE, withOne(SUITE) + 'export function compute() { return 1 }\n'],
+  ['one new test and a helper in one insertion', testPath, SUITE, withOne(SUITE, '  const helper = () => 1\n')],
+  ['a skipped new test', testPath, SUITE, SUITE.replace('\n})\n', "\n  it.skip('c', () => {})\n})\n")],
+  ['a new xit', testPath, SUITE, SUITE.replace('\n})\n', "\n  xit('c', () => {})\n})\n")],
+  ['a new test that skips itself at runtime', testPath, SUITE, SUITE.replace('\n})\n', "\n  it('c', (ctx) => { ctx.skip() })\n})\n")],
+  ['a new describe holding one test', testPath, SUITE, SUITE + "describe('more', () => {\n  it('c', () => {})\n})\n"],
+  ['one new test plus an import', testPath, SUITE, `import { x } from './x'\n${withOne(SUITE)}`],
+  ['an in-source test in a production file', enginePath, ENGINE, ENGINE + "if (import.meta.vitest) { const { it } = import.meta.vitest; it('x', () => {}) }\n"],
+] as const) {
+  test(`${label} goes to the judge`, async () => {
+    const { ctx, calls } = judgeCountingCtx(before)
+    await presetTddRule()({ kind: 'write', path, content: after }, ctx)
+    assert.ok(calls() >= 1, 'judge was asked')
+  })
+}
+
+test('one new test between two existing ones skips the judge', async () => {
+  const { ctx, calls } = judgeCountingCtx(SUITE)
+  const after = SUITE.replace("  it('matches part", "  it('spills', () => { expect(3).toBe(3) })\n  it('matches part")
+  assert.equal((await presetTddRule()({ kind: 'write', path: testPath, content: after }, ctx)).kind, 'pass')
+  assert.equal(calls(), 0)
+})
+
+test('a multi-line new test with nested calls skips the judge', async () => {
+  const { ctx, calls } = judgeCountingCtx(SUITE)
+  const after = SUITE.replace('\n})\n', "\n  it('spills (into) a second parcel', () => {\n    const r = match([1, 2], { take: 3 })\n    expect(r).toEqual([1, 2])\n  })\n})\n")
+  assert.equal((await presetTddRule()({ kind: 'write', path: testPath, content: after }, ctx)).kind, 'pass')
+  assert.equal(calls(), 0)
+})
+
+for (const [label, after] of [
+  ['a changed import source', ENGINE.replace("'./parcels'", "'./other-parcels'")],
+  ['an aliased import', ENGINE.replace('{ parcels }', '{ fakeParcels as parcels }')],
+  ['a named import made default', ENGINE.replace('{ parcels }', 'parcels')],
+  ['a removed import', ENGINE.replace("import { parcels } from './parcels'\n", '')],
+  ['an added import the code already names', `import { parcels as other, match } from './m'\n${ENGINE}`],
+  ['an import-shaped line in a template literal', ENGINE.replace('  return parcels()', "  return parcels(`\nimport { a } from 'b'\n`)").replace('`\nimport', '`\nimport')],
+  ['an import that joins two statements', ENGINE.replace('export function match() {\n  return parcels()', "export function match() {\n  const f = parcels\nimport { q } from './q'\n  (1)\n  return f()")],
+] as const) {
+  test(`${label} goes to the judge`, async () => {
+    const { ctx, calls } = judgeCountingCtx(ENGINE)
+    await presetTddRule()({ kind: 'write', path: enginePath, content: after }, ctx)
+    assert.ok(calls() >= 1, 'judge was asked')
+  })
+}
+
+test('an added import in a CRLF file skips the judge', async () => {
+  const crlf = ENGINE.replace(/\n/g, '\r\n')
+  const { ctx, calls } = judgeCountingCtx(crlf)
+  const after = crlf.replace("from './parcels'\r\n", "from './parcels'\r\nimport { Special } from './special'\r\n")
+  assert.equal((await presetTddRule()({ kind: 'write', path: enginePath, content: after }, ctx)).kind, 'pass')
+  assert.equal(calls(), 0)
+})

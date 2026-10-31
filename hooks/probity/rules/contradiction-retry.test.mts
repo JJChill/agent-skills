@@ -100,6 +100,9 @@ for (const reason of [
   'This does not pass.',
   'Adding one test would be allowed as the red step, but this write adds two, so it is not allowed as the red step.',
   'Correction: the write adds two new tests, which is a violation.',
+  'Correction: it adds production logic, which is allowed only after an observed failing test.',
+  'Neither is a valid red step.',
+  'Only a deletion is a valid refactor step.',
 ]) {
   test(`a consistent deny is not retried: ${reason.slice(0, 40)}`, async () => {
     const { rule, calls } = sequence({ kind: 'violation', reason })

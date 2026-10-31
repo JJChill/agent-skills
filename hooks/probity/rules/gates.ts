@@ -813,8 +813,8 @@ export function surfaceRemovedStringUsage(options: {
 // "Correction: ..., which is allowed as the red step."
 const PERMITTED_CONCLUSION = new RegExp(
   [
-    String.raw`\bis a valid (?:[\w-]+ ){0,4}(?:add|addition|step|write|change)\.?\s*$`,
-    String.raw`^correction:.*\bwhich is (?:allowed|permitted)\b[^,;]*\.?\s*$`,
+    String.raw`\b(?:this|it|the write|the change) is a valid (?:[\w-]+ ){0,4}(?:add|addition|step|write|change)\.?\s*$`,
+    String.raw`^correction:.*\bwhich is (?:allowed|permitted)\b(?!\s+(?:only|after|if|when|once|unless)\b)[^,;]*\.?\s*$`,
     String.raw`\b(?:is|are) (?:permitted|allowed|acceptable|valid)\.?\s*$`,
     String.raw`\bshould (?:pass|be allowed)\.?\s*$`,
     String.raw`\bno violation\.?\s*$`,

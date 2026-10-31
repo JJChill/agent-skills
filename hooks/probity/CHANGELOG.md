@@ -11,26 +11,48 @@ judge, so they hold whatever model judges.
   write was "a valid single red test add" (the identical retry passed).
   It counted one new test as two. And it counted earlier, uncommitted
   tests as new, which forced a commit just to reset it.
-  - **Now:** the JS preset turns on Probity's `fastPath`, as the Kotlin
-    presets already do. A test-file write that adds exactly one test,
-    counted against the file on disk, passes without the judge. A write
-    adding two still goes to the judge.
+  - **Now:** `withJsTestFastPath` passes a write to an existing test
+    file (`*.test.*`, `*.spec.*`, `__tests__/`) without the judge when
+    it does two things only:
+    - inserts one block that is a single plain `it(...)` or `test(...)`
+      call;
+    - changes nothing else. The baseline is the file on disk, so
+      earlier uncommitted tests don't count as new.
+  - **Still judged:**
+    - a write that edits, removes or disables an existing test;
+    - `.only`, `.skip`, `.todo`, `xit`, or a test that skips itself;
+    - a second test, a `describe`, or a helper or import beside the
+      test;
+    - new files and production files.
+  - **Why not Probity's `fastPath`:** it only counts tests. A review
+    found it passed one new test written together with a weakened
+    assertion, `.only`, or production code. This fast path is narrow in
+    the same way as the Kotlin presets' one.
   - **Trade-off:** a one-test write is no longer checked for a refactor
     the previous green left unmade.
 - **An import alone skips the judge (#171).** Sent as a separate edit
   before the code that uses it, an import was denied as "unused import,
   not minimal green". Probity's own rules call that a transient state.
   - **Now:** `withImportOnlyFastPath` passes a write to an existing
-    JS/TS file whose only change is to its static imports (single- or
-    multi-line, `import type` included). `enforceJsTdd` applies it.
-  - **Still judged:** side-effect imports (`import './x'`), imports
-    with code, and new files.
+    JS/TS file without the judge when the write only adds static imports
+    to the leading import block (single- or multi-line, `import type`
+    included). Three conditions:
+    - every existing import stays as it was, in order;
+    - the rest of the file is unchanged, CRLF files included;
+    - no added import binds a name the code already uses.
+
+    `enforceJsTdd` applies it.
+  - **Still judged:** a removed, re-sourced, aliased or reordered
+    import, a side-effect import (`import './x'`), an import with code,
+    and new files.
   - **Unchanged:** edits sent in the same turn are each judged against
     the file before the others land. Send dependent edits one after
     another, or as one write.
 - **More self-contradicting denies are retried (#169).** The retry also
-  matches a last sentence ending "is a valid … add/step/write" and
-  "Correction: …, which is allowed …". The second verdict stands.
+  matches two more last sentences. The second verdict stands.
+  - "this/it is a valid … add/step/write".
+  - "Correction: …, which is allowed …". "Which is allowed only after
+    …" and similar qualified forms aren't retried.
 
 ## 0.4.59
 
