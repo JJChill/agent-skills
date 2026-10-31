@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.56
+
+A new rule, `enforceLayeredImports`, keeps ordered layers pointing
+down (#154).
+
+- **What was missing.** mysudo-core builds its Compose design system
+  with atomic design, one package per level: tokens, atoms, molecules,
+  organisms, templates. A level may use the levels below it, never one
+  above. A unit test scanned the sources for upward imports, so it
+  caught one only after the write. Probity had no rule for an ordered
+  set of layers.
+- **Now:** `enforceLayeredImports({ layers })` blocks a write that adds
+  a reference from a layer to one above it, naming the edge, the
+  references and the layer order:
+  - Kotlin `import` lines and fully-qualified names in code; Swift
+    `import` lines. Comments and strings are skipped.
+  - `strict: true` allows only the layer directly below.
+  - Siblings at one rank may not use each other: a nested array of
+    layers, or a `*` package segment (`com.x.feature.*`) for feature
+    modules nobody lists.
+  - Delta-based: existing upward imports don't freeze their file.
+- **Opt-in.** No preset turns it on; add a block scoped to the layered
+  code. See "Layered imports" in `hooks/PROBITY.md`.
+
 ## 0.4.55
 
 The thin driving adapter judge lets a screen decide what to show from

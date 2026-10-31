@@ -22,6 +22,7 @@ The rules ship as the [`@jjchill/probity-rules`](https://www.npmjs.com/package/@
 | `enforceAdapterObservability()` (custom) | ports-and-adapters + observability-and-instrumentation | AI-validated, scoped to adapter paths: a NEW adapter path doing external I/O must carry boundary observability — a structured event, a port-tap/recording decorator, or a span. Thin, not blind. Delta-based; pure mappers, wiring, and tests pass; takes a `conventionHint` naming your telemetry convention. Guarantees telemetry *presence*, never field safety (sensitive-field discipline stays with review). Note it runs after the TDD gate (first violation wins), so on brand-new behaviour TDD answers first — a second-pass gate; its deny text tells the agent to assert the event in the failing test so both gates ask for the same thing, and `withTelemetryFastPath` makes telemetry-only additions free on both sides |
 | `enforceThinDrivingAdapter()` + `forbidNewDomainDiscriminantChecks()` (custom, JS, Kotlin & KMP presets) | ports-and-adapters + frontend-ui-engineering | The opposite direction from the core-purity rules: business logic must not leak *out* of the core into driving adapters (UI components, pages, route handlers). AI-validated, scoped by the JS preset's `drivingAdapterGlobs` (default `src/ui/**`, `src/components/**`, `src/**/*.tsx`, minus tests and stories; `[]` switches it off): blocks a write that adds a decision in domain terms, coordinates more than one port/use-case call, re-implements a rule the core exports, or files a framework-free use case under a UI path, and names the extraction target (domain function or use case). Rendering, display formatting, local view state, display conditions over the rows already shown (empty, single item, first or last row) unless they repeat a rule the core enforces, and one call per user intent pass. Delta-based. Runs before the TDD gate, which can't catch these (a component test makes the logic "tested"). `coreExportsInJudge: true` gives the judge `coreGlobs`' export names, so copies of existing rules are named. The deterministic screen is opt-in via `domainDiscriminants` (e.g. `['role', 'plan']`): net-new literal comparisons on those fields block free, before the AI call. No default list, since `status === 'loading'` is ordinary view state. In the Kotlin and KMP presets the block is **opt-in** (no `drivingAdapterGlobs` default; see the layout table below), the screen also matches enum entries, `when (x.role)` subjects and `is` checks, the judge gets a Kotlin addendum for CLI commands and Compose screens, and `coreApiPaths` reads binary-compatibility-validator dumps for a repo with no core source |
 | `forbidInternalModuleMocks()` (custom) | ports-and-adapters | Deterministic: blocks newly introduced `jest.mock()` / `vi.mock()` of the team's own modules — "Ports Are the Only Test Seam". Pre-existing mocks don't re-trigger, so suites migrate incrementally |
+| `enforceLayeredImports()` (custom, opt-in) | ports-and-adapters + frontend-ui-engineering | Deterministic, delta-based: an ordered set of layers (atomic design levels, presentation over data), lowest first. Blocks a write that adds a reference from a layer to one above it, or to a sibling at the same rank. Kotlin: `import` lines and fully-qualified references; Swift: `import` lines. `strict: true` allows only the layer directly below. See [Layered imports](#layered-imports-enforcelayeredimports). |
 | `enforceAcceptanceLanguage()` (custom) | acceptance-testing (+ ubiquitous-language) | AI-validated: the Language Test on spec-layer files — no UI/protocol/persistence mechanics, single outcome per spec, glossary terms verbatim when `glossaryPath` is set. One standard across artifacts: wording that violates in a test step ("the backend rejects creation") violates in the Markdown scenario too — the spec is judged as the source tests transcribe. With `specsDir` (wired by every preset), the judge is shown which of the write's new steps other specifications already use word for word, as settled wording it does not block on, so a step gets the same verdict in every feature file. The glossary is included up to 32,000 characters (`maxGlossaryChars`); beyond that the judge is told the rest is not shown |
 | `requireSpecBackedAcceptanceTest()` (custom, Kotlin & Swift presets) | acceptance-testing + specification-by-example | Deterministic, write-time: a write adding a new acceptance test case must also add a `Covers:` tag resolving to a scenario that already exists in `docs/specs` — the feature file is written before the test that claims it. Closes the tagless-suite gap the commit-time parity gate can't see |
 | `requireGreenTestRun()` (custom, `gates.ts` — all configs) | test-driven-development / `/build` / `/ship` | Deterministic: `git commit` is blocked unless the test suite ran after the last write **and its recorded output was green** — Probity's `requireCommand` checks only that a run was recorded, and would pass a transcript whose latest run failed. The language-neutral gate takes a command regex plus success/failure patterns, with two additive options — `commandPredicate` (narrows which regex-matched commands count) and `extraSuccessPredicate`/`extraFailurePredicate` (command-aware signals alongside the text patterns) — unused by default. The Kotlin preset layers Gradle-specific defaults on these hooks, applied only when the caller passes its exported `GRADLE_TEST_COMMAND` unchanged: accepted tasks are `test`/flavored or module-qualified `test...Test`, `allTests`, `jvmTest`, `build`, and `check`, recognized inside piped/compound strings while rejecting `--dry-run`, `-x`/`--exclude-task`, flag/redirect-value spoofing, and non-running lookalike tasks. A run is green via Gradle's `BUILD SUCCESSFUL` banner, or — under Kiro, only when the final simple command is itself a Gradle verification invocation — a structured tool-result `exit_status` of zero; any other regex, or Swift's own `xcodebuild` command, gets none of this. `options.reason` appends on either deny path. A red-run deny ends with `Judged run:` and the command it judged (from 0.4.46; #138), so a surprising deny shows which recorded invocation was taken as the last run. An optional `enforceForPaths` scopes the demand to commits touching matching files. With several worktrees of one repository in a session (from 0.4.53; #152), the gate judges only the commit's own worktree: a write whose path lies in another worktree, and a run that starts with `cd <absolute path>` into another worktree, are left out. A run with no leading `cd`, or a relative one, still counts for every worktree, since the transcript doesn't record where it ran. Same inherent limit: runs outside the session transcript (another terminal, CI) are invisible |
@@ -120,6 +121,38 @@ rules: withShellWriteScreen(
   { root: ROOT },
 ),
 ```
+
+## Layered imports (`enforceLayeredImports`)
+
+For code organised as ordered layers, where each layer may use only the layers below it: atomic design levels in a design system (tokens, atoms, molecules, organisms, templates), or presentation over domain over data. A test that scans the sources catches an upward import after the write; this rule refuses it at write time and names the layer order. No preset turns it on. Add a block for the layered code:
+
+```ts
+import { enforceLayeredImports } from '@jjchill/probity-rules'
+
+const D = 'com.example.ui.design'
+// in Config.rules, after the preset's entries:
+{
+  files: ['ui/design/src/**/*.kt', '!**/src/*Test/**'],
+  rules: [
+    enforceLayeredImports({
+      layers: [
+        { name: 'tokens', packages: [`${D}.tokens`] },
+        { name: 'atoms', packages: [`${D}.atoms`] },
+        { name: 'molecules', packages: [`${D}.molecules`] },
+        { name: 'organisms', packages: [`${D}.organisms`] },
+        { name: 'templates', packages: [`${D}.templates`] },
+      ],
+      hint: 'see ADR 0012',
+    }),
+  ],
+}
+```
+
+- **Placing a reference.** `packages` are Kotlin package prefixes or Swift module names; the prefix matching the most segments wins. A Kotlin file is placed by its `package` line, a Swift file by the layer's `paths` globs. A reference or file in no layer is ignored.
+- **What counts.** Kotlin: `import` lines and fully-qualified names in code. Swift: `import` lines, including `@testable import` and `import struct M.T`. Comments and string literals are skipped.
+- **Siblings.** A nested array is a group at one rank (`[{ name: 'home', … }, { name: 'settings', … }]`): each may use lower ranks, not the others. A `*` segment does the same for packages nobody lists: `com.x.feature.*` makes `feature.home` and `feature.settings` siblings, while `feature.home.ui` may still use `feature.home`.
+- **`strict: true`.** A layer may use only the rank directly below it.
+- **Delta-based.** Only references the write adds block; an existing upward import doesn't freeze its file.
 
 ## Spec↔test traceability (KMP preset)
 
