@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, mkdtempSync, openSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -85,4 +85,27 @@ test('unlabelled verdicts are flagged with how to label them', (t) => {
 test('a log where every verdict has a task carries no such warning', (t) => {
   const res = report(t, line('pass', 'pass', {}, 'enforceTdd') + '\n')
   assert.doesNotMatch(res.stdout, /no judging task/)
+})
+
+// Issue #164: a week of full prompts made a 620 MB log, past V8's
+// longest string, and the report read it whole. Read under a small heap,
+// a log far larger than the heap must still report.
+test('a log larger than the heap is read line by line, prompts dropped', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'shadow-report-big-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const log = join(dir, 'shadow.jsonl')
+  const prompt = 'x'.repeat(100_000)
+  const fd = openSync(log, 'w')
+  for (let i = 0; i < 1500; i++) {
+    const entry = JSON.parse(line('pass', i % 2 ? 'pass' : 'violation'))
+    writeSync(fd, JSON.stringify({ ...entry, prompt }) + '\n')
+  }
+  closeSync(fd)
+  const res = spawnSync(TSX, [SCRIPT, log], {
+    encoding: 'utf8',
+    env: { ...process.env, NODE_OPTIONS: '--max-old-space-size=64' },
+  })
+  assert.equal(res.status, 0, res.stderr.slice(-500))
+  assert.match(res.stdout, /1500 verdicts/)
+  assert.match(res.stdout, /agreed 750 of 1500/)
 })
