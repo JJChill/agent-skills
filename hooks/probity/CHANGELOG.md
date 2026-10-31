@@ -14,37 +14,48 @@ judge, so they hold whatever model judges.
   - **Now:** `withJsTestFastPath` passes a write to an existing test
     file (`*.test.*`, `*.spec.*`, `__tests__/`) without the judge when
     it does two things only:
-    - inserts one block that is a single plain `it(...)` or `test(...)`
-      call;
+    - inserts one block of lines that, in the parsed file, is exactly
+      one plain test: `it` or `test` called with a title and a
+      function;
     - changes nothing else. The baseline is the file on disk, so
       earlier uncommitted tests don't count as new.
+  - **The test itself may not:**
+    - hold another test, or any only/skip/todo/each;
+    - touch a global object (`globalThis`, `window`);
+    - call `vi`/`jest` beyond `fn`;
+    - assign to anything but its own locals.
   - **Still judged:**
     - a write that edits, removes or disables an existing test;
-    - `.only`, `.skip`, `.todo`, `xit`, or a test that skips itself;
     - a second test, a `describe`, or a helper or import beside the
       test;
-    - new files and production files.
+    - new files, production files, and files that don't parse.
   - **Why not Probity's `fastPath`:** it only counts tests. A review
     found it passed one new test written together with a weakened
-    assertion, `.only`, or production code. This fast path is narrow in
-    the same way as the Kotlin presets' one.
+    assertion, `.only`, or production code.
+  - **Why a parser:** a second review fooled a text scanner with a quote
+    inside a regex or template literal, hiding a second, focused test.
+    Both fast paths now decide on the file as parsed by
+    `@ast-grep/napi`, which Probity already depends on.
   - **Trade-off:** a one-test write is no longer checked for a refactor
     the previous green left unmade.
 - **An import alone skips the judge (#171).** Sent as a separate edit
   before the code that uses it, an import was denied as "unused import,
   not minimal green". Probity's own rules call that a transient state.
   - **Now:** `withImportOnlyFastPath` passes a write to an existing
-    JS/TS file without the judge when the write only adds static imports
-    to the leading import block (single- or multi-line, `import type`
-    included). Three conditions:
-    - every existing import stays as it was, in order;
-    - the rest of the file is unchanged, CRLF files included;
-    - no added import binds a name the code already uses.
+    JS/TS file without the judge when the write only adds static
+    imports, compared on the parsed files. Four conditions:
+    - every existing statement and comment stays, unchanged and in
+      order;
+    - the new imports sit in the leading import block, after any
+      directive (`'use client'`);
+    - each new import binds at least one name;
+    - no new name is used anywhere in the file, template literals
+      included.
 
     `enforceJsTdd` applies it.
   - **Still judged:** a removed, re-sourced, aliased or reordered
-    import, a side-effect import (`import './x'`), an import with code,
-    and new files.
+    import, `import {}` or a side-effect import (`import './x'`), an
+    import with code, new files, and files that don't parse.
   - **Unchanged:** edits sent in the same turn are each judged against
     the file before the others land. Send dependent edits one after
     another, or as one write.

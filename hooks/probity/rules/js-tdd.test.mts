@@ -233,3 +233,59 @@ test('an added import in a CRLF file skips the judge', async () => {
   assert.equal((await presetTddRule()({ kind: 'write', path: enginePath, content: after }, ctx)).kind, 'pass')
   assert.equal(calls(), 0)
 })
+
+// ── Second review: text scanning could be fooled ───────────────────
+// A quote in a regex literal or a template literal hid a second,
+// focused test from the old scanner; the fast paths now parse.
+
+for (const [label, block] of [
+  ['a regex quote hiding it.only', "  it('a', () => { /'/; }); it.only('evil', () => {\n  })"],
+  ['a regex backtick hiding describe.skip', "  it('a', () => { /`/ }) }); describe.skip('rest', () => {\n  // `})"],
+  ['a template literal hiding it.only', "  it('a', () => { `${\"`\"}`; }); it.only('evil', () => {\n  })"],
+  ['an extra argument run at registration', "  it('a', () => {}, (vi.useFakeTimers(), 5000))"],
+  ['a test replacing expect', "  it('a', () => { globalThis.expect = () => ({ toBe() {} }) })"],
+  ['a test reassigning a module binding', "  it('a', () => { expect = undefined })"],
+  ['a test stubbing a global through vi', "  it('a', () => { vi.stubGlobal('fetch', () => 1) })"],
+] as const) {
+  test(`${label} goes to the judge`, async () => {
+    const { ctx, calls } = judgeCountingCtx(SUITE)
+    await presetTddRule()({ kind: 'write', path: testPath, content: SUITE.replace('\n})\n', `\n${block}\n})\n`) }, ctx)
+    assert.ok(calls() >= 1, 'judge was asked')
+  })
+}
+
+test('lines inserted inside an existing template literal go to the judge', async () => {
+  const snapshot = SUITE.replace('\n})\n', "\n  it('renders', () => { expect(render()).toBe(`\n<p/>\n`) })\n})\n")
+  const { ctx, calls } = judgeCountingCtx(snapshot)
+  const after = snapshot.replace('`\n<p/>\n`', "`\n<p/>\n  it('x', () => {})\n`")
+  await presetTddRule()({ kind: 'write', path: testPath, content: after }, ctx)
+  assert.ok(calls() >= 1, 'judge was asked')
+})
+
+test('a test using its own locals and vi.fn skips the judge', async () => {
+  const { ctx, calls } = judgeCountingCtx(SUITE)
+  const block = "  it('counts calls', () => {\n    const spy = vi.fn()\n    let n = 0\n    n += 1\n    spy(n)\n    expect(spy).toHaveBeenCalledWith(1)\n  })"
+  assert.equal((await presetTddRule()({ kind: 'write', path: testPath, content: SUITE.replace('\n})\n', `\n${block}\n})\n`) }, ctx)).kind, 'pass')
+  assert.equal(calls(), 0)
+})
+
+const DIRECTIVE = `'use client'\n${ENGINE}`
+
+for (const [label, before, after] of [
+  ['an import whose name the code uses inside a template', "export const label = (d: number) => `Due ${fetch(String(d))}`\n", "import { fetch } from './fake'\nexport const label = (d: number) => `Due ${fetch(String(d))}`\n"],
+  ['an import above a directive', DIRECTIVE, `import { clamp } from './clamp'\n${DIRECTIVE}`],
+  ['an import with no bindings', ENGINE, `import {} from './polyfill'\n${ENGINE}`],
+] as const) {
+  test(`${label} goes to the judge`, async () => {
+    const { ctx, calls } = judgeCountingCtx(before)
+    await presetTddRule()({ kind: 'write', path: enginePath, content: after }, ctx)
+    assert.ok(calls() >= 1, 'judge was asked')
+  })
+}
+
+test('an import added after a directive skips the judge', async () => {
+  const { ctx, calls } = judgeCountingCtx(DIRECTIVE)
+  const after = DIRECTIVE.replace("from './parcels'\n", "from './parcels'\nimport { clamp } from './clamp'\n")
+  assert.equal((await presetTddRule()({ kind: 'write', path: enginePath, content: after }, ctx)).kind, 'pass')
+  assert.equal(calls(), 0)
+})
