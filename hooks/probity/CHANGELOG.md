@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.55
+
+The thin driving adapter judge lets a screen decide what to show from
+the rows it already shows (#159).
+
+- **What was missing.** In mysudo-core a Compose view function hid the
+  Home screen's "Edit order" link when fewer than two Sudos were shown.
+  The judge refused it as a domain rule for `sdk/core`, although the
+  core's `order()` accepts any order, one Sudo included. Hiding "Move
+  up" on the first row and "Move down" on the last passed in the same
+  change.
+- **Now:** the judge's always-pass list names display conditions over
+  the data the view already holds: an empty state, a single item, the
+  first or last row. A pure view function over the screen's state is
+  named as a fine home for them.
+- **Still blocked:** a display condition that repeats a rule the core
+  enforces, such as hiding "Delete" on the last admin when the core
+  refuses that delete.
+
 ## 0.4.54
 
 Scenario fidelity lets a scenario and its test gain a step together

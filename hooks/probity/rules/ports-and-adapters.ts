@@ -745,6 +745,13 @@ ambiguous, pass.
   - Formatting for display: dates, currency, pluralization, truncation.
   - Local view state: open/closed, loading/error flags, form field
     values, the selected tab, input focus.
+  - A display condition over the data the view already holds: an empty
+    state, a single item, the first or last row (no "Edit order" link
+    when one row is shown, no "Move up" on the first row). It decides
+    what to show, not which outcome or permission applies, and a pure
+    view function over the screen's state is a fine home for it. It is
+    still (a) or (c) when it repeats a rule the core enforces: hiding
+    "Delete" on the last admin when the core refuses that delete.
   - Parsing and shaping user input into the arguments of a call.
   - Calling ONE use case or port per user intent and showing its
     result or error.
