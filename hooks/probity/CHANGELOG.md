@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.4.59
+
+Judges get a diff, not the whole file twice, for an edit to a large file
+(#168).
+
+- **What was missing.** Probity applies an edit before the rules see it,
+  so a write carries the whole file. Every judge prompt held it twice,
+  as the current content and the pending one. In mysudo-core-sdk the
+  median judge prompt was 42 KB, and the Opus judge was about a quarter
+  of the week's Kiro credits. One build run's 173 small edits resent a
+  few large files 173 times each.
+- **Now:** every preset sends the judge a unified diff in place of the
+  `Current file content` and `Pending action` sections, with up to 20
+  unchanged lines either side of each change. The file's import and
+  package lines are kept wherever they are, because some judges tell an
+  adapter from core code by its imports. This applies when:
+  - the file is at least 8,000 bytes;
+  - it already exists;
+  - the prompt holds those exact sections. Probity's `enforceTdd` and
+    most of this package's AI rules do;
+  - and the result is clearly smaller.
+
+  Past 1,000 changed lines the file is sent whole. Any other prompt is
+  sent as before. Upstream's TDD instructions already allow the pending
+  action as a diff.
+- **Effect:** a one-line edit to a 45 KB file cut the TDD prompt from
+  100 KB to 13 KB. Shadow logs shrink with it.
+- **Unchanged:** rules still see the whole file, so deterministic
+  checks and fast paths behave as before.
+- **Options:** `compactJudgeFiles: { minBytes, contextLines }` tunes
+  it, and `compactJudgeFiles: false` sends whole files again. Outside a
+  preset, wrap rules with `withCompactJudgeFiles(entries)`.
+- **Measuring it.** The judge now sees 20 lines either side of a change
+  rather than the whole file, and whether that changes verdicts isn't
+  measured yet.
+  - The shadow log records each compacted verdict's full and sent
+    prompt size.
+  - `probity-shadow-report` prints how many verdicts were compacted,
+    and each candidate's agreement on compacted and whole prompts.
+  - `wholeFiles(candidate)` asks a shadow candidate the uncompacted
+    prompt. On the primary's model, its disagreements are exactly what
+    the diff changed:
+    `shadowJudge(primary, [wholeFiles(sameModel)], { log })`.
+
 ## 0.4.58
 
 Two fixes for the JS/TS preset (#150, #166).

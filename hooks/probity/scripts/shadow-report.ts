@@ -123,6 +123,34 @@ if (unlabelled) {
       'defineConfig(), or withJudgeTasks([...]) around them; verdicts logged before 0.4.50 have none.',
   )
 }
+const compacted = entries.filter((entry) => entry.compaction)
+const kb = (chars: number) => `${(chars / 1000).toFixed(1)}K chars`
+const middle = (values: number[]) => values.sort((a, b) => a - b)[Math.floor((values.length - 1) / 2)]!
+if (compacted.length) {
+  out.push(
+    `${compacted.length} of ${entries.length} verdicts had a compacted prompt (a diff in place of the file), median ` +
+      `${kb(middle(compacted.map((entry) => entry.compaction!.fullChars)))} sent as ` +
+      `${kb(middle(compacted.map((entry) => entry.compaction!.sentChars)))}`,
+  )
+}
+const split = compacted.length
+  ? {
+      compacted: summarizeShadowLog(compacted),
+      whole: summarizeShadowLog(entries.filter((entry) => !entry.compaction)),
+    }
+  : undefined
+function promptKindLines(candidate: string): string[] {
+  if (!split) return []
+  return (['compacted', 'whole'] as const).flatMap((kind) => {
+    const row = split[kind].find((each) => each.candidate === candidate && each.task === undefined)
+    if (!row) return []
+    return [
+      `  on ${kind} prompts: agreed ${row.agreed} of ${row.compared}, ` +
+        `leaks ${rated(row.leaks.length, row.primaryDenials, 'primary denials', row.leakRateUpper)}, ` +
+        `friction ${rated(row.friction.length, row.primaryPasses, 'primary passes', row.frictionRateUpper)}`,
+    ]
+  })
+}
 const rows = summarizeShadowLog(entries)
 for (const row of rows.filter((candidate) => candidate.task === undefined)) {
   const rate = row.compared ? ` (${percent(row.agreed / row.compared)})` : ''
@@ -130,6 +158,7 @@ for (const row of rows.filter((candidate) => candidate.task === undefined)) {
   out.push(`  agreed ${row.agreed} of ${row.compared}${rate}`)
   out.push(`  leaks ${rated(row.leaks.length, row.primaryDenials, 'primary denials', row.leakRateUpper)}`)
   out.push(`  friction ${rated(row.friction.length, row.primaryPasses, 'primary passes', row.frictionRateUpper)}`)
+  out.push(...promptKindLines(row.candidate))
   out.push(`  unavailable ${row.unavailable}, skipped ${row.skipped} (primary unavailable)`)
   out.push(`  median ${seconds(row.medianMs)} (primary ${seconds(row.primaryMedianMs)})`)
   out.push(...tokenLines('tokens', row.tokens), ...tokenLines('primary tokens', row.primaryTokens))

@@ -40,6 +40,7 @@ import type { Globs } from '../rules/scoping.js'
 import { withExcludeGlobs } from '../rules/scoping.js'
 import { withShellWriteScreen } from '../rules/shell-writes.js'
 import { withJudgeTasks } from '../rules/judge-task.js'
+import { type CompactJudgeFilesOptions, compactingPreset } from '../rules/compact-judge-files.js'
 import { drivingAdapterBlock } from './driving-adapter.js'
 import { testIsolationBlock } from './test-isolation.js'
 import { scenarioFidelityBlock } from './scenario-fidelity.js'
@@ -201,6 +202,11 @@ export type JsPresetOptions = {
    *  files-scoped block covers, so the edit goes through the write
    *  tool and the content rules judge it (issue #79). Default: on. */
   shellWriteScreen?: boolean
+  /** Send the judge a unified diff, with context, in place of a large
+   *  file an edit changes, so the file isn't sent twice per verdict
+   *  (issue #168). Rules still see the whole file. Default on:
+   *  `{ minBytes: 8000, contextLines: 20 }`; `false` sends whole files. */
+  compactJudgeFiles?: false | CompactJudgeFilesOptions
 }
 
 /**
@@ -431,7 +437,7 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
     }),
   )
 
-  return withJudgeTasks(withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
+  return withJudgeTasks(compactingPreset(withShellWriteScreen(withExcludeGlobs(entries, excludeGlobs), {
     enabled: options.shellWriteScreen,
-  }))
+  }), options))
 }
