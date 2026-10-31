@@ -108,6 +108,34 @@ test('includePrompt: false logs only the prompt hash', async (t) => {
   assert.match(entry!.promptSha256, /^[0-9a-f]{64}$/)
 })
 
+test("includePrompt: 'disagreements' logs the prompt only when a candidate disagrees", async (t) => {
+  const log = join(dir(t), 'shadow.jsonl')
+  let candidate: () => Verdict = pass
+  const shadow = shadowJudge(judge('claude', async () => pass()).agent, [judge('c', async () => candidate()).agent], {
+    log,
+    includePrompt: 'disagreements',
+  })
+  await shadow.reason('agreed source')
+  candidate = deny
+  await shadow.reason('disputed source')
+  const [agreed, disputed] = readLog(log)
+  assert.equal('prompt' in agreed!, false)
+  assert.match(agreed!.promptSha256, /^[0-9a-f]{64}$/)
+  assert.equal(disputed!.prompt, 'disputed source')
+})
+
+test("includePrompt: 'disagreements' leaves the prompt out when a candidate only failed to answer", async (t) => {
+  const log = join(dir(t), 'shadow.jsonl')
+  const shadow = shadowJudge(
+    judge('claude', async () => pass()).agent,
+    [judge('c', async () => { throw new Error('socket hang up') }).agent],
+    { log, includePrompt: 'disagreements' },
+  )
+  await shadow.reason('source')
+  const [entry] = readLog(log)
+  assert.equal('prompt' in entry!, false)
+})
+
 function entry(primary: Verdict, candidate: Partial<ShadowLogEntry['candidates'][number]>, durations = [1000, 400]): ShadowLogEntry {
   return {
     at: '2026-10-21T00:00:00.000Z',

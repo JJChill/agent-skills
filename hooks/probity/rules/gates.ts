@@ -370,14 +370,28 @@ export function requireGreenTestRun(options: {
     }
     const lastRun = runs[runs.length - 1]!
     if (!isGreenRun(lastRun, options)) {
+      // Name the run, so a surprising deny shows which one was judged (issue #138).
+      const judged = ` Judged run: \`${shortened(lastRun.kind === 'command' ? lastRun.command : '')}\``
+      if (!isRedRun(lastRun, options)) {
+        // Issue #162: a passing run piped through grep/head/tail loses the
+        // summary line, and "not green" sent the agent hunting for failures.
+        return {
+          kind: 'violation',
+          reason:
+            'The last recorded test run after your changes shows no failure, but ' +
+            "its output has no runner summary line matching " +
+            `\`${options.successPattern.source}\`, so it can't count as green. ` +
+            'Output filtered or cut short (`| grep`, `| head`, `| tail`) drops ' +
+            'that line: rerun the suite with its summary in the output, then ' +
+            `commit.${extra}${judged}`,
+        }
+      }
       return {
         kind: 'violation',
         reason:
           'The last recorded test run after your changes was not ' +
           'green — a recorded invocation is not a passing suite. Fix ' +
-          `the failures (or the build) and rerun before committing.${extra}` +
-          // Name the run, so a surprising deny shows which one was judged (issue #138).
-          ` Judged run: \`${shortened(lastRun.kind === 'command' ? lastRun.command : '')}\``,
+          `the failures (or the build) and rerun before committing.${extra}${judged}`,
       }
     }
     return { kind: 'pass' }
@@ -412,15 +426,22 @@ function isMatchingRun(event: SessionEvent, options: GreenRunOptions): boolean {
   )
 }
 
+/** A matching run is red when its output shows a failure signal. */
+function isRedRun(event: SessionEvent, options: GreenRunOptions): boolean {
+  const output = 'output' in event ? (event.output ?? '') : ''
+  const command = event.kind === 'command' ? event.command : ''
+  return (
+    options.failurePattern.test(output) ||
+    (options.extraFailurePredicate?.(command, output) ?? false)
+  )
+}
+
 /** A matching run is green when no failure signal shows and a success signal does. */
 function isGreenRun(event: SessionEvent, options: GreenRunOptions): boolean {
   const output = 'output' in event ? (event.output ?? '') : ''
   const command = event.kind === 'command' ? event.command : ''
-  const isRed =
-    options.failurePattern.test(output) ||
-    (options.extraFailurePredicate?.(command, output) ?? false)
   return (
-    !isRed &&
+    !isRedRun(event, options) &&
     (options.successPattern.test(output) ||
       (options.extraSuccessPredicate?.(command, output) ?? false))
   )

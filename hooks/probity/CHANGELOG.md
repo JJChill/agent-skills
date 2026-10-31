@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.57
+
+Three fixes from real sessions (#164, #162, #151).
+
+- **The shadow report reads a log of any size (#164).** In
+  mysudo-core-sdk a week of verdicts made a 620 MB log, because every
+  record keeps its ~100 KB judge prompt. `probity-shadow-report` read
+  the file into one string and failed: `Cannot create a string longer
+  than 0x1fffffe8 characters`.
+  - **Now:** the report reads the log line by line and drops each
+    prompt as it goes.
+  - **New option:** `shadowJudge({ includePrompt: 'disagreements' })`
+    keeps a prompt only where a candidate disagreed with the primary,
+    the leaks and friction that `--show` lists.
+- **The commit gate says when a run lost its summary line (#162).** A
+  run of `npm test 2>&1 | grep -E 'FAIL|Error' | head` passed every test,
+  but the filter removed the summary line the gate reads as green. The
+  deny said the run "was not green", which suggests there were failures.
+  - **Now:** a run with no failure and no summary line gets its own
+    message. It names the summary pattern it looked for and says that
+    `| grep`, `| head` and `| tail` drop it. A run that shows a failure
+    keeps the old message.
+- **The TDD judges accept generalising as the minimum green (#151).**
+  In a JS/TS project, code hard-coded a sale spilling into a second
+  parcel. A test that needed three parcels was refused both as a loop
+  and as a recursive call, because the judge wanted a hard-coded third
+  parcel. Only refactoring under green got the agent through, and the
+  deny never mentioned that route.
+  - **Now:** the Kotlin, Swift and JS/TS TDD judges are told that
+    replacing special cases with a loop or recursion is the minimum
+    green when the failing test needs the general case.
+  - **Still over-implementation:** a write that also adds behavior no
+    failing test needs.
+  - **When the judge blocks over-implementation,** it names the step it
+    would accept and the refactor-under-green route.
+
 ## 0.4.56
 
 A new rule, `enforceLayeredImports`, keeps ordered layers pointing

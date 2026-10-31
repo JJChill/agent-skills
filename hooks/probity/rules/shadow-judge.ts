@@ -43,9 +43,11 @@ export type ShadowJudgeOptions = {
   /**
    * Log the full prompt, so the log can be replayed on other models.
    * Default true. Prompts contain the code being judged; with false only
-   * its SHA-256 is kept.
+   * its SHA-256 is kept. With `'disagreements'` the prompt is kept only
+   * where a candidate's answer differs from the primary's (the leaks and
+   * friction `--show` lists), so the log stays small (issue #164).
    */
-  includePrompt?: boolean
+  includePrompt?: boolean | 'disagreements'
 }
 
 type LoggedVerdict = {
@@ -111,13 +113,19 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
       )
       const verdict = await primary.reason(prompt)
       const primaryMs = Date.now() - started
+      const primaryLogged = { ...logged(primaryName, verdict, primaryMs), kind: verdict.kind, reason: verdict.reason }
+      const answers = await Promise.all(shadows)
+      const keepPrompt =
+        options.includePrompt === 'disagreements'
+          ? answers.some((answer) => disagrees(primaryLogged, answer))
+          : options.includePrompt !== false
       const entry: ShadowLogEntry = {
         at: new Date(started).toISOString(),
         ...(task && { task }),
         promptSha256: createHash('sha256').update(prompt).digest('hex'),
-        ...(options.includePrompt !== false && { prompt }),
-        primary: { ...logged(primaryName, verdict, primaryMs), kind: verdict.kind, reason: verdict.reason },
-        candidates: await Promise.all(shadows),
+        ...(keepPrompt && { prompt }),
+        primary: primaryLogged,
+        candidates: answers,
       }
       try {
         mkdirSync(dirname(options.log), { recursive: true })
@@ -242,6 +250,15 @@ function emptyTally(candidate: string, task: string | undefined): Tally {
   }
 }
 
+function answered(verdict: LoggedVerdict): boolean {
+  return verdict.error === undefined && !verdict.timedOut && !!verdict.kind && !isJudgeUnavailable(verdict.reason ?? '')
+}
+
+/** Both judges answered, differently: a leak or friction. */
+function disagrees(primary: ShadowLogEntry['primary'], candidate: LoggedVerdict): boolean {
+  return answered(primary) && answered(candidate) && candidate.kind !== primary.kind
+}
+
 function count(row: Tally, entry: ShadowLogEntry, candidate: LoggedVerdict): void {
   addTokens(row.tokens, candidate.meta)
   addTokens(row.primaryTokens, entry.primary.meta)
@@ -251,7 +268,7 @@ function count(row: Tally, entry: ShadowLogEntry, candidate: LoggedVerdict): voi
     row.skipped++
     return
   }
-  if (candidate.error !== undefined || candidate.timedOut || !candidate.kind || isJudgeUnavailable(candidate.reason ?? '')) {
+  if (!answered(candidate)) {
     row.unavailable++
     return
   }

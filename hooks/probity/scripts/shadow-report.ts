@@ -14,7 +14,8 @@
  * `--show leaks` prints each one's task, reasons and prompt hash, which
  * finds the full prompt in the log.
  */
-import { readFileSync } from 'node:fs'
+import { closeSync, createReadStream, openSync } from 'node:fs'
+import { createInterface } from 'node:readline'
 
 import { summarizeShadowLog, type ShadowDisagreement, type ShadowLogEntry, type ShadowSummary, type TokensByModel } from '../rules/shadow-judge.js'
 
@@ -88,19 +89,21 @@ if (show !== undefined && !['leaks', 'friction', 'all'].includes(show)) fail(`--
 const path = args.find((arg, i) => !arg.startsWith('--') && (showAt === -1 || i !== showAt + 1))
 if (!path) fail('no shadow log given')
 
-let content: string
 try {
-  content = readFileSync(path, 'utf8')
+  closeSync(openSync(path, 'r'))
 } catch (error) {
   fail(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`)
 }
 
+// Line by line, without the prompts: a log that keeps every prompt grows
+// ~80 KB per verdict, past what one string or the heap can hold (#164).
 const entries: ShadowLogEntry[] = []
 let unreadable = 0
-for (const line of content.split('\n')) {
+for await (const line of createInterface({ input: createReadStream(path, 'utf8'), crlfDelay: Infinity })) {
   if (!line.trim()) continue
   try {
     const entry = JSON.parse(line) as ShadowLogEntry
+    delete entry.prompt
     if (entry?.primary && Array.isArray(entry.candidates)) entries.push(entry)
     else unreadable++
   } catch {
