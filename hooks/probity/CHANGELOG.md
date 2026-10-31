@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.4.61
+
+Check compaction later without a live shadow: record, then replay
+(#174).
+
+- **What was missing.** After 0.4.59, mysudo-core-sdk ran a
+  `wholeFiles(kiroJudge())` shadow for 5 hours (1,444 verdicts):
+  - compacted against whole prompts disagreed on 2 of 170 (1.2%);
+  - whole against whole disagreed on 8 of 965 (0.8%), the noise between
+    two runs of the same judge.
+
+  The shadow doubles judge cost, so the owner wanted to stop it and
+  keep a way to check compaction later.
+- **Record:** `compactJudgeFiles: { record: { log, sample } }` (default
+  sample 0.1) appends, for a sampled share of compacted verdicts:
+  - the whole-file prompt that wasn't sent, built locally with no model
+    call;
+  - the compacted prompt's SHA-256;
+  - the judging task;
+  - the verdict and reason the compacted prompt got.
+
+  The record also keeps the primary's telemetry. The log is kept at
+  `0600`, and recording never changes or blocks a verdict. Each judge
+  call is recorded, so a deny that `withContradictionRetry` later
+  retries is recorded as it was given.
+- **Replay:** `npx probity-shadow-replay <log>` asks a judge each recorded
+  prompt and prints the same agreement, leaks and friction (with
+  `--show`) as `probity-shadow-report`.
+  - **Judge:** it defaults to the one the recorded primary ran on
+    (`kiro`, `claude`, `claude:<model>`), so disagreements measure
+    compaction rather than a different model. On another judge, the
+    report's heading says so.
+  - **Options:** `--judge claude|kiro`, `--model ID`, `--limit N` (caps
+    the spend), `--concurrency N` (default 4). An unknown option, or one
+    missing its value, is an error, so a mistyped `--limit` can't
+    silently replay the whole log.
+  - It streams the log line by line.
+  - The report's output now comes from one shared formatter, so both
+    read the same.
+- **Size and privacy:** about 120 KB per recorded prompt, so about
+  10 MB a day at 10% of 800 compacted verdicts. The prompts hold code
+  and session context: keep the log local.
+
 ## 0.4.60
 
 More self-contradicting judge denies are retried (#169), and the docs say

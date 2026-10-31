@@ -2,6 +2,9 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 
 import type { Agent, Rule, RuleContext, RuleEntry } from '@nizos/probity'
 
+import { judgeTask } from './judge-task.js'
+import { appendWholePromptRecord, sha256, type WholePromptRecordOptions } from './whole-prompt-record.js'
+
 /**
  * Smaller judge prompts for edits to large files (issue #168).
  *
@@ -24,6 +27,12 @@ export type CompactJudgeFilesOptions = {
   minBytes?: number
   /** Unchanged lines shown either side of each change. Default 20. */
   contextLines?: number
+  /**
+   * Record a sampled share of compacted verdicts' whole-file prompts,
+   * unsent, with the verdict the compacted prompt got, for
+   * `probity-shadow-replay` to check later (issue #174). Off by default.
+   */
+  record?: WholePromptRecordOptions
 }
 
 const DEFAULT_MIN_BYTES = 8_000
@@ -192,7 +201,7 @@ function compacted(
   path: string,
   before: string,
   after: string,
-  options: Required<CompactJudgeFilesOptions>,
+  options: { minBytes: number; contextLines: number },
 ): string {
   if (Math.max(Buffer.byteLength(before), Buffer.byteLength(after)) < options.minBytes) return prompt
   const current = `## Current file content\n\n${before}`
@@ -261,7 +270,33 @@ export function compactJudgeFiles(rule: Rule, options: CompactJudgeFilesOptions 
       const before = await ctx.readFile?.(action.path)
       const shown =
         before?.kind === 'present' ? compacted(prompt, action.path, before.content, action.content, settings) : prompt
-      return shown === prompt ? agent.reason(prompt) : uncompacted.run(prompt, () => agent.reason(shown))
+      if (shown === prompt) return agent.reason(prompt)
+      const started = Date.now()
+      const verdict = await uncompacted.run(prompt, () => agent.reason(shown))
+      const record = options.record
+      if (record) {
+        try {
+          if ((record.random ?? Math.random)() < (record.sample ?? 0.1)) {
+            const task = judgeTask()
+            appendWholePromptRecord(record.log, {
+              at: new Date(started).toISOString(),
+              ...(task && { task }),
+              promptSha256: sha256(shown),
+              wholePrompt: prompt,
+              primary: {
+                name: (agent as Agent & { name?: string }).name ?? 'primary',
+                kind: verdict.kind,
+                reason: verdict.reason,
+                ...(verdict.meta && { meta: verdict.meta }),
+                durationMs: Date.now() - started,
+              },
+            })
+          }
+        } catch {
+          // Measuring must never change enforcement.
+        }
+      }
+      return verdict
     }
     const judge = new Proxy(agent, {
       get: (target, key, receiver) => (key === 'reason' ? reason : Reflect.get(target, key, receiver)),
