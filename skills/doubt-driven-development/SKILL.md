@@ -111,7 +111,7 @@ In Claude Code, the role-based reviewers in `agents/` start with isolated contex
 
 #### When the artifact is a diagnosis
 
-A stated cause for a bug is reviewed the same way, with two differences. The CONTRACT is the list of gathered facts, and the reviewer's job is to find one fact the cause doesn't satisfy and to ask for the evidence behind each claim (see `debugging-and-error-recovery`, Reviewing a Diagnosis). And the reviewer can't vouch that the fact list is complete: it can't see a fact nobody gathered, so a diagnosis that survives review isn't thereby confirmed, and the missing-fact risk stays with the main session. A same-model reviewer agreeing over the same facts is one opinion counted twice, which is one more reason to offer cross-model escalation.
+The CONTRACT is the list of gathered facts, and the reviewer looks for one fact the stated cause doesn't satisfy. The risk of a fact nobody gathered stays with the main session, so offer cross-model escalation. For why agreement isn't evidence and what to ask at each step, see `debugging-and-error-recovery`, Reviewing a Diagnosis.
 
 #### Cross-model escalation
 

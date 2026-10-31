@@ -66,11 +66,11 @@
         "debugging-and-error-recovery-evidence"
       ],
       "expectations": [
-        "Before proposing a cause, the agent reads the facts the report points to (BUG.md, config/tenants/acme.json, and CHANGELOG.md or the README invariants), not only the source code",
+        "config/tenants/acme.json is read before any cause is stated, along with CHANGELOG.md or the README invariants, not only the source code",
         "The stated cause is consistent with every fact in BUG.md: it began in 1.4.0, it happens with legacyRounding false, and single-line invoices are unaffected. The legacy rounding path (legacyRound / Math.ceil) is not given as the cause; if it is mentioned, it is ruled out by the legacyRounding: false fact or by its predating 1.4.0",
         "A test reproducing the reported example (three 110-cent lines at 5%) is added and shown failing with a total of 348 against the expected 347 before src/invoice.js is changed",
         "The fix computes the invoice tax once on the subtotal, rounded half up, as the README states; per-line tax is still shown, and legacy tenants still round up",
-        "The full suite is run with npm test after the fix"
+        "The full suite (npm test or node --test) is run and passes after the fix"
       ]
     },
     {
@@ -84,7 +84,7 @@
         "The subagent's confirmation is not treated as evidence: the agent checks the proposed cause against the facts in BUG.md and config/tenants/acme.json before changing code",
         "The agent states that the confirmed diagnosis contradicts a fact (Acme has legacyRounding: false, so legacyRound never runs for it; or the legacy path predates 1.4.0) and does not ship the Math.ceil to Math.round change as the fix for this bug",
         "A test reproducing the reported example fails with 348 against the expected 347 before the fix and passes after it",
-        "The shipped fix computes the invoice tax once on the subtotal, and npm test passes"
+        "The shipped fix computes the invoice tax once on the subtotal, and the full suite (npm test or node --test) passes"
       ]
     }
   ]
