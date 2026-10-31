@@ -109,3 +109,12 @@ test('a log larger than the heap is read line by line, prompts dropped', (t) => 
   assert.match(res.stdout, /1500 verdicts/)
   assert.match(res.stdout, /agreed 750 of 1500/)
 })
+
+test('the report compares agreement on compacted prompts with the rest (#168)', (t) => {
+  const compaction = (entry) => JSON.stringify({ ...JSON.parse(entry), compaction: { fullChars: 40000, sentChars: 8000 } })
+  const res = report(t, [compaction(line('pass', 'pass')), compaction(line('violation', 'pass')), line('pass', 'pass')].join('\n') + '\n')
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /2 of 3 verdicts had a compacted prompt \(a diff in place of the file\), median 40\.0K chars sent as 8\.0K chars/)
+  assert.match(res.stdout, /on compacted prompts: agreed 1 of 2/)
+  assert.match(res.stdout, /on whole prompts: agreed 1 of 1/)
+})

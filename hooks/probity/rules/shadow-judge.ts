@@ -4,6 +4,7 @@ import { dirname } from 'node:path'
 
 import type { Agent, Verdict } from '@nizos/probity'
 
+import { compactedFrom } from './compact-judge-files.js'
 import { isJudgeUnavailable } from './gates.js'
 import { judgeTask } from './judge-task.js'
 import type { NamedJudge } from './kiro-judge.js'
@@ -68,6 +69,8 @@ export type ShadowLogEntry = {
   task?: string
   promptSha256: string
   prompt?: string
+  /** The prompt was compacted (a diff in place of a large file, issue #168): its size whole and as sent. */
+  compaction?: { fullChars: number; sentChars: number }
   primary: LoggedVerdict & { kind: Verdict['kind']; reason: string }
   candidates: LoggedVerdict[]
 }
@@ -107,6 +110,7 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
     reason: async (prompt) => {
       const started = Date.now()
       const task = judgeTask()
+      const full = compactedFrom()
       const timeoutMs = options.candidateTimeoutMs ?? DEFAULT_CANDIDATE_TIMEOUT_MS
       const shadows = candidates.map((candidate, i) =>
         askCandidate(candidate, judgeName(candidate, `candidate-${i + 1}`), prompt, started, timeoutMs),
@@ -124,6 +128,7 @@ export function shadowJudge(primary: Agent, candidates: readonly Agent[], option
         ...(task && { task }),
         promptSha256: createHash('sha256').update(prompt).digest('hex'),
         ...(keepPrompt && { prompt }),
+        ...(full !== undefined && { compaction: { fullChars: full.length, sentChars: prompt.length } }),
         primary: primaryLogged,
         candidates: answers,
       }
