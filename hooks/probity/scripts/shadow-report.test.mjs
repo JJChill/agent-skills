@@ -118,3 +118,15 @@ test('the report compares agreement on compacted prompts with the rest (#168)', 
   assert.match(res.stdout, /on compacted prompts: agreed 1 of 2/)
   assert.match(res.stdout, /on whole prompts: agreed 1 of 1/)
 })
+
+// Issue #174: the replay command shares the report's output.
+const REPLAY = join(HERE, 'shadow-replay.ts')
+
+test('the replay command needs a record log and a known judge', (t) => {
+  const none = spawnSync(TSX, [REPLAY], { encoding: 'utf8' })
+  assert.equal(none.status, 1)
+  assert.match(none.stderr, /usage: probity-shadow-replay/)
+  const bad = spawnSync(TSX, [REPLAY, join(tmpdir(), 'x.jsonl'), '--judge', 'gpt'], { encoding: 'utf8' })
+  assert.equal(bad.status, 1)
+  assert.match(bad.stderr, /--judge takes claude or kiro/)
+})
