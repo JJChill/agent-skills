@@ -109,6 +109,10 @@ In Claude Code, the role-based reviewers in `agents/` start with isolated contex
 
 **The adversarial prompt above takes precedence over the persona's default response shape.** Personas like `code-reviewer` are written to produce balanced verdicts with both strengths and weaknesses; doubt-driven needs issues-only output. Paste the adversarial prompt verbatim into the invocation so it overrides the persona's default. If a persona's response shape can't be overridden cleanly, fall back to a generic subagent with the adversarial prompt.
 
+#### When the artifact is a diagnosis
+
+A stated cause for a bug is reviewed the same way, with two differences. The CONTRACT is the list of gathered facts, and the reviewer's job is to find one fact the cause doesn't satisfy and to ask for the evidence behind each claim (see `debugging-and-error-recovery`, Reviewing a Diagnosis). And the reviewer can't vouch that the fact list is complete: it can't see a fact nobody gathered, so a diagnosis that survives review isn't thereby confirmed, and the missing-fact risk stays with the main session. A same-model reviewer agreeing over the same facts is one opinion counted twice, which is one more reason to offer cross-model escalation.
+
 #### Cross-model escalation
 
 A single-model reviewer shares blind spots with the original author — a colder, different-architecture model catches them. Doubt-driven is already opt-in for non-trivial decisions, so within that scope offering cross-model is part of the skill's value, not optional friction.
