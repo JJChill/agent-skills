@@ -2,68 +2,30 @@
 
 ## 0.4.60
 
-Three JS/TS TDD judge failures from a project whose judge ran on Sonnet
-(#169, #170, #171). The first two fixes keep these writes away from the
-judge, so they hold whatever model judges.
+More self-contradicting judge denies are retried (#169), and the docs say
+to pin the judge's model (#169–#171).
 
-- **One new test skips the judge (#169, #170).** The judge denied
-  single-test writes in three ways. It denied with text concluding the
-  write was "a valid single red test add" (the identical retry passed).
-  It counted one new test as two. And it counted earlier, uncommitted
-  tests as new, which forced a commit just to reset it.
-  - **Now:** `withJsTestFastPath` passes a write to an existing test
-    file (`*.test.*`, `*.spec.*`, `__tests__/`) without the judge when
-    it does two things only:
-    - inserts one block of lines that, in the parsed file, is exactly
-      one plain test: `it` or `test` called with a title and a
-      function;
-    - changes nothing else. The baseline is the file on disk, so
-      earlier uncommitted tests don't count as new.
-  - **The test itself may not:**
-    - hold another test, or any only/skip/todo/each;
-    - touch a global object (`globalThis`, `window`);
-    - call `vi`/`jest` beyond `fn`;
-    - assign to anything but its own locals.
-  - **Still judged:**
-    - a write that edits, removes or disables an existing test;
-    - a second test, a `describe`, or a helper or import beside the
-      test;
-    - new files, production files, and files that don't parse.
-  - **Why not Probity's `fastPath`:** it only counts tests. A review
-    found it passed one new test written together with a weakened
-    assertion, `.only`, or production code.
-  - **Why a parser:** a second review fooled a text scanner with a quote
-    inside a regex or template literal, hiding a second, focused test.
-    Both fast paths now decide on the file as parsed by
-    `@ast-grep/napi`, which Probity already depends on.
-  - **Trade-off:** a one-test write is no longer checked for a refactor
-    the previous green left unmade.
-- **An import alone skips the judge (#171).** Sent as a separate edit
-  before the code that uses it, an import was denied as "unused import,
-  not minimal green". Probity's own rules call that a transient state.
-  - **Now:** `withImportOnlyFastPath` passes a write to an existing
-    JS/TS file without the judge when the write only adds static
-    imports, compared on the parsed files. Four conditions:
-    - every existing statement and comment stays, unchanged and in
-      order;
-    - the new imports sit in the leading import block, after any
-      directive (`'use client'`);
-    - each new import binds at least one name;
-    - no new name is used anywhere in the file, template literals
-      included.
-
-    `enforceJsTdd` applies it.
-  - **Still judged:** a removed, re-sourced, aliased or reordered
-    import, `import {}` or a side-effect import (`import './x'`), an
-    import with code, new files, and files that don't parse.
-  - **Unchanged:** edits sent in the same turn are each judged against
-    the file before the others land. Send dependent edits one after
-    another, or as one write.
-- **More self-contradicting denies are retried (#169).** The retry also
-  matches two more last sentences. The second verdict stands.
-  - "this/it is a valid … add/step/write".
-  - "Correction: …, which is allowed …". "Which is allowed only after
-    …" and similar qualified forms aren't retried.
+- **What happened.** A JS/TS project whose judge ran on Sonnet
+  (`claudeJudge()` follows the CLI's default model) hit three kinds of
+  judge mistake. It denied single-test writes with text concluding they
+  were allowed (#169). It counted tests already on disk as new (#170).
+  It refused an import sent alone before the code using it (#171).
+- **Retry:** `withContradictionRetry` also retries a deny whose last
+  sentence ends "this/it is a valid … add/step/write" or "Correction:
+  …, which is allowed …". The second verdict stands. Qualified forms
+  aren't retried, such as "which is allowed only after …" or "Neither is
+  a valid red step".
+- **Docs:** "Choosing the AI judge" in `hooks/PROBITY.md` says the TDD
+  rules were measured on Opus. It says to set
+  `claudeJudge({ model: 'claude-opus-5-5' })`, or to measure with a
+  shadow judge first.
+- **Not shipped:** fast paths that pass, without the judge, a write
+  adding one test or only imports. Three adversarial reviews each got
+  past a version of them. The bypasses were real writes that made a
+  failing test pass or be skipped: `expect.extend`, a test that skips
+  its siblings, code hidden from the parser, a new test placed under an
+  unbraced `if`. Skipping the judge safely would need to prove arbitrary
+  test code harmless.
 
 ## 0.4.59
 
