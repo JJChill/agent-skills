@@ -12,6 +12,7 @@ import {
   leadingCdDirectory,
   nestedCommitTree,
   owningTree,
+  splitTopLevelCommands,
   worktreeRoots,
 } from './commit-target.js'
 import { withJudgeTask } from './judge-task.js'
@@ -407,6 +408,36 @@ function shortened(command: string): string {
 
 // Probity doesn't export its canonical event type; derive it from the context.
 type SessionEvent = Awaited<ReturnType<NonNullable<RuleContext['history']>>>[number]
+
+const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
+const PACKAGE_RUNNERS = new Set(['npx', 'bunx'])
+const JS_RUNNER = /^(?:[\w./-]*\/)?(?:vitest|jest)$/
+
+/**
+ * Whether a shell command runs a JS/TS test suite: one of its top-level
+ * commands (split on `;`, `&&`, `||`, `|` and newlines, quote-aware)
+ * starts with `npm test`/`npm t`/`npm run test[:…]` (or pnpm, yarn, bun)
+ * or the vitest or jest binary, directly or through npx. A command that
+ * only mentions a runner (`echo vitest`, an issue body, `npm install -D
+ * vitest`) is not a run (issue #150). For `requireGreenTestRun`'s
+ * `commandPredicate`; the JS preset uses it with its default command.
+ */
+export function isJsTestInvocation(command: string): boolean {
+  return splitTopLevelCommands(command).some((segment) => {
+    const words = segment.trim().split(/\s+/).filter(Boolean)
+    if (words[0] === 'env') words.shift()
+    while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift()
+    const [first = '', second = '', third = ''] = words
+    if (PACKAGE_MANAGERS.has(first)) {
+      if (second === 'test' || second === 't') return true
+      if (second === 'run') return /^test(?::[\w:-]+)?$/.test(third)
+      if (first === 'pnpm' && (second === 'exec' || second === 'dlx')) return JS_RUNNER.test(third)
+      return first === 'yarn' && JS_RUNNER.test(second)
+    }
+    if (PACKAGE_RUNNERS.has(first)) return JS_RUNNER.test(second)
+    return JS_RUNNER.test(first)
+  })
+}
 
 /** How a test or build run is recognized and judged green, shared by the gates below. */
 export type GreenRunOptions = {

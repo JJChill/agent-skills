@@ -25,6 +25,7 @@ import { enforceAcceptanceLanguage } from '../rules/acceptance-language.js'
 import {
   forbidNewAmbientEffects,
   JS_AMBIENT_EFFECT_PATTERNS,
+  isJsTestInvocation,
   requireGreenTestRun,
   withJudgeFailureDiagnostics,
   withContradictionRetry,
@@ -103,7 +104,14 @@ export type JsPresetOptions = {
   /** Absolute path to a glossary (ubiquitous-language skill) to hold
    *  specs to. */
   glossaryPath?: string
-  /** The real test command your commit gate should look for. */
+  /**
+   * The real test command your commit gate should look for. It is
+   * matched against the whole shell command, so anchor it
+   * (`/^\s*make check\b/`): an unanchored pattern also matches a
+   * command that only mentions it, like an issue body. The default
+   * counts only a command that starts npm/pnpm/yarn test, vitest or
+   * jest ({@link isJsTestInvocation}).
+   */
   commitCommand?: RegExp
   /** Your runner's green summary line. */
   commitSuccessPattern?: RegExp
@@ -414,6 +422,9 @@ export function jsRuleEntries(options: JsPresetOptions = {}): RuleEntry[] {
   entries.push(
     requireGreenTestRun({
       command: options.commitCommand ?? /npm (run )?test|vitest|jest/,
+      // The default regex finds runner names anywhere, issue bodies
+      // included (#150); only a command that starts the runner counts.
+      commandPredicate: options.commitCommand ? undefined : isJsTestInvocation,
       successPattern:
         options.commitSuccessPattern ?? /Test Files\s+\d+ passed|Tests:\s+.*\b\d+ passed/,
       failurePattern: options.commitFailurePattern ?? /\d+ failed|FAIL\s/,
