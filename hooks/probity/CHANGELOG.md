@@ -21,13 +21,21 @@ Check compaction later without a live shadow: record, then replay
   - the judging task;
   - the verdict and reason the compacted prompt got.
 
-  The log is created `0600`. Recording never changes or blocks a
-  verdict.
+  The record also keeps the primary's telemetry. The log is kept at
+  `0600`, and recording never changes or blocks a verdict. Each judge
+  call is recorded, so a deny that `withContradictionRetry` later
+  retries is recorded as it was given.
 - **Replay:** `npx probity-shadow-replay <log>` asks a judge each recorded
   prompt and prints the same agreement, leaks and friction (with
   `--show`) as `probity-shadow-report`.
-  - Options: `--judge claude|kiro`, `--model ID`, `--limit N` (caps the
-    spend), `--concurrency N` (default 4).
+  - **Judge:** it defaults to the one the recorded primary ran on
+    (`kiro`, `claude`, `claude:<model>`), so disagreements measure
+    compaction rather than a different model. On another judge, the
+    report's heading says so.
+  - **Options:** `--judge claude|kiro`, `--model ID`, `--limit N` (caps
+    the spend), `--concurrency N` (default 4). An unknown option, or one
+    missing its value, is an error, so a mistyped `--limit` can't
+    silently replay the whole log.
   - It streams the log line by line.
   - The report's output now comes from one shared formatter, so both
     read the same.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 import type { Agent, Verdict } from '@nizos/probity'
@@ -37,17 +37,31 @@ export type WholePromptRecord = {
   promptSha256: string
   /** The whole-file prompt the compaction replaced. */
   wholePrompt: string
-  primary: { name: string; kind: Verdict['kind']; reason: string; durationMs: number }
+  primary: { name: string; kind: Verdict['kind']; reason: string; meta?: Verdict['meta']; durationMs: number }
 }
 
-/** Appends one record; a failure to write never reaches the verdict. */
+/** Appends one record, keeping the log `0600`; a failure to write never reaches the verdict. */
 export function appendWholePromptRecord(log: string, record: WholePromptRecord): void {
   try {
     mkdirSync(dirname(log), { recursive: true })
     appendFileSync(log, JSON.stringify(record) + '\n', { mode: 0o600 })
+    // `mode` applies only on creation; narrow a log created wider.
+    chmodSync(log, 0o600)
   } catch {
     // Measuring must never change enforcement.
   }
+}
+
+/**
+ * The judge a recorded primary ran on, by its name: `kiro`, `claude`, or
+ * `claude:<model>`. Null for any other name. Replaying on the primary's
+ * own judge keeps model differences out of the comparison.
+ */
+export function judgeForPrimary(name: string): { judge: 'kiro' | 'claude'; model?: string } | null {
+  if (name === 'kiro') return { judge: 'kiro' }
+  if (name === 'claude') return { judge: 'claude' }
+  const model = name.match(/^claude:(.+)$/)?.[1]
+  return model ? { judge: 'claude', model } : null
 }
 
 export function sha256(text: string): string {
@@ -87,7 +101,12 @@ export async function replayWholePrompts(
       unreadable++
       continue
     }
-    if (typeof record?.wholePrompt !== 'string' || !record.primary?.kind) {
+    if (
+      typeof record?.wholePrompt !== 'string' ||
+      typeof record.at !== 'string' ||
+      !record.primary?.kind ||
+      typeof record.primary.durationMs !== 'number'
+    ) {
       unreadable++
       continue
     }

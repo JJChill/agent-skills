@@ -274,20 +274,27 @@ export function compactJudgeFiles(rule: Rule, options: CompactJudgeFilesOptions 
       const started = Date.now()
       const verdict = await uncompacted.run(prompt, () => agent.reason(shown))
       const record = options.record
-      if (record && (record.random ?? Math.random)() < (record.sample ?? 0.1)) {
-        const task = judgeTask()
-        appendWholePromptRecord(record.log, {
-          at: new Date(started).toISOString(),
-          ...(task && { task }),
-          promptSha256: sha256(shown),
-          wholePrompt: prompt,
-          primary: {
-            name: (agent as Agent & { name?: string }).name ?? 'primary',
-            kind: verdict.kind,
-            reason: verdict.reason,
-            durationMs: Date.now() - started,
-          },
-        })
+      if (record) {
+        try {
+          if ((record.random ?? Math.random)() < (record.sample ?? 0.1)) {
+            const task = judgeTask()
+            appendWholePromptRecord(record.log, {
+              at: new Date(started).toISOString(),
+              ...(task && { task }),
+              promptSha256: sha256(shown),
+              wholePrompt: prompt,
+              primary: {
+                name: (agent as Agent & { name?: string }).name ?? 'primary',
+                kind: verdict.kind,
+                reason: verdict.reason,
+                ...(verdict.meta && { meta: verdict.meta }),
+                durationMs: Date.now() - started,
+              },
+            })
+          }
+        } catch {
+          // Measuring must never change enforcement.
+        }
       }
       return verdict
     }

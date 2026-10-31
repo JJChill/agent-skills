@@ -11,7 +11,9 @@ import test from 'node:test'
 import type { Agent, Rule, RuleContext, Verdict } from '@nizos/probity'
 
 import { compactJudgeFiles } from './compact-judge-files.ts'
-import { replayWholePrompts, type WholePromptRecord } from './whole-prompt-record.ts'
+import { chmodSync } from 'node:fs'
+
+import { judgeForPrimary, replayWholePrompts, type WholePromptRecord } from './whole-prompt-record.ts'
 
 function dir(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'whole-prompt-record-'))
@@ -120,4 +122,45 @@ test('replay stops at the limit and records a judge failure as unavailable', asy
   const { entries } = await replayWholePrompts(lines(recordLine({ kind: 'pass', reason: '' }), recordLine({ kind: 'pass', reason: '' })), judge, { limit: 1 })
   assert.equal(entries.length, 1)
   assert.equal(entries[0]!.candidates[0]!.error, 'kiro-cli not found')
+})
+
+// ── Review of #174 ──────────────────────────────────────────────────
+
+test('the record keeps the primary judge\'s telemetry, so a replay can use the same model', async (t) => {
+  const log = join(dir(t), 'whole.jsonl')
+  const meta = { models: [{ model: 'claude-opus-5.5', inputTokens: 1, outputTokens: 1 }] }
+  await compactJudgeFiles(rule, { record: { log, sample: 1 } })(write(EDITED), judged({ kind: 'pass', reason: '', meta }).ctx)
+  assert.deepEqual(records(log)[0]!.primary.meta, meta)
+})
+
+test('a recorder that throws never changes the verdict', async (t) => {
+  const log = join(dir(t), 'whole.jsonl')
+  const result = await compactJudgeFiles(rule, {
+    record: { log, sample: 1, random: () => { throw new Error('rng') } },
+  })(write(EDITED), judged({ kind: 'violation', reason: 'no red' }).ctx)
+  assert.equal(result.kind, 'violation')
+})
+
+test('an existing log with wider permissions is narrowed to 0600', async (t) => {
+  const log = join(dir(t), 'whole.jsonl')
+  writeFileSync(log, '')
+  chmodSync(log, 0o644)
+  await compactJudgeFiles(rule, { record: { log, sample: 1 } })(write(EDITED), judged({ kind: 'pass', reason: '' }).ctx)
+  assert.equal(statSync(log).mode & 0o777, 0o600)
+})
+
+test('replay counts a record with no time or duration as unreadable', async () => {
+  const judge = { name: 'kiro', reason: async () => ({ kind: 'pass', reason: '' }) } as Agent & { name: string }
+  const noAt = JSON.stringify({ promptSha256: 'a', wholePrompt: 'p', primary: { name: 'kiro', kind: 'pass', reason: '', durationMs: 1 } })
+  const noDuration = JSON.stringify({ at: '2026-11-01T00:00:00.000Z', promptSha256: 'a', wholePrompt: 'p', primary: { name: 'kiro', kind: 'pass', reason: '' } })
+  const { entries, unreadable } = await replayWholePrompts(lines(noAt, noDuration, recordLine({ kind: 'pass', reason: '' })), judge)
+  assert.equal(entries.length, 1)
+  assert.equal(unreadable, 2)
+})
+
+test('the replay judge defaults to the recorded primary\'s', () => {
+  assert.deepEqual(judgeForPrimary('kiro'), { judge: 'kiro' })
+  assert.deepEqual(judgeForPrimary('claude'), { judge: 'claude' })
+  assert.deepEqual(judgeForPrimary('claude:claude-opus-5-5'), { judge: 'claude', model: 'claude-opus-5-5' })
+  assert.equal(judgeForPrimary('primary'), null)
 })
