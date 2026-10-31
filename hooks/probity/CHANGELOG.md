@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.60
+
+More self-contradicting judge denies are retried (#169), and the docs say
+to pin the judge's model (#169–#171).
+
+- **What happened.** A JS/TS project whose judge ran on Sonnet
+  (`claudeJudge()` follows the CLI's default model) hit three kinds of
+  judge mistake. It denied single-test writes with text concluding they
+  were allowed (#169). It counted tests already on disk as new (#170).
+  It refused an import sent alone before the code using it (#171).
+- **Retry:** `withContradictionRetry` also retries a deny whose last
+  sentence ends "this/it is a valid … add/step/write" or "Correction:
+  …, which is allowed …". The second verdict stands. Qualified forms
+  aren't retried, such as "which is allowed only after …" or "Neither is
+  a valid red step".
+- **Docs:** "Choosing the AI judge" in `hooks/PROBITY.md` says the TDD
+  rules were measured on Opus. It says to set
+  `claudeJudge({ model: 'claude-opus-5-5' })`, or to measure with a
+  shadow judge first.
+- **Not shipped:** fast paths that pass, without the judge, a write
+  adding one test or only imports. Three adversarial reviews each got
+  past a version of them. The bypasses were real writes that made a
+  failing test pass or be skipped: `expect.extend`, a test that skips
+  its siblings, code hidden from the parser, a new test placed under an
+  unbraced `if`. Skipping the judge safely would need to prove arbitrary
+  test code harmless.
+
 ## 0.4.59
 
 Judges get a diff, not the whole file twice, for an edit to a large file
