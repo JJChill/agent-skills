@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.60
+
+Three JS/TS TDD judge failures from a project whose judge ran on Sonnet
+(#169, #170, #171). The first two fixes keep these writes away from the
+judge, so they hold whatever model judges.
+
+- **One new test skips the judge (#169, #170).** The judge denied
+  single-test writes in three ways. It denied with text concluding the
+  write was "a valid single red test add" (the identical retry passed).
+  It counted one new test as two. And it counted earlier, uncommitted
+  tests as new, which forced a commit just to reset it.
+  - **Now:** the JS preset turns on Probity's `fastPath`, as the Kotlin
+    presets already do. A test-file write that adds exactly one test,
+    counted against the file on disk, passes without the judge. A write
+    adding two still goes to the judge.
+  - **Trade-off:** a one-test write is no longer checked for a refactor
+    the previous green left unmade.
+- **An import alone skips the judge (#171).** Sent as a separate edit
+  before the code that uses it, an import was denied as "unused import,
+  not minimal green". Probity's own rules call that a transient state.
+  - **Now:** `withImportOnlyFastPath` passes a write to an existing
+    JS/TS file whose only change is to its static imports (single- or
+    multi-line, `import type` included). `enforceJsTdd` applies it.
+  - **Still judged:** side-effect imports (`import './x'`), imports
+    with code, and new files.
+  - **Unchanged:** edits sent in the same turn are each judged against
+    the file before the others land. Send dependent edits one after
+    another, or as one write.
+- **More self-contradicting denies are retried (#169).** The retry also
+  matches a last sentence ending "is a valid … add/step/write" and
+  "Correction: …, which is allowed …". The second verdict stands.
+
 ## 0.4.59
 
 Judges get a diff, not the whole file twice, for an edit to a large file

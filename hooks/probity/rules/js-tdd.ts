@@ -20,17 +20,56 @@ export const JS_TDD_ADDENDUM = `## Adding a red test
 ${IN_PROGRESS_TDD_RULE}
 ${GENERALISING_TDD_RULE}`
 
+// A whole static import statement, single- or multi-line, with or without
+// `type`. A side-effect import (`import './polyfill'`) has no `from` and
+// runs code, so it is not one.
+const STATIC_IMPORT = /^[ \t]*import\s+(?:type\s+)?[\w$*{},\s]+?\s+from\s+(['"])[^'"\n]+\1;?[ \t]*\n?/gm
+
+/**
+ * Passes, without the judge, a write to an existing JS/TS file whose only
+ * change is to its static imports (issue #171). An import does nothing
+ * until code uses it, and Probity's TDD rules already call an import
+ * awaiting a later write a transient state, but a judge (Sonnet, in the
+ * report) still refused one as "unused import, not minimal green". Any
+ * other change, a side-effect import, or a new file goes to `rule`.
+ */
+export function withImportOnlyFastPath(rule: Rule): Rule {
+  const wrapped: Rule = async (action, ctx) => {
+    if (action.kind === 'write' && /\.[cm]?[jt]sx?$/.test(action.path)) {
+      const before = await ctx?.readFile?.(action.path)
+      if (
+        before?.kind === 'present' &&
+        before.content !== action.content &&
+        before.content.replace(STATIC_IMPORT, '') === action.content.replace(STATIC_IMPORT, '')
+      ) {
+        return { kind: 'pass', reason: 'Only static imports changed: no behavior to test.' }
+      }
+    }
+    return rule(action, ctx)
+  }
+  Object.defineProperty(wrapped, 'name', { value: rule.name })
+  return wrapped
+}
+
 /**
  * Probity's `enforceTdd()` with {@link JS_TDD_ADDENDUM} appended, wrapped
  * as the JS preset wires it: a self-contradicting deny is retried, and a
  * judge that returns no verdict (spend limit, auth failure) is reported
  * as an infrastructure failure rather than a TDD rejection. Use this in
  * place of `withJudgeFailureDiagnostics(withContradictionRetry(enforceTdd()))`.
+ *
+ * Two kinds of write skip the judge: a test-file write adding exactly one
+ * test, counted against the file on disk (Probity's `fastPath`, as the
+ * Kotlin presets do; #169, #170), and a write that only changes static
+ * imports ({@link withImportOnlyFastPath}; #171). A one-test write
+ * therefore isn't checked for a refactor the previous green left unmade.
  */
 export function enforceJsTdd(): Rule {
-  return withJudgeFailureDiagnostics(
-    withContradictionRetry(
-      enforceTdd({ instructions: (defaults) => `${defaults}\n\n${JS_TDD_ADDENDUM}` }),
+  return withImportOnlyFastPath(
+    withJudgeFailureDiagnostics(
+      withContradictionRetry(
+        enforceTdd({ fastPath: true, instructions: (defaults) => `${defaults}\n\n${JS_TDD_ADDENDUM}` }),
+      ),
     ),
   )
 }

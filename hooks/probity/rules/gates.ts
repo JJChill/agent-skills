@@ -808,9 +808,13 @@ export function surfaceRemovedStringUsage(options: {
 // "... This is permitted." (#45), a bare verdict word such as "Pass."
 // or "Verdict: pass." (#50), or "... is not over-implementation."
 // Negated forms ("is not permitted", "does not pass"), qualified ones
-// ("permitted, but ...") and "the tests pass" do not match.
+// ("permitted, but ...") and "the tests pass" do not match. A Sonnet
+// judge's endings (#169): "... this is a valid single red test add." and
+// "Correction: ..., which is allowed as the red step."
 const PERMITTED_CONCLUSION = new RegExp(
   [
+    String.raw`\bis a valid (?:[\w-]+ ){0,4}(?:add|addition|step|write|change)\.?\s*$`,
+    String.raw`^correction:.*\bwhich is (?:allowed|permitted)\b[^,;]*\.?\s*$`,
     String.raw`\b(?:is|are) (?:permitted|allowed|acceptable|valid)\.?\s*$`,
     String.raw`\bshould (?:pass|be allowed)\.?\s*$`,
     String.raw`\bno violation\.?\s*$`,
