@@ -154,3 +154,39 @@ export function leadingCdDirectory(command: string): string | null {
   const dir = cd?.[1]?.replace(/^(['"])(.*)\1$/, '$2')
   return dir && isAbsolute(dir) ? dir : null
 }
+
+/** Splits on top-level `;`, `&&`, `||`, `|`, background `&`, and
+ *  newlines, quote-aware, without splitting a redirect's `&` (`2>&1`).
+ *  Shared by the Gradle (Kotlin) and JS test-command checks. */
+export function splitTopLevelCommands(command: string): string[] {
+  const segments: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (quote) {
+      current += ch
+      if (ch === quote && command[i - 1] !== '\\') quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      current += ch
+      continue
+    }
+    const isRedirectAmpersand =
+      ch === '&' &&
+      (command[i - 1] === '>' ||
+        command[i - 1] === '<' ||
+        command[i + 1] === '>')
+    if ('\n|;&'.includes(ch) && !isRedirectAmpersand) {
+      if ('|&'.includes(ch) && command[i + 1] === ch) i++
+      segments.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  segments.push(current)
+  return segments
+}

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.58
+
+Two fixes for the JS/TS preset (#150, #166).
+
+- **The commit gate counts only a command that runs the suite (#150).**
+  The default command pattern, `/npm (run )?test|vitest|jest/`, matched
+  those words anywhere in a shell command. A `gh issue create` whose body
+  mentioned vitest was recorded as the latest test run, and the next
+  commit was denied as not green. In reverse, `echo "Test Files 4
+  passed"` mentioning vitest could pass as a green run.
+  - **Now:** the default counts a command only when one of its
+    top-level commands starts the suite: `npm test`, `npm run
+    test[:…]`, pnpm, yarn or bun the same way, or vitest or jest,
+    directly or through npx. Pipes and chains still count (`cd /repo
+    && npm test | tail`).
+  - The check is exported as `isJsTestInvocation`.
+  - The Gradle check and this one now share one quote-aware splitter.
+  - **Unchanged:** a custom `commitCommand` is used as given; its doc
+    now says to anchor it.
+- **The JS/TS TDD judge allows a type-only fix for a type-check
+  failure (#166).** vitest doesn't type-check. In the Tax repo, a green
+  step widened a union, and `tsc --noEmit` then failed in an existing
+  test. Every type-only fix was refused as "not driven by a failing
+  test": narrowing a return type, splitting the type, and restating the
+  assertion. That left no path forward.
+  - **Now:** a write that changes only types to make the type check pass
+    is part of the step that caused the failure, or a refactor under
+    green. That covers production or test code. A restated assertion
+    must stay at least as strong.
+  - **Still judged as usual:** a write that also changes runtime
+    behavior or weakens an assertion. A block must say which part of
+    the write isn't type-only.
+
 ## 0.4.57
 
 Three fixes from real sessions (#164, #162, #151).
