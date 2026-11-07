@@ -42,6 +42,7 @@ const INTERPRETER = /^(?:python(?:\d[\d.]*)?|node|nodejs|ruby|perl|bun|deno|php)
 const SCRIPT_WRITE_APIS = [
   // Python
   /\bopen\s*\([^)]*?,\s*(?:mode\s*=\s*)?['"][^'"]*[wax+]/,
+  /\bopen\s*\([^)]*\bmode\s*=\s*['"][^'"]*[wax+]/,
   /\.write_(?:text|bytes)\s*\(/,
   /\bshutil\.(?:copy\w*|move)\s*\(/,
   /\bos\.(?:replace|rename)\s*\(/,
@@ -57,6 +58,75 @@ const SCRIPT_WRITE_APIS = [
   /\bopen\s*\(?\s*(?:my\s+)?[$\w]+\s*,\s*['"]?\+?>/,
   /\bfile_put_contents\s*\(/,
 ]
+
+type TextSpan = { start: number; end: number }
+
+/** Add the first quoted argument of a call to the ignored literal spans. */
+function ignoreFirstLiteral(spans: TextSpan[], match: RegExpMatchArray): void {
+  const literal = `${match[1]}${match[2]}${match[1]}`
+  const offset = (match.index ?? 0) + match[0].indexOf(literal)
+  spans.push({ start: offset, end: offset + literal.length })
+}
+
+/**
+ * String literals that are inputs to known read-only call sites, or source
+ * operands of copy calls, are not write targets. Keep their source spans so
+ * an inline script can still be scanned conservatively for other literals.
+ */
+function nonWriteScriptLiterals(script: string): TextSpan[] {
+  const spans: TextSpan[] = []
+  const calls = /\bopen\s*\(\s*(['"])([^'"\n]+)\1([^)]*)\)/g
+  for (const match of script.matchAll(calls)) {
+    const rest = (match[3] ?? '').trim().replace(/^,\s*/, '')
+    const modeKeyword = /(?:^|,)\s*mode\s*=/.test(rest)
+    const mode = /(?:^|,)\s*mode\s*=\s*(['"])([^'"\n]*)\1/.exec(rest)
+    const positionalMode = /^\s*(['"])([^'"\n]*)\1/.exec(rest)
+    const firstArgumentIsKeyword = /^(?:encoding|errors|newline|closefd|opener)\s*=/.test(rest)
+    const unknownMode =
+      (modeKeyword && !mode) || (!modeKeyword && !positionalMode && !!rest && !firstArgumentIsKeyword)
+    const modeValue = mode?.[2] ?? positionalMode?.[2]
+    const readOnly = !unknownMode && (modeValue === undefined || !/[wax+]/.test(modeValue))
+    if (!readOnly) continue
+    ignoreFirstLiteral(spans, match)
+  }
+
+  for (const match of script.matchAll(
+    /\b(?:Path|PurePath)\s*\(\s*(['"])([^'"\n]+)\1\s*\)\s*\.\s*read_(?:text|bytes)\s*\(/g,
+  )) {
+    ignoreFirstLiteral(spans, match)
+  }
+
+  for (const match of script.matchAll(
+    /\b(?:readFile|readFileSync|readTextFile)\s*\(\s*(['"])([^'"\n]+)\1/g,
+  )) {
+    ignoreFirstLiteral(spans, match)
+  }
+
+  for (const match of script.matchAll(
+    /\b(?:shutil\.copy\w*|FileUtils\.(?:cp|copy)|copyFile)\s*\(\s*(['"])([^'"\n]+)\1/g,
+  )) {
+    ignoreFirstLiteral(spans, match)
+  }
+
+  return spans
+}
+
+/**
+ * Return string literals from an inline interpreter script while excluding
+ * literals used only as read inputs by the supported APIs. Unknown or dynamic
+ * write paths remain covered by the surrounding shell-variable/argument scan.
+ */
+function scriptLiterals(script: string): string[] {
+  const nonWrite = nonWriteScriptLiterals(script)
+  const literals: string[] = []
+  for (const match of script.matchAll(/(['"])([^'"\n]+)\1/g)) {
+    const start = match.index ?? 0
+    const end = start + match[0].length
+    if (nonWrite.some((span) => start >= span.start && end <= span.end)) continue
+    literals.push(match[2]!)
+  }
+  return literals
+}
 
 type Heredoc = { body: string; expands: boolean }
 type Token = { kind: 'word'; text: string; heredoc?: Heredoc; substitutions: string[] } | { kind: 'op'; text: string }
@@ -480,7 +550,7 @@ function scanShellWrites(command: string, cwd: string): { paths: string[]; workt
       const inline = args.flatMap((arg, at) => (/^-[a-zA-Z]*[ce]$/.test(arg) ? [args[at + 1] ?? ''] : []))
       const script = [...simple.stdin, ...inline].join('\n')
       if (!SCRIPT_WRITE_APIS.some((api) => api.test(script))) continue
-      for (const literal of script.matchAll(/(['"])([^'"\n]+)\1/g)) add(literal[2]!)
+      scriptLiterals(script).forEach(add)
       args.filter((arg) => !arg.startsWith('-') && !inline.includes(arg)).forEach(add)
       for (const values of vars.values()) values.forEach(add)
     }

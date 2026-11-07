@@ -87,6 +87,55 @@ test('blocks node, ruby and python -c writes', async () => {
   )
 })
 
+test('allows a heredoc that reads a scoped file and writes only outside the tree', async () => {
+  await assertAllowed([
+    'python3 -I - <<\'EOF\'',
+    'from pathlib import Path',
+    "contents = open('src/a.ts').read()",
+    "Path('/tmp/a.txt').write_text(contents)",
+    'EOF',
+  ].join('\n'))
+})
+
+test('allows read_text and copy sources while retaining write destinations', async () => {
+  await assertAllowed([
+    'python3 -I - <<\'EOF\'',
+    'from pathlib import Path',
+    "contents = Path('src/a.ts').read_text()",
+    "Path('/tmp/a.txt').write_text(contents)",
+    "import shutil; shutil.copy('/tmp/a.txt', '/tmp/b.txt')",
+    'EOF',
+  ].join('\n'))
+})
+
+test('still blocks a heredoc that writes a scoped file after reading elsewhere', async () => {
+  await assertBlocked([
+    'python3 -I - <<\'EOF\'',
+    'from pathlib import Path',
+    "contents = open('/tmp/a.txt').read()",
+    "Path('src/a.ts').write_text(contents)",
+    'EOF',
+  ].join('\n'), 'src/a.ts')
+})
+
+test('still blocks open write modes when mode follows another keyword argument', async () => {
+  await assertBlocked(
+    "python3 -c \"open('src/a.ts', encoding='utf-8', mode='w').write('x')\"",
+    'src/a.ts',
+  )
+})
+
+test('still blocks a copy into a scoped file', async () => {
+  await assertBlocked(
+    "python3 -c \"import shutil; shutil.copy('/tmp/a.txt', 'src/a.ts')\"",
+    'src/a.ts',
+  )
+})
+
+test('still blocks a rename that removes a scoped source', async () => {
+  await assertBlocked("python3 -c \"import os; os.rename('src/a.ts', '/tmp/a.ts')\"", 'src/a.ts')
+})
+
 test('blocks a patch applied from a heredoc', async () => {
   const command = [
     "git apply <<'EOF'",
