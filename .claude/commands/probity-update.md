@@ -60,7 +60,7 @@ From 0.4.63, `probity-scope-report --strict` exits 1 on a plain `!` negation in 
 
 From 0.4.67, the package ships CI jobs in `node_modules/@jjchill/probity-rules/ci/` (`github-actions.yml`, `gitlab-ci.yml`). If the project's CI runs none of `probity-scope-report --strict`, `probity-spec-parity` and `probity-review-record`, offer the template for its CI system and the edits its marked lines need. Never replace CI jobs the project already has.
 
-After 0.4.67 (#200), the Kiro shim passes its 55 s deadline to Probity, and `kiroJudge` stops 20 s before it so a `judgeChain` can fall back within the same hook run. Step 5's shim refresh carries the shim side. If the config's `ai` is `kiroJudge(...)` on its own, with no judge after it, propose adding `fallbackReserveMs: 0`; leave chained configs alone.
+From 0.4.68 (#200), the Kiro shim passes its 55 s deadline to Probity, and `kiroJudge` stops 20 s before it so a `judgeChain` can fall back within the same hook run. Step 5's shim refresh carries the shim side. If the config's `ai` is `kiroJudge(...)` on its own, with no judge after it, propose adding `fallbackReserveMs: 0`; leave chained configs alone.
 
 From 0.4.67, the mutation-probe and characterization round-trips (`withMutationProbe`, `enforceProbeReversion`, `withCharacterizationTest`, `enforceCharacterizationResolution`, `withInverseScenarioGuidance`) are exported from `@jjchill/probity-rules` and `@jjchill/probity-rules/rules/round-trips`. `rules/kotlin` still re-exports them. In a non-Kotlin config that imports them from `rules/kotlin`, you may propose the new import; it is optional.
 
