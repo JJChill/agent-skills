@@ -31,6 +31,14 @@ Ready-made CI jobs for consuming projects.
 - **No rule behaviour changes.** A test checks that every bin and flag the templates call exists.
 - **Migration:** nothing changes for an existing project. If the project's CI runs none of these checks, `/probity-update` offers the template for its CI system.
 
+The language-neutral round-trips move out of `rules/kotlin`.
+
+- **Before:** `withMutationProbe`, `enforceProbeReversion`, `withCharacterizationTest`, `enforceCharacterizationResolution`, `withInverseScenarioGuidance`, `MUTATION_PROBE_MARKER` and `CHARACTERIZATION_MARKER` were exported only from `@jjchill/probity-rules/rules/kotlin`, though they work for any language. The JS/TS template had to say "despite the filename".
+- **Now:** they live in `rules/round-trips.ts`, exported from `@jjchill/probity-rules/rules/round-trips` and from the package root.
+  - `@jjchill/probity-rules/rules/kotlin` still re-exports the same functions, so existing imports keep working; a test pins that.
+  - No rule behaviour changes, and the presets wire exactly what they did.
+- **Migration:** none required. `/probity-update` may propose importing them from `@jjchill/probity-rules` in a config that imports them from `rules/kotlin` without using anything Kotlin-specific; the old path stays.
+
 ## 0.4.66
 
 `requireReviewRecord` no longer misses a merge that switches branches first ([#195](https://github.com/JJChill/agent-skills/issues/195)).
