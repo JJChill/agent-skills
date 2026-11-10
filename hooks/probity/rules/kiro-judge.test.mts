@@ -404,3 +404,18 @@ test('claudeJudge executable picks the bundled claude, a given path, or insists 
     assert.equal(sdk.seen.length, 0)
   })
 })
+
+// The judge's rules were measured on Opus; an unpinned claudeJudge()
+// runs on whatever the CLI defaults to (hooks/PROBITY.md, "Pin the
+// judge's model"). Every template must ship with the model pinned.
+test('every config template pins the Claude judge model', async () => {
+  const { readdirSync, readFileSync } = await import('node:fs')
+  const root = new URL('../', import.meta.url)
+  const templates = readdirSync(root).filter((name) => /^probity\.config(\.\w+)?\.ts$/.test(name))
+  assert.equal(templates.length, 4)
+  for (const name of templates) {
+    const text = readFileSync(new URL(name, root), 'utf8')
+    assert.doesNotMatch(text, /claudeJudge\(\)/, `${name} has an unpinned claudeJudge()`)
+    assert.match(text, /ai: claudeJudge\(\{ model: 'claude-opus-5-5' \}\)/, name)
+  }
+})

@@ -14,7 +14,7 @@ contract.
 | `kiro-agent.template.json` | agent config template (skills + both hooks) |
 
 The shim still asks Probity's default judge, on the Claude login. To judge
-on kiro-cli as well, set `ai: judgeChain([kiroJudge(), claudeJudge()])` in
+on kiro-cli as well, set `ai: judgeChain([kiroJudge(), claudeJudge({ model: 'claude-opus-5-5' })])` in
 `probity.config.ts` (see `hooks/PROBITY.md`, "Choosing the AI judge"). The
 judge runs a no-tool, no-hook agent, so it never triggers this shim.
 

@@ -42,6 +42,9 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 export default probityConfig({
   rules: kotlinRuleEntries(ROOT),
   // The installed Claude Code judges, not the copy bundled with Probity's
-  // Agent SDK (hooks/PROBITY.md, "Choosing the AI judge").
-  ai: claudeJudge(),
+  // Agent SDK, on the model the judge's rules were measured on: unpinned,
+  // it runs on whatever the CLI defaults to, and Sonnet let about a
+  // quarter of Opus's TDD denials through (hooks/PROBITY.md, "Choosing
+  // the AI judge"). Change the model only after measuring it there.
+  ai: claudeJudge({ model: 'claude-opus-5-5' }),
 })
