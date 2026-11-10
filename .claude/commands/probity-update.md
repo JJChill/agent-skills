@@ -58,6 +58,8 @@ From 0.4.51, the templates export `probityConfig({...})` (from `@jjchill/probity
 
 From 0.4.63, `probity-scope-report --strict` exits 1 on a plain `!` negation in `tddGlobs` that declares no review obligation. For each one, propose the object form `{ glob, id, reviewWith, check, reason }` (hooks/PROBITY.md, "Review obligations"). If no rule should check those files at all, propose moving the glob to `excludeGlobs` instead.
 
+From 0.4.67, the package ships CI jobs in `node_modules/@jjchill/probity-rules/ci/` (`github-actions.yml`, `gitlab-ci.yml`). If the project's CI runs none of `probity-scope-report --strict`, `probity-spec-parity` and `probity-review-record`, offer the template for its CI system and the edits its marked lines need. Never replace CI jobs the project already has.
+
 Also check the Claude Code hook command in `.claude/settings.json`. From 0.4.2, it should run `./node_modules/.bin/probity-claude` instead of `./node_modules/.bin/probity --agent claude-code`, so work done inside sub-agents is judged against the sub-agent's own transcript. Propose that edit with the config edits.
 
 ## 5. Refresh the Kiro shim

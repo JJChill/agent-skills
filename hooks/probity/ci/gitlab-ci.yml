@@ -1,0 +1,71 @@
+# Probity CI checks for a project using @jjchill/probity-rules, as
+# GitLab CI jobs.
+#
+# Paste these jobs into .gitlab-ci.yml (or `include:` this file) and edit
+# the marked lines. The PreToolUse hook judges what an agent does; CI is
+# the arbiter of record (hooks/PROBITY.md): it also covers work done
+# outside a hooked agent, in the web UI, or by a person.
+#
+#   probity:        probity-scope-report --strict fails on a rule block
+#                   that matches no file or claims the wrong layer;
+#                   probity-spec-parity fails when a non-wip scenario has
+#                   no covering test (delete it if the project keeps no
+#                   specs).
+#   review-record:  every push to the default branch: each merge (and,
+#                   with --all-first-parent, each direct commit) that
+#                   changes code carries a Reviewed-by-agent record.
+#                   Delete the job if probity.config.ts sets no
+#                   review.record. Merge with merge commits (or
+#                   semi-linear), so there is a commit to carry it.
+#
+# Needs @nizos/probity and @jjchill/probity-rules in devDependencies.
+# Pin the image by digest if your runners require it.
+
+stages:
+  - verify # EDIT: or put the jobs in a stage you already have
+
+probity:
+  stage: verify
+  image: node:22-bookworm
+  needs: []
+  cache:
+    key: npm-$CI_COMMIT_REF_SLUG
+    paths:
+      - node_modules
+  script:
+    - npm ci --no-audit --no-fund
+    - npx probity-scope-report --config probity.config.ts --strict
+    # EDIT: --specs is your specs directory (the JS/TS template uses
+    # specs/, the Kotlin, KMP and Swift ones docs/specs). Drop
+    # --baseline if you never wrote one.
+    - npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline
+
+review-record:
+  stage: verify
+  image: node:22-bookworm
+  needs: []
+  # Not interruptible, so a later push can't cancel it and leave a merge
+  # unchecked.
+  interruptible: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE == "push"
+  variables:
+    GIT_DEPTH: 0 # the merges' diffs and first parents are needed
+    GIT_SUBMODULE_STRATEGY: none
+  cache:
+    key: npm-$CI_COMMIT_REF_SLUG
+    paths:
+      - node_modules
+  script:
+    - npm ci --no-audit --no-fund
+    # Checks only what this push brought in; a push with no usable
+    # before-SHA (new branch, force push) checks its own commit.
+    # --routed-range also checks each record names every agent today's
+    # routes select (only when review.record.requireRoutedAgents is set).
+    # --all-first-parent also judges direct commits; drop it to judge
+    # merges only.
+    - |
+      BASE="$CI_COMMIT_BEFORE_SHA"
+      if echo "$BASE" | grep -q '^0*$' || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE="$CI_COMMIT_SHA^1"; fi
+      npx probity-review-record --range "$BASE..$CI_COMMIT_SHA" --routed-range "$BASE..$CI_COMMIT_SHA" \
+        --all-first-parent --config probity.config.ts
