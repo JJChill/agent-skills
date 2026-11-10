@@ -16,6 +16,12 @@ The templates pin the Claude judge's model.
 - **Cost:** Opus costs more per verdict than Sonnet. A project that wants a cheaper judge should measure it first with `shadowJudge`.
 - **Migration:** a config copied from an earlier template keeps its unpinned judge. `/probity-update` proposes `{ model: 'claude-opus-5-5' }` for each unpinned `claudeJudge()`, including a `judgeChain` fallback, and leaves judges pinned to another model alone.
 
+The JS/TS template makes spec-first one step to turn on, and says what the preset does not enforce by default.
+
+- **Template:** `probity.config.ts` carries `specsDir: fileURLToPath(new URL('./specs', import.meta.url))` commented out, with what it turns on, and imports `fileURLToPath`. `specs/` matches the preset's default `specGlobs`, so uncommenting the line wires the write-time `Covers:` gate, scenario-link breakage, scenario fidelity and the parity commit gate together. The header lists what the preset enforces as shipped and what it doesn't.
+- **No rule behaviour changes.** `jsRuleEntries` is unchanged; spec-first stays off until `specsDir` is set.
+- **Migration:** a JS/TS config with no `specsDir` keeps working as before. `/probity-update` mentions that spec-first is available and proposes the line only if the project has, or wants, specs in `specs/`.
+
 ## 0.4.66
 
 `requireReviewRecord` no longer misses a merge that switches branches first ([#195](https://github.com/JJChill/agent-skills/issues/195)).
