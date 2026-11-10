@@ -266,6 +266,8 @@ an explicit fast-path-unavailable diagnostic.
 cp node_modules/@jjchill/probity-rules/probity.config.ts ./probity.config.ts   # or probity.config.kotlin.ts / .kmp.ts / .swift.ts
 ```
 
+**The JS/TS preset enforces less out of the box than the others.** As shipped it enforces the TDD gate, core purity, no mocking of your own modules, the Language Test on spec files, thin driving adapters, no fixed waits in acceptance code, and a green test run before every commit. It does **not** enforce spec-first until you set `specsDir`: without it, an acceptance test needn't cite a scenario, a spec edit can orphan a test, and commits don't check spec↔test parity. The template has the line ready: uncomment `specsDir` in `probity.config.ts` (specs in `specs/*.feature.md`, acceptance tests in `acceptance/**/*.test.*`). The mutation-probe and characterization round-trips that let you retrofit tests onto existing code are wired only in the Kotlin, KMP and Swift presets. The Kotlin, KMP and Swift presets turn spec-first on by default.
+
 Keep `probity.config.ts` at the project root: Probity discovers it by searching upward from the working directory. The rule modules and scripts the template imports live inside the installed package — nothing else needs copying.
 
 If the project will use the glossary or spec-parity rules, seed the files they read: copy `node_modules/@jjchill/probity-rules/GLOSSARY.template.md` to `docs/GLOSSARY.md`, and create `docs/specs/` for feature files. Both degrade gracefully while absent, but the Kotlin Multiplatform and Swift presets are built around them.
@@ -277,7 +279,7 @@ If the project will use the glossary or spec-parity rules, seed the files they r
 - **Spec-layer globs.** The acceptance specification files only, never the DSL or protocol-driver layers (those legitimately contain the mechanics the Language Test blocks).
 - **Commit gate.** The `command`, `successPattern`, and `failurePattern` passed to `requireGreenTestRun` must match the project's real test command and its runner's summary lines. The JS/TS default covers vitest and jest, Kotlin defaults to Gradle, Swift to `xcodebuild`.
 - **Infrastructure import screen.** Extend the known-vendor regex with the project's actual frameworks, SDKs, and I/O libraries.
-- **Preset-specific paths.** Kotlin and Swift presets: `specsDir`, `testFilePattern`, module and package names. Optional `glossaryPath` and `seamHint` once a glossary and canonical ports exist.
+- **Preset-specific paths.** Kotlin and Swift presets: `specsDir`, `testFilePattern`, module and package names. JS/TS: uncomment `specsDir` to turn spec-first on (see above). Optional `glossaryPath` and `seamHint` once a glossary and canonical ports exist.
 
 Brownfield codebase? The deterministic rules are delta-based (only what a write *introduces* blocks; existing call sites do not), and a spec suite that predates the parity gate gets a one-time baseline so existing gaps do not block every specs/acceptance commit:
 

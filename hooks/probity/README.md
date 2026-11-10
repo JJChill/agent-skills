@@ -68,6 +68,11 @@ export default defineConfig({ rules: kmpRuleEntries(ROOT) })
 Every preset's options and their current defaults are documented at the top
 of its module in `presets/`.
 
+The JS/TS preset leaves spec-first off until `specsDir` is set: no
+`Covers:` tag is required on acceptance tests, spec edits may orphan a
+test, and commits don't check spec↔test parity. `probity.config.ts` has
+the line ready to uncomment. The Kotlin, KMP and Swift presets have it on.
+
 ## Bins
 
 - `npx probity-scope-report [--config probity.config.ts] [--root .] [--strict]`
