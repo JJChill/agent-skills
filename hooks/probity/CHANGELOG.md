@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+A labelled judge set, replayable before a release, so a judge change that lets more through shows up before consumers see it.
+
+- **`probity-shadow-replay`** reads a labelled set: a log whose recorded verdicts are named `expected`. There a leak is a write labelled `violation` that the judge passed, and friction one labelled `pass` that it denied. `--judge` is required for such a set.
+- **`--repeat N`** asks each recorded prompt N times, for whole-prompt logs and labelled sets alike.
+- **`replayWholePrompts`** takes `repeat` and `candidateName` options; existing calls are unchanged.
+- **For maintainers:** `evals/judge-cases.ts` holds the cases, `npm run eval:judge` builds and replays them, and `npm test` checks every case still reaches its judge. No rule behaviour changes, so `/probity-update` has nothing to migrate.
+
 ## 0.4.66
 
 `requireReviewRecord` no longer misses a merge that switches branches first ([#195](https://github.com/JJChill/agent-skills/issues/195)).

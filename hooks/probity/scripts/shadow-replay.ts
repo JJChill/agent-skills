@@ -6,7 +6,7 @@
  * `probity-shadow-report` does for a live shadow.
  *
  *   npx probity-shadow-replay .probity/whole-prompts.jsonl [--judge claude|kiro] [--model ID]
- *     [--limit N] [--concurrency N] [--show leaks|friction|all]
+ *     [--limit N] [--repeat N] [--concurrency N] [--show leaks|friction|all]
  *
  * Record with the presets' `compactJudgeFiles: { record: { log, sample } }`.
  * The judge defaults to the one the recorded primary ran on (`kiro`,
@@ -17,17 +17,24 @@
  * denied; friction the reverse. Each replayed prompt is one judge call,
  * on your account: `--limit` caps the spend. The prompts hold code and
  * session context, so keep the log local.
+ *
+ * It also replays the labelled judge set (hooks/probity/evals,
+ * `npm run eval:judge`), whose recorded verdicts are the ones a correct
+ * judge gives. There a leak is a write labelled `violation` that the
+ * judge passed, friction one labelled `pass` that it denied, and
+ * `--judge` is required. `--repeat N` asks each prompt N times, since
+ * one judge can answer the same prompt both ways (#169).
  */
 import { closeSync, createReadStream, openSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 import { claudeJudge, kiroJudge } from '../rules/kiro-judge.js'
-import { judgeForPrimary, replayWholePrompts, type WholePromptRecord } from '../rules/whole-prompt-record.js'
+import { judgeForPrimary, LABELLED_PRIMARY, replayWholePrompts, type WholePromptRecord } from '../rules/whole-prompt-record.js'
 import { shadowReportLines } from './shadow-format.js'
 
 const USAGE =
   'usage: probity-shadow-replay <whole-prompts.jsonl> [--judge claude|kiro (default: the recorded primary)] [--model ID] [--limit N] ' +
-  '[--concurrency N] [--show leaks|friction|all]'
+  '[--repeat N] [--concurrency N] [--show leaks|friction|all]'
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n${USAGE}\n`)
@@ -35,7 +42,7 @@ function fail(message: string): never {
 }
 
 const args = process.argv.slice(2)
-const VALUED = new Set(['--judge', '--model', '--limit', '--concurrency', '--show'])
+const VALUED = new Set(['--judge', '--model', '--limit', '--repeat', '--concurrency', '--show'])
 // Strict, because a dropped `--limit` would replay the whole log on your
 // account: every `--x` must be known and have a value.
 for (let i = 0; i < args.length; i++) {
@@ -62,6 +69,7 @@ const count = (name: string) => {
   return n
 }
 const limit = count('--limit')
+const repeat = count('--repeat') ?? 1
 const concurrency = count('--concurrency') ?? 4
 if (!path) fail('no record log given')
 
@@ -82,15 +90,30 @@ for await (const line of createInterface({ input: createReadStream(path, 'utf8')
   }
   if (recordedPrimary) break
 }
+const labelled = recordedPrimary === LABELLED_PRIMARY
 const recorded = recordedPrimary ? judgeForPrimary(recordedPrimary) : null
 const judgeKind = chosenJudge ?? recorded?.judge
-if (!judgeKind) fail(`the log's primary judge is ${recordedPrimary ?? 'not recorded'}: say which to replay on with --judge`)
+if (!judgeKind) {
+  fail(
+    labelled
+      ? `${path} is a labelled judge set: say which judge to measure with --judge (and --model)`
+      : `the log's primary judge is ${recordedPrimary ?? 'not recorded'}: say which to replay on with --judge`,
+  )
+}
 const model = option('--model') ?? (judgeKind === recorded?.judge ? recorded.model : undefined)
 const judge = judgeKind === 'kiro' ? kiroJudge(model ? { model } : {}) : claudeJudge(model ? { model } : {})
 const sameJudge = recordedPrimary === (judge as { name?: string }).name
 const lines = createInterface({ input: createReadStream(path, 'utf8'), crlfDelay: Infinity })
-const { entries, unreadable } = await replayWholePrompts(lines, judge, { limit, concurrency })
-const heading =
-  `Replay of ${path} (whole-file prompts; primary verdicts were on compacted prompts` +
-  (sameJudge ? ')' : `; primary ${recordedPrimary ?? 'unknown'}, replayed on ${(judge as { name?: string }).name}, so model differences count too)`)
+const judgeName = (judge as { name?: string }).name ?? judgeKind
+const { entries, unreadable } = await replayWholePrompts(lines, judge, {
+  limit,
+  concurrency,
+  repeat,
+  ...(labelled && { candidateName: judgeName }),
+})
+const repeated = repeat > 1 ? `, each asked ${repeat} times` : ''
+const heading = labelled
+  ? `Labelled judge set ${path} on ${judgeName} (primary = the expected verdict${repeated})`
+  : `Replay of ${path} (whole-file prompts; primary verdicts were on compacted prompts${repeated}` +
+    (sameJudge ? ')' : `; primary ${recordedPrimary ?? 'unknown'}, replayed on ${judgeName}, so model differences count too)`)
 process.stdout.write(shadowReportLines(entries, { heading, unreadable, show }).join('\n') + '\n')

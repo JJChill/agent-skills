@@ -73,20 +73,29 @@ function judgeName(judge: Agent): string {
 }
 
 /**
- * Asks `judge` each recorded whole-file prompt (up to `limit`, at most
- * `concurrency` at a time) and returns shadow-log entries: the recorded
- * verdict as the primary, and the judge's answer as a
- * `<name>:whole-files` candidate. A judge that throws is logged as
- * unavailable. Lines that aren't records are counted, not judged.
+ * The primary name a labelled judge set (hooks/probity/evals) gives its
+ * records: the recorded verdict is the label a correct judge gives, not
+ * a judge's answer.
+ */
+export const LABELLED_PRIMARY = 'expected'
+
+/**
+ * Asks `judge` each recorded whole-file prompt (up to `limit` records,
+ * each `repeat` times, at most `concurrency` calls at a time) and
+ * returns shadow-log entries: the recorded verdict as the primary, and
+ * the judge's answer as a candidate named `<name>:whole-files`, or
+ * `candidateName`. A judge that throws is logged as unavailable. Lines
+ * that aren't records are counted, not judged.
  */
 export async function replayWholePrompts(
   lines: AsyncIterable<string>,
   judge: Agent,
-  options: { limit?: number; concurrency?: number } = {},
+  options: { limit?: number; concurrency?: number; repeat?: number; candidateName?: string } = {},
 ): Promise<{ entries: ShadowLogEntry[]; unreadable: number }> {
   const limit = options.limit ?? Infinity
   const concurrency = Math.max(1, options.concurrency ?? 1)
-  const name = `${judgeName(judge)}:whole-files`
+  const repeat = Math.max(1, options.repeat ?? 1)
+  const name = options.candidateName ?? `${judgeName(judge)}:whole-files`
   const entries: ShadowLogEntry[] = []
   const running = new Set<Promise<void>>()
   let unreadable = 0
@@ -111,26 +120,28 @@ export async function replayWholePrompts(
       continue
     }
     taken++
-    const job = (async () => {
-      const started = Date.now()
-      let candidate: ShadowLogEntry['candidates'][number]
-      try {
-        const verdict = await judge.reason(record.wholePrompt)
-        candidate = { name, kind: verdict.kind, reason: verdict.reason, ...(verdict.meta && { meta: verdict.meta }), durationMs: Date.now() - started }
-      } catch (error) {
-        candidate = { name, error: error instanceof Error ? error.message : String(error), durationMs: Date.now() - started }
-      }
-      entries.push({
-        at: record.at,
-        ...(record.task && { task: record.task }),
-        promptSha256: record.promptSha256,
-        primary: record.primary,
-        candidates: [candidate],
-      })
-    })()
-    running.add(job)
-    void job.finally(() => running.delete(job))
-    if (running.size >= concurrency) await Promise.race(running)
+    for (let run = 0; run < repeat; run++) {
+      const job = (async () => {
+        const started = Date.now()
+        let candidate: ShadowLogEntry['candidates'][number]
+        try {
+          const verdict = await judge.reason(record.wholePrompt)
+          candidate = { name, kind: verdict.kind, reason: verdict.reason, ...(verdict.meta && { meta: verdict.meta }), durationMs: Date.now() - started }
+        } catch (error) {
+          candidate = { name, error: error instanceof Error ? error.message : String(error), durationMs: Date.now() - started }
+        }
+        entries.push({
+          at: record.at,
+          ...(record.task && { task: record.task }),
+          promptSha256: record.promptSha256,
+          primary: record.primary,
+          candidates: [candidate],
+        })
+      })()
+      running.add(job)
+      void job.finally(() => running.delete(job))
+      if (running.size >= concurrency) await Promise.race(running)
+    }
   }
   await Promise.all(running)
   entries.sort((a, b) => a.at.localeCompare(b.at))

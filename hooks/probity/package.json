@@ -60,9 +60,11 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test rules/*.test.mts scripts/*.test.mjs",
+    "test": "tsx --test rules/*.test.mts scripts/*.test.mjs evals/*.test.mts",
     "test:kiro": "for f in kiro/*.test.py; do python3 \"$f\" || exit 1; done",
     "eval": "tsx evals/workflow-eval.ts",
+    "eval:judge-set": "tsx evals/judge-set.ts",
+    "eval:judge": "tsx evals/judge-set.ts --out .probity/judge-set.jsonl && tsx scripts/shadow-replay.ts .probity/judge-set.jsonl",
     "prepublishOnly": "npm run clean && npm run build && npm test",
     "pack:check": "npm pack --dry-run"
   },

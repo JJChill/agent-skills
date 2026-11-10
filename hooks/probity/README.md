@@ -118,11 +118,26 @@ To cut a release:
    fails a probity-rules version change that leaves the plugin version
    alone, and a plugin version that a fork or upstream tag already uses
    (it reads upstream's tags from addyosmani/agent-skills directly).
-4. Merge to `main`. The workflow runs typecheck, build, tests, the Kiro
+4. If the release changes a judge prompt, a judged rule's wiring, or the
+   default judge, replay the labelled judge set before merging (one judge
+   call per case and repeat, on your account; CI only checks that every
+   case still reaches its judge):
+
+   ```sh
+   npm run eval:judge -- --judge claude --model claude-opus-5-5 --repeat 3
+   ```
+
+   It prints leaks (writes labelled `violation` that the judge passed)
+   and friction (writes labelled `pass` that it denied) per judging task,
+   with 95% upper bounds. Compare with the last release's numbers in the
+   PR; a new leak blocks the release. The cases live in
+   `evals/judge-cases.ts`; add one for every judge misverdict reported
+   from the field, reduced to a synthetic case.
+5. Merge to `main`. The workflow runs typecheck, build, tests, the Kiro
    shim tests, the 48-step eval, and a pack dry run; if the version is not
    yet on the registry it publishes. If the version is already published,
    the workflow succeeds without publishing.
-5. Tag the plugin release on the merge commit (`git tag 0.6.14 && git push
+6. Tag the plugin release on the merge commit (`git tag 0.6.14 && git push
    origin 0.6.14`), so the next release's check sees it.
 
 Do **not** create a bare git tag such as `0.1.1` for an npm release. The

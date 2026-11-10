@@ -13,7 +13,8 @@ import type { Agent, Rule, RuleContext, Verdict } from '@nizos/probity'
 import { compactJudgeFiles } from './compact-judge-files.ts'
 import { chmodSync } from 'node:fs'
 
-import { judgeForPrimary, replayWholePrompts, type WholePromptRecord } from './whole-prompt-record.ts'
+import { summarizeShadowLog } from './shadow-judge.ts'
+import { judgeForPrimary, LABELLED_PRIMARY, replayWholePrompts, type WholePromptRecord } from './whole-prompt-record.ts'
 
 function dir(t: { after: (fn: () => void) => void }) {
   const path = mkdtempSync(join(tmpdir(), 'whole-prompt-record-'))
@@ -122,6 +123,36 @@ test('replay stops at the limit and records a judge failure as unavailable', asy
   const { entries } = await replayWholePrompts(lines(recordLine({ kind: 'pass', reason: '' }), recordLine({ kind: 'pass', reason: '' })), judge, { limit: 1 })
   assert.equal(entries.length, 1)
   assert.equal(entries[0]!.candidates[0]!.error, 'kiro-cli not found')
+})
+
+// The labelled judge set (evals/judge-set.ts): recorded verdicts are
+// the expected ones, so leaks and friction measure the judge itself.
+function labelledLine(id: string, kind: 'pass' | 'violation'): string {
+  return JSON.stringify({
+    at: id,
+    task: 'enforceTdd',
+    promptSha256: id,
+    wholePrompt: id,
+    primary: { name: LABELLED_PRIMARY, kind, reason: id, durationMs: 0 },
+  })
+}
+
+test('a labelled set replays under the judge\'s own name, each prompt as often as asked', async () => {
+  let calls = 0
+  // Passes everything: a leak on the violation case, agreement on the pass case.
+  const judge = { name: 'claude:claude-sonnet-5-5', reason: async () => (calls++, { kind: 'pass', reason: '' }) } as Agent & { name: string }
+  const { entries } = await replayWholePrompts(lines(labelledLine('a-should-pass', 'pass'), labelledLine('b-should-deny', 'violation')), judge, {
+    repeat: 3,
+    candidateName: judge.name,
+  })
+  assert.equal(calls, 6)
+  assert.equal(entries.length, 6)
+  assert.ok(entries.every((entry) => entry.candidates[0]!.name === 'claude:claude-sonnet-5-5'))
+  const [all] = summarizeShadowLog(entries).filter((row) => row.task === undefined)
+  assert.equal(all!.leaks.length, 3)
+  assert.equal(all!.primaryDenials, 3)
+  assert.equal(all!.friction.length, 0)
+  assert.equal(all!.leaks[0]!.at, 'b-should-deny')
 })
 
 // ── Review of #174 ──────────────────────────────────────────────────
