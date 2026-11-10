@@ -1,28 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.4.67
 
-A labelled judge set, replayable before a release, so a judge change that lets more through shows up before consumers see it.
+Five changes. Only the pinned judge model affects existing configs, and `/probity-update` proposes that edit; the rest add files or options and change no rule's behaviour. The reference docs (`hooks/PROBITY.md`) are now split into an overview and pages under `hooks/probity/docs/`; old links keep working.
+
+**A labelled judge set**, replayable before a release, so a judge change that lets more through shows up before consumers see it. This release's replay on `claude-opus-5-5`, 18 cases asked 3 times each, agreed with all 54 labels: no leaks, no friction.
 
 - **`probity-shadow-replay`** reads a labelled set: a log whose recorded verdicts are named `expected`. There a leak is a write labelled `violation` that the judge passed, and friction one labelled `pass` that it denied. `--judge` is required for such a set.
 - **`--repeat N`** asks each recorded prompt N times, for whole-prompt logs and labelled sets alike.
 - **`replayWholePrompts`** takes `repeat` and `candidateName` options; existing calls are unchanged.
 - **For maintainers:** `evals/judge-cases.ts` holds the cases, `npm run eval:judge` builds and replays them, and `npm test` checks every case still reaches its judge. No rule behaviour changes, so `/probity-update` has nothing to migrate.
 
-The templates pin the Claude judge's model.
+**The templates pin the Claude judge's model.** This is the one change existing configs should act on; run `/probity-update`.
 
 - **Before:** every template set `ai: claudeJudge()`, which judges on the installed Claude Code's default model. A project whose CLI defaults to Sonnet got Sonnet verdicts, though the judge's rules were measured on Opus. Sonnet made three kinds of TDD mistake in a JS/TS project (#169–#171), and in a KMP project's week-long shadow it passed 84 of 319 writes Opus denied.
 - **Now:** every template sets `ai: claudeJudge({ model: 'claude-opus-5-5' })`, and the KMP template's `judgeChain` example pins its Claude fallback too. A test fails if a template ships an unpinned `claudeJudge()`.
 - **Cost:** Opus costs more per verdict than Sonnet. A project that wants a cheaper judge should measure it first with `shadowJudge`.
 - **Migration:** a config copied from an earlier template keeps its unpinned judge. `/probity-update` proposes `{ model: 'claude-opus-5-5' }` for each unpinned `claudeJudge()`, including a `judgeChain` fallback, and leaves judges pinned to another model alone.
 
-The JS/TS template makes spec-first one step to turn on, and says what the preset does not enforce by default.
+**The JS/TS template makes spec-first one step to turn on,** and says what the preset does not enforce by default.
 
 - **Template:** `probity.config.ts` carries `specsDir: fileURLToPath(new URL('./specs', import.meta.url))` commented out, with what it turns on, and imports `fileURLToPath`. `specs/` matches the preset's default `specGlobs`, so uncommenting the line wires the write-time `Covers:` gate, scenario-link breakage, scenario fidelity and the parity commit gate together. The header lists what the preset enforces as shipped and what it doesn't.
 - **No rule behaviour changes.** `jsRuleEntries` is unchanged; spec-first stays off until `specsDir` is set.
 - **Migration:** a JS/TS config with no `specsDir` keeps working as before. `/probity-update` mentions that spec-first is available and proposes the line only if the project has, or wants, specs in `specs/`.
 
-Ready-made CI jobs for consuming projects.
+**Ready-made CI jobs** for consuming projects.
 
 - **`ci/github-actions.yml`** and **`ci/gitlab-ci.yml`** ship in the package.
   - On every change: `probity-scope-report --strict` and `probity-spec-parity`.
@@ -31,7 +33,7 @@ Ready-made CI jobs for consuming projects.
 - **No rule behaviour changes.** A test checks that every bin and flag the templates call exists.
 - **Migration:** nothing changes for an existing project. If the project's CI runs none of these checks, `/probity-update` offers the template for its CI system.
 
-The language-neutral round-trips move out of `rules/kotlin`.
+**The language-neutral round-trips move out of `rules/kotlin`.**
 
 - **Before:** `withMutationProbe`, `enforceProbeReversion`, `withCharacterizationTest`, `enforceCharacterizationResolution`, `withInverseScenarioGuidance`, `MUTATION_PROBE_MARKER` and `CHARACTERIZATION_MARKER` were exported only from `@jjchill/probity-rules/rules/kotlin`, though they work for any language. The JS/TS template had to say "despite the filename".
 - **Now:** they live in `rules/round-trips.ts`, exported from `@jjchill/probity-rules/rules/round-trips` and from the package root.
