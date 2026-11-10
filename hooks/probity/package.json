@@ -38,6 +38,8 @@
     "probity.config.kotlin.ts",
     "probity.config.kmp.ts",
     "probity.config.swift.ts",
+    "ci/github-actions.yml",
+    "ci/gitlab-ci.yml",
     "GLOSSARY.template.md",
     "README.md",
     "CHANGELOG.md"

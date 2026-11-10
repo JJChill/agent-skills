@@ -22,6 +22,15 @@ The JS/TS template makes spec-first one step to turn on, and says what the prese
 - **No rule behaviour changes.** `jsRuleEntries` is unchanged; spec-first stays off until `specsDir` is set.
 - **Migration:** a JS/TS config with no `specsDir` keeps working as before. `/probity-update` mentions that spec-first is available and proposes the line only if the project has, or wants, specs in `specs/`.
 
+Ready-made CI jobs for consuming projects.
+
+- **`ci/github-actions.yml`** and **`ci/gitlab-ci.yml`** ship in the package.
+  - On every change: `probity-scope-report --strict` and `probity-spec-parity`.
+  - On each push to the default branch: `probity-review-record` over what that push brought in, with full history, `--routed-range` and `--all-first-parent`. When the push has no usable before-SHA, it checks the pushed commit.
+  - Both are modelled on the jobs a KMP project runs in GitLab CI.
+- **No rule behaviour changes.** A test checks that every bin and flag the templates call exists.
+- **Migration:** nothing changes for an existing project. If the project's CI runs none of these checks, `/probity-update` offers the template for its CI system.
+
 ## 0.4.66
 
 `requireReviewRecord` no longer misses a merge that switches branches first ([#195](https://github.com/JJChill/agent-skills/issues/195)).

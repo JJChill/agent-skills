@@ -1,0 +1,83 @@
+# Probity CI checks for a project using @jjchill/probity-rules.
+#
+# Copy to .github/workflows/probity.yml and edit the marked lines. The
+# PreToolUse hook judges what an agent does; CI is the arbiter of record
+# (hooks/PROBITY.md): it also covers work done outside a hooked agent,
+# in a web UI, or by a person.
+#
+#   scope:         probity-scope-report --strict fails on a rule block that
+#                  matches no file or claims the wrong layer, so layout
+#                  drift can't switch a rule off silently.
+#   parity:        probity-spec-parity fails when a non-wip scenario has no
+#                  covering test or a Covers: tag names no scenario.
+#                  Delete the step if the project keeps no specs.
+#   review-record: every push to the default branch: each merge (and,
+#                  with --all-first-parent, each direct commit) that
+#                  changes code carries a Reviewed-by-agent record.
+#                  Delete the job if probity.config.ts sets no
+#                  review.record.
+#
+# Needs @nizos/probity and @jjchill/probity-rules in devDependencies.
+
+name: probity
+
+on:
+  pull_request:
+  push:
+    branches: [main] # EDIT: your default branch
+
+permissions:
+  contents: read
+
+jobs:
+  scope-and-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Rule scoping matches the tree
+        run: npx probity-scope-report --config probity.config.ts --strict
+      - name: Every scenario has a covering test
+        # EDIT: --specs is your specs directory (the JS/TS template uses
+        # specs/, the Kotlin, KMP and Swift ones docs/specs). Drop
+        # --baseline if you never wrote one.
+        run: npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline
+
+  review-record:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Never cancelled by a later push, which would leave a merge unchecked.
+    concurrency:
+      group: probity-review-record-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # the merges' diffs and first parents are needed
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Each merge pushed carries a review record
+        env:
+          BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        # Checks only what this push brought in. A new branch or a
+        # force push has no usable before-SHA, so the push's own commit
+        # is checked. --routed-range also checks that each record names
+        # every agent today's routes select (only when
+        # review.record.requireRoutedAgents is set). --all-first-parent
+        # also judges direct commits to the branch; drop it to judge
+        # merges only.
+        run: |
+          BASE="$BEFORE"
+          if echo "$BASE" | grep -q '^0*$' || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE="$HEAD_SHA^1"; fi
+          npx probity-review-record --range "$BASE..$HEAD_SHA" --routed-range "$BASE..$HEAD_SHA" \
+            --all-first-parent --config probity.config.ts

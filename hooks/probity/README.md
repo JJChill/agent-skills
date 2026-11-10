@@ -90,6 +90,13 @@ Run `/probity-update` (a plugin slash command) from your project to update
 the package, migrate your config to new options, refresh the Kiro shim
 files, and re-verify scoping — see the command for the full procedure.
 
+## CI
+
+`ci/github-actions.yml` and `ci/gitlab-ci.yml` are copyable jobs that run
+`probity-scope-report --strict`, `probity-spec-parity` and, on pushes to
+the default branch, `probity-review-record` (see hooks/PROBITY.md, Setup
+step 4). A test checks that every bin and flag they call exists.
+
 ## Kiro
 
 `kiro/` ships the Kiro hook shim (unchanged install model: copy into your

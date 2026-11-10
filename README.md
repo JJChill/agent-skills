@@ -295,7 +295,7 @@ See "Brownfield adoption" in [hooks/PROBITY.md](hooks/PROBITY.md#spectest-tracea
 npx probity-scope-report --config probity.config.ts
 ```
 
-Fix every `DEAD SCOPE` (a block matching zero files) and every warning about core rules claiming adapter/DI/UI paths or the acceptance-language rule claiming driver/DSL files. Re-run until it is clean. Add `--strict` in CI so layout drift fails the build instead of silently switching a rule off.
+Fix every `DEAD SCOPE` (a block matching zero files) and every warning about core rules claiming adapter/DI/UI paths or the acceptance-language rule claiming driver/DSL files. Re-run until it is clean. Add `--strict` in CI so layout drift fails the build instead of silently switching a rule off. The package ships ready-made jobs for this check, the spec-parity check and the review-record check in `node_modules/@jjchill/probity-rules/ci/` (`github-actions.yml`, `gitlab-ci.yml`).
 
 **5. Wire the hook into the agent.** For Claude Code, install the Probity plugin:
 
