@@ -131,6 +131,20 @@ test('the replay command needs a record log and a known judge', (t) => {
   assert.match(bad.stderr, /--judge takes claude or kiro/)
 })
 
+test('the replay command needs --judge for a labelled judge set', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'shadow-replay-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const log = join(dir, 'set.jsonl')
+  const record = { at: 'case-1', task: 'enforceTdd', promptSha256: 'x', wholePrompt: 'p', primary: { name: 'expected', kind: 'pass', reason: '', durationMs: 0 } }
+  writeFileSync(log, JSON.stringify(record) + '\n')
+  const res = spawnSync(TSX, [REPLAY, log], { encoding: 'utf8' })
+  assert.equal(res.status, 1)
+  assert.match(res.stderr, /labelled judge set: say which judge to measure with --judge/)
+  const repeat = spawnSync(TSX, [REPLAY, log, '--judge', 'claude', '--repeat', '0'], { encoding: 'utf8' })
+  assert.equal(repeat.status, 1)
+  assert.match(repeat.stderr, /--repeat takes a whole number from 1/)
+})
+
 test('the replay command refuses option mistakes that would lift the spend cap', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'shadow-replay-test-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))

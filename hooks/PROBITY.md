@@ -416,6 +416,15 @@ Two modes:
 - `npx tsx workflow-eval.ts` — scripted AI verdicts. CI-safe and deterministic: exercises the wiring, rule ordering, and every deterministic rule exactly; the AI rules' *invocation* is verified while their verdicts are assumed.
 - `npx tsx workflow-eval.ts --live` — real verdicts via the `claude` CLI. Additionally evaluates the AI rules' prompt quality: does `enforceTdd` actually block the premature write and pass the post-red minimal one, does the Language Test catch the click-the-button scenario. Live mode asserts outcomes only (a write violating several rules may block on whichever rule runs first, as in a real session) and costs ~a dozen model calls.
 
+### The labelled judge set
+
+The episode's live mode asks about a dozen prompts once each, so it can't show whether a judge change made the TDD gate leakier. [`probity/evals/judge-cases.ts`](probity/evals/judge-cases.ts) is a labelled set for that: synthetic cases built from judge misverdicts reported in the field (#169–#171, the medium-effort leaks under "Choosing the AI judge", #200), each with the verdict a correct judge gives and the judging task it is for. [`judge-set.ts`](probity/evals/judge-set.ts) runs every case through its preset's real rules with a judge that records the prompt instead of answering, so the set always holds the prompts today's rules send.
+
+- **CI** (`npm test`, no model calls) checks that every case still reaches the judge it is labelled for. A case that a deterministic rule or fast path now decides fails the PR; fix or drop it.
+- **Before a release** that changes a judge prompt, a judged rule's wiring or the default judge, `npm run eval:judge -- --judge claude --model claude-opus-5-5 --repeat 3` writes the set to `.probity/judge-set.jsonl` and replays it with `probity-shadow-replay`, which reads a labelled set as one whose primary verdicts are the expected ones. The report is the shadow report's: **leaks** (writes labelled `violation` that the judge passed) and **friction** (writes labelled `pass` that it denied), each with its 95% upper bound, per judging task, and `--show leaks` lists the case ids. `--repeat` asks each prompt more than once, since one judge can answer the same prompt both ways (#169). Each case costs one judge call per repeat.
+
+Add a case for every judge misverdict reported from the field, reduced to a synthetic one: field transcripts and shadow logs hold project code, which doesn't belong in this repository.
+
 What the harness does not cover: Probity's own engine — hook payload parsing and transcript adapters — and any drift between `rules/scoping.ts` and the engine's matcher across Probity upgrades (the replica exists because Probity doesn't export its matcher; it is pinned to a version and documents what to diff on upgrade). A mis-scoped glob in **your** edited config is the scope report's job (Setup step 4), not the eval's: run `npx probity-scope-report` against your real tree at setup and whenever the layout changes.
 
 ## Costs and caveats
