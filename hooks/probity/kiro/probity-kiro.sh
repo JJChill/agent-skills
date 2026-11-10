@@ -34,6 +34,9 @@
 
 set -u
 
+# kiro-cli 3.x times the hook from its start, so the deadline does too.
+export PROBITY_KIRO_HOOK_STARTED="$(date +%s)"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BIN_DIR="$ROOT/node_modules/.bin"
@@ -114,11 +117,13 @@ fi
 # --- Invoke Probity and translate its response to Kiro's exit codes -------
 # kiro-cli 3.x lets a call through when its hook runs past 60 s, so on a
 # 3.x event Probity gets a deadline below that and a late verdict blocks.
+# Probity sees the deadline too, so kiroJudge leaves time for a fallback
+# judge; the block reason names the judge the call was waiting on (#200).
 DEADLINE="$(printf '%s' "$EVENT" | python3 "$TRANSLATE" deadline)"
 if [ -n "$DEADLINE" ]; then
   RESPONSE="$(printf '%s' "$PAYLOAD" | python3 "$TRANSLATE" run "$DEADLINE" "$PROBITY" --agent claude-code 2>/dev/null)"
   if [ $? -eq 124 ]; then
-    echo "Probity took longer than ${DEADLINE}s to judge this call. kiro-cli 3.x lets a call through when its hook runs past 60 s, so the shim blocks it instead. Retry it; if this keeps happening, use a faster judge or raise PROBITY_KIRO_TIMEOUT_S (below 60)." >&2
+    printf '%s\n' "${RESPONSE:-Probity took longer than ${DEADLINE}s to judge this call, so the shim blocks it. Retry it.}" >&2
     exit 2
   fi
 else

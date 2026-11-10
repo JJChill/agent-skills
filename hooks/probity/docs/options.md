@@ -453,7 +453,9 @@ Runs each verdict as one `kiro-cli chat --no-interactive` call, with the prompt 
 - **Model and effort.** It defaults to `claude-opus-5.5` at `high` effort. At `medium` it let a production write with no failing test through 7 times in 25.
 - **Isolation.** It uses a judge-only Kiro agent, `probity-judge`, with no tools and no hooks, written into its own working directory (`<tmpdir>/probity-kiro-judge`). A judge run can't edit files, run commands or set off the Kiro shim's hook, and Kiro's saved sessions for judge runs stay out of your project. Kiro keeps one saved session per verdict there, so clear that directory now and then.
 - **Unavailable.** When kiro-cli is missing, exits with an error, prints nothing, or takes longer than `timeoutMs` (default 60 s), the verdict is "Kiro judge unavailable".
-- **Options:** `model`, `effort`, `agent` (only an agent with no tools and no hooks), `timeoutMs`, `command`, `cwd`.
+- **Answering.** kiro-cli can stay running for many seconds after it answers. Once its output holds a complete verdict and it has been quiet for a second, the verdict is taken and kiro-cli is stopped.
+- **Under the Kiro shim's deadline** (kiro-cli 3.x; see [Kiro judge timing](#kiro-judge-timing)), a run also stops `fallbackReserveMs` (default 20 s) before the deadline, so the next judge in a `judgeChain` can still answer in the same hook run. With less than 2 s left, kiro-cli isn't started at all. Set `fallbackReserveMs: 0` when `kiroJudge` is the only judge.
+- **Options:** `model`, `effort`, `agent` (only an agent with no tools and no hooks), `timeoutMs`, `fallbackReserveMs`, `command`, `cwd`.
 
 ### `claudeJudge(options?)`
 
@@ -516,6 +518,8 @@ A committed config with `kiroJudge()` first still works on a checkout without ki
 - **Hook time limits.** A write occasionally takes up to three verdicts, so leave the hook enough time: a hook that times out doesn't block, and in Claude Code the write then goes ahead unjudged.
   - Claude Code's default limit for a command hook is 10 minutes, which is enough; don't set a lower `timeout` on the Probity hook.
   - The Kiro shim template's `timeout_ms` is 300000 (5 minutes). An agent config with 120000 can be exceeded by three slow Kiro verdicts, so raise it.
+  - kiro-cli 3.x ignores `timeout_ms` and lets a call through once its hook has run 60 s. The shim therefore blocks at 55 s (`PROBITY_KIRO_TIMEOUT_S`), and passes that deadline to Probity: `kiroJudge` keeps 20 s of it for the next judge, so a stalled kiro-cli falls back to Claude instead of blocking the write, and the chain then skips Kiro for later writes. When the shim does block, its message names the judge the call was waiting on, or says none had been asked yet.
+  - When the shim stops Probity, the kiro-cli judge it was waiting on is stopped too, instead of finishing a verdict nobody reads.
 
 ## Judge prompt size (`compactJudgeFiles`)
 

@@ -15,6 +15,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 
 _HERE = pathlib.Path(__file__).resolve().parent
 failures = []
@@ -114,6 +115,27 @@ with tempfile.TemporaryDirectory() as tmp:
         del os.environ["PROBITY_KIRO_TIMEOUT_S"]
     check("a judge slower than the 3.x hook timeout blocks instead of letting the call through",
           res.returncode == 2 and "took longer than" in res.stderr, res.stderr)
+    check("...and says no judge had been asked when none had",
+          "No kiroJudge or claudeJudge had been asked yet" in res.stderr, res.stderr)
+
+    # #200: Probity is told the deadline, and a block names the judge it was
+    # waiting on, from the status file the judges note themselves in.
+    (bin_dir / "probity-claude").write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\' "$PROBITY_HOOK_DEADLINE_MS" > "$RECORD_DIR/deadline"\n'
+        'printf \'{"judge":"kiro","at":%s000}\' "$(date +%s)" > "$PROBITY_JUDGE_STATUS"\n'
+        "sleep 5\n")
+    os.environ["PROBITY_KIRO_TIMEOUT_S"] = "2"
+    try:
+        before = time.time()
+        res, payload = shim("fs_write", {"path": path, "text": "x\n"})
+    finally:
+        del os.environ["PROBITY_KIRO_TIMEOUT_S"]
+    check("a block past the deadline names the judge the call was waiting on",
+          res.returncode == 2 and "waiting on the kiro judge" in res.stderr, res.stderr)
+    deadline_ms = int((record / "deadline").read_text() or 0) if (record / "deadline").exists() else 0
+    check("...and Probity was given the deadline, counted from the hook's start",
+          before * 1000 - 1000 <= deadline_ms <= before * 1000 + 3000, deadline_ms)
 
 if failures:
     raise SystemExit(f"{len(failures)} check(s) failed")
