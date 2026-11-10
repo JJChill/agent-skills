@@ -10,6 +10,10 @@
  * or `@jjchill/probity-rules/rules/swift`, or use a preset
  * (`@jjchill/probity-rules/presets/*`) which already wires the right
  * ones together.
+ *
+ * The mutation-probe and characterization round-trips are language-
+ * neutral and exported here from rules/round-trips.ts; rules/kotlin
+ * re-exports them too, for configs that import them from there.
  */
 export * from './rules/gates.js'
 export * from './rules/js-tdd.js'
@@ -30,3 +34,4 @@ export * from './rules/review-config.js'
 export * from './rules/review-record.js'
 export * from './rules/review-router.js'
 export * from './rules/review-obligations.js'
+export * from './rules/round-trips.js'

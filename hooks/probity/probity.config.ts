@@ -40,8 +40,8 @@
  * Brownfield? The mutation-probe and characterization round-trips
  * (`withMutationProbe`/`enforceProbeReversion`,
  * `withCharacterizationTest`/`enforceCharacterizationResolution`,
- * re-exported from `@jjchill/probity-rules/rules/kotlin` despite the
- * filename — language-neutral) sanction retrofitting tests onto
+ * language-neutral, from `@jjchill/probity-rules` or
+ * `@jjchill/probity-rules/rules/round-trips`) sanction retrofitting tests onto
  * pre-existing behavior, which the plain TDD gate otherwise blocks (a
  * test for existing behavior is born green). Wire them when you start
  * backfilling coverage; see hooks/PROBITY.md.
