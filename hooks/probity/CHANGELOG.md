@@ -9,6 +9,13 @@ A labelled judge set, replayable before a release, so a judge change that lets m
 - **`replayWholePrompts`** takes `repeat` and `candidateName` options; existing calls are unchanged.
 - **For maintainers:** `evals/judge-cases.ts` holds the cases, `npm run eval:judge` builds and replays them, and `npm test` checks every case still reaches its judge. No rule behaviour changes, so `/probity-update` has nothing to migrate.
 
+The templates pin the Claude judge's model.
+
+- **Before:** every template set `ai: claudeJudge()`, which judges on the installed Claude Code's default model. A project whose CLI defaults to Sonnet got Sonnet verdicts, though the judge's rules were measured on Opus. Sonnet made three kinds of TDD mistake in a JS/TS project (#169–#171), and in a KMP project's week-long shadow it passed 84 of 319 writes Opus denied.
+- **Now:** every template sets `ai: claudeJudge({ model: 'claude-opus-5-5' })`, and the KMP template's `judgeChain` example pins its Claude fallback too. A test fails if a template ships an unpinned `claudeJudge()`.
+- **Cost:** Opus costs more per verdict than Sonnet. A project that wants a cheaper judge should measure it first with `shadowJudge`.
+- **Migration:** a config copied from an earlier template keeps its unpinned judge. `/probity-update` proposes `{ model: 'claude-opus-5-5' }` for each unpinned `claudeJudge()`, including a `judgeChain` fallback, and leaves judges pinned to another model alone.
+
 ## 0.4.66
 
 `requireReviewRecord` no longer misses a merge that switches branches first ([#195](https://github.com/JJChill/agent-skills/issues/195)).
