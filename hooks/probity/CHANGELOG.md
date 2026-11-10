@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.68
 
 **Kiro judge timeouts under kiro-cli 3.x** ([#200](https://github.com/JJChill/agent-skills/issues/200)). A Kiro build session had three writes in a row blocked with "Probity took longer than 55s", though the Kiro judge had passed two of them. Three causes, all fixed:
 
