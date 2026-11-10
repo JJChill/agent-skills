@@ -2,7 +2,7 @@
 
 This file provides guidance to AI coding agents (Claude Code, Cursor, Copilot, Antigravity, etc.) when working with code in this repository.
 
-> **Scope:** This file configures agents working on the [`addyosmani/agent-skills`](https://github.com/addyosmani/agent-skills) repository itself. It is not meant to be copied into other projects or into a global agent configuration; the reusable assets are the skills in `skills/`, not this file.
+> **Scope:** This file configures agents working on the [`JJChill/agent-skills`](https://github.com/JJChill/agent-skills) repository itself, a fork of [`addyosmani/agent-skills`](https://github.com/addyosmani/agent-skills) that is the repository of record: PRs target its `main`, and upstream is only a source of updates. It is not meant to be copied into other projects or into a global agent configuration; the reusable assets are the skills in `skills/`, not this file.
 
 ## Repository Overview
 

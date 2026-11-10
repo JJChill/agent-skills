@@ -125,8 +125,8 @@ To cut a release:
    `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json`,
    `.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`).
    Pick the next patch above both the base branch's version and the newest
-   plugin tag, upstream's included (`git ls-remote --tags upstream` lists
-   them), so the fork never reuses a number upstream has published. CI
+   plugin tag, upstream's included (`git ls-remote --tags
+   https://github.com/addyosmani/agent-skills` lists them), so the fork never reuses a number upstream has published. CI
    fails a probity-rules version change that leaves the plugin version
    alone, and a plugin version that a fork or upstream tag already uses
    (it reads upstream's tags from addyosmani/agent-skills directly).
