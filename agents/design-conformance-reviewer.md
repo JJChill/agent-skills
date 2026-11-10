@@ -103,5 +103,5 @@ Screenshot names follow `<screen>.<state>.<width>w[.<engine>].png`, e.g. `notes.
 ## Composition
 
 - **Invoke directly when:** a change touches UI source or page assets and a design source exists. That's usually from the visual verification checkpoint in `frontend-ui-engineering`, once the screenshots are captured.
-- **Invoke via:** a project's review router, which can select it for UI paths (see `probity-review-route` in [hooks/PROBITY.md](../hooks/PROBITY.md#review-routing-probity-review-route)). Not included in the `/ship` fan-out: it needs a design source and screenshots, which most changes don't have.
+- **Invoke via:** a project's review router, which can select it for UI paths (see `probity-review-route` in [the Probity options reference](../hooks/probity/docs/options.md#review-routing-probity-review-route)). Not included in the `/ship` fan-out: it needs a design source and screenshots, which most changes don't have.
 - **Do not invoke from another persona.** If `code-reviewer` notices a UI change with no design check, it says so in its report, and the caller runs this review. See [docs/agents.md](../docs/agents.md).

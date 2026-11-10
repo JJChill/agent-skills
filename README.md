@@ -234,7 +234,7 @@ Skills are plain Markdown - they work with any agent that accepts system prompts
 
 ### Part 2: Install and configure Probity in the target project
 
-Probity lives in the **project you are building**, not in this repo. The skills tell the agent what good looks like; Probity intercepts every `Write`/`Edit`/`Bash` call before it executes and blocks the ones that break the rules, with a corrective message the agent recovers from. Without it, the skills are advice the agent can rationalize away under pressure. [hooks/PROBITY.md](hooks/PROBITY.md) is the full reference (every rule, what it enforces, and how); the steps below are the minimum viable setup.
+Probity lives in the **project you are building**, not in this repo. The skills tell the agent what good looks like; Probity intercepts every `Write`/`Edit`/`Bash` call before it executes and blocks the ones that break the rules, with a corrective message the agent recovers from. Without it, the skills are advice the agent can rationalize away under pressure. [hooks/PROBITY.md](hooks/PROBITY.md) is the reference: how the enforcement works, with linked pages for every rule, option and preset; the steps below are the minimum viable setup.
 
 **Agent support.** Probity hooks into Claude Code, Codex, and GitHub Copilot CLI natively, and into Kiro through the shim in [`hooks/probity/kiro/`](hooks/probity/kiro/) ([docs/kiro-setup.md](docs/kiro-setup.md)). Other agents (Cursor, Gemini CLI, Windsurf, and so on) have no hook Probity can attach to, so they get the skills only. Record that in the project's agent instructions so nobody assumes the gates are live.
 
@@ -266,7 +266,7 @@ an explicit fast-path-unavailable diagnostic.
 cp node_modules/@jjchill/probity-rules/probity.config.ts ./probity.config.ts   # or probity.config.kotlin.ts / .kmp.ts / .swift.ts
 ```
 
-**The JS/TS preset enforces less out of the box than the others.** As shipped it enforces the TDD gate, core purity, no mocking of your own modules, the Language Test on spec files, thin driving adapters, no fixed waits in acceptance code, and a green test run before every commit. It does **not** enforce spec-first until you set `specsDir`: without it, an acceptance test needn't cite a scenario, a spec edit can orphan a test, and commits don't check spec↔test parity. The template has the line ready: uncomment `specsDir` in `probity.config.ts` (specs in `specs/*.feature.md`, acceptance tests in `acceptance/**/*.test.*`). The mutation-probe and characterization round-trips that let you retrofit tests onto existing code are wired only in the Kotlin, KMP and Swift presets. The Kotlin, KMP and Swift presets turn spec-first on by default.
+**The JS/TS preset enforces less out of the box than the others.** As shipped it enforces the TDD gate, core purity, no mocking of your own modules, the Language Test on spec files, thin driving adapters, no fixed waits in acceptance code, and a green test run before every commit. It does **not** enforce spec-first until you set `specsDir`: without it, an acceptance test needn't cite a scenario, a spec edit can orphan a test, and commits don't check spec↔test parity. The template has the line ready: uncomment `specsDir` in `probity.config.ts` (specs in `specs/*.feature.md`, acceptance tests in `acceptance/**/*.test.*`). The mutation-probe and characterization round-trips that let you retrofit tests onto existing code are wired only in the Kotlin, KMP and Swift presets. The KMP and Swift presets turn spec-first on by default; the classic Kotlin preset has only its write-time `Covers:` gate, with no parity check at commit.
 
 Keep `probity.config.ts` at the project root: Probity discovers it by searching upward from the working directory. The rule modules and scripts the template imports live inside the installed package — nothing else needs copying.
 
@@ -287,7 +287,7 @@ Brownfield codebase? The deterministic rules are delta-based (only what a write 
 npx probity-spec-parity --specs docs/specs --baseline docs/specs/.parity-baseline --write-baseline
 ```
 
-See "Brownfield adoption" in [hooks/PROBITY.md](hooks/PROBITY.md#spectest-traceability-kmp-preset).
+See "Brownfield adoption" in [the Probity options reference](hooks/probity/docs/options.md#brownfield-adoption).
 
 **4. Verify the scoping before the first agent session does.** Wrong globs are the main failure mode, and one direction is silent: a glob slightly too narrow never fires, and nothing notices.
 

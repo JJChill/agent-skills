@@ -71,7 +71,8 @@ of its module in `presets/`.
 The JS/TS preset leaves spec-first off until `specsDir` is set: no
 `Covers:` tag is required on acceptance tests, spec edits may orphan a
 test, and commits don't check spec↔test parity. `probity.config.ts` has
-the line ready to uncomment. The Kotlin, KMP and Swift presets have it on.
+the line ready to uncomment. The KMP and Swift presets have it on; the
+classic Kotlin preset has only the write-time `Covers:` gate.
 
 ## Bins
 
