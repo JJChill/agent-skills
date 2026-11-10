@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+**Kiro judge timeouts under kiro-cli 3.x** ([#200](https://github.com/JJChill/agent-skills/issues/200)). A Kiro build session had three writes in a row blocked with "Probity took longer than 55s", though the Kiro judge had passed two of them. Three causes, all fixed:
+
+- **kiroJudge waited for kiro-cli to exit, not for its answer.** kiro-cli sometimes keeps running 10–16 s after answering. A complete verdict followed by a quiet second is now taken, and kiro-cli is stopped.
+- **A stalled kiro-cli never fell back to Claude.** The shim stops Probity at 55 s, before kiroJudge's own 60 s timeout, so `judgeChain` never saw Kiro as unavailable, never asked the next judge, and never remembered to skip Kiro. The shim now passes its deadline to Probity (`PROBITY_HOOK_DEADLINE_MS`), and kiroJudge stops `fallbackReserveMs` (default 20 s) before it. The deadline also counts from the hook's start now, not from after the transcript conversion.
+- **The judge outlived the block.** kiro-cli runs in its own process group, which the shim's kill didn't reach. The shim now sends SIGTERM first, and Probity stops the kiro-cli runs it started before exiting.
+
+The shim's timeout message now names the judge the call was waiting on (`kiroJudge` and `claudeJudge` note themselves in `PROBITY_JUDGE_STATUS`), or says none had been asked yet.
+
+- **Migration:** `/probity-update` refreshes the vendored shim (`.kiro/hooks/probity-kiro.sh`, `probity-kiro-translate.py`); the deadline and the message need both the new shim and the new package. A config whose `ai` is `kiroJudge()` alone should set `fallbackReserveMs: 0`, since no judge follows it. Chained configs need no change. Without kiro-cli 3.x, or under Claude Code, nothing changes except that kiroJudge returns as soon as it has a verdict.
+
 ## 0.4.67
 
 Five changes. Only the pinned judge model affects existing configs, and `/probity-update` proposes that edit; the rest add files or options and change no rule's behaviour. The reference docs (`hooks/PROBITY.md`) are now split into an overview and pages under `hooks/probity/docs/`; old links keep working.

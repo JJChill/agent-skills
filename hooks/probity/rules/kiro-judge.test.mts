@@ -326,7 +326,7 @@ test('a claudeJudge on a chosen model is remembered by judgeChain apart from the
 // (and their CLI's defaults) instead of whatever SDK version Probity pins.
 
 /** Runs `body` with these environment variables set (undefined removes one), then restores them. */
-async function withEnv(vars: Record<string, string | undefined>, body: () => Promise<void> | void) {
+async function withEnv<T>(vars: Record<string, string | undefined>, body: () => Promise<T> | T): Promise<T> {
   const saved = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]))
   const apply = (values: Record<string, string | undefined>) => {
     for (const [key, value] of Object.entries(values)) {
@@ -336,7 +336,7 @@ async function withEnv(vars: Record<string, string | undefined>, body: () => Pro
   }
   apply(vars)
   try {
-    await body()
+    return await body()
   } finally {
     apply(saved)
   }
@@ -418,4 +418,138 @@ test('every config template pins the Claude judge model', async () => {
     assert.doesNotMatch(text, /claudeJudge\(\)/, `${name} has an unpinned claudeJudge()`)
     assert.match(text, /ai: claudeJudge\(\{ model: 'claude-opus-5-5' \}\)/, name)
   }
+})
+
+// #200: under the Kiro shim's hook deadline, a stalled or lingering kiro-cli
+// must not use up the hook's time, or the write fails closed with no
+// fallback and the chain never learns that Kiro was unavailable.
+function fakeKiro(dir: string, script: string): string {
+  const fake = join(dir, 'fake-kiro')
+  writeFileSync(fake, `#!/usr/bin/env node\n${script}\n`)
+  chmodSync(fake, 0o755)
+  return fake
+}
+
+test('takes a verdict once kiro-cli goes quiet after it, without waiting for kiro-cli to exit', async () => {
+  const dir = cwd()
+  const fake = fakeKiro(
+    dir,
+    "process.stdin.resume(); process.stdin.on('end', () => {\n" +
+      "  process.stdout.write('Thinking...\\n')\n" +
+      "  setTimeout(() => process.stdout.write(JSON.stringify({ kind: 'pass', reason: 'ok' })), 200)\n" +
+      '  setTimeout(() => {}, 60_000)\n' +
+      '})',
+  )
+  const started = Date.now()
+  const verdict = await kiroJudge({ command: fake, cwd: dir, timeoutMs: 30_000 }).reason('p')
+  assert.equal(verdict.kind, 'pass')
+  assert.equal(verdict.reason, 'ok')
+  assert.ok(Date.now() - started < 5_000, `took ${Date.now() - started} ms`)
+})
+
+test('output that is not yet a verdict is waited on, and output after a verdict restarts the wait', async () => {
+  const dir = cwd()
+  const fake = fakeKiro(
+    dir,
+    "process.stdin.resume(); process.stdin.on('end', () => {\n" +
+      "  process.stdout.write('{\"kind\": \"pa')\n" +
+      "  setTimeout(() => process.stdout.write('ss\", \"reason\": \"first\"}'), 300)\n" +
+      "  setTimeout(() => process.stdout.write('\\n{\"kind\": \"violation\", \"reason\": \"last\"}'), 900)\n" +
+      '  setTimeout(() => {}, 60_000)\n' +
+      '})',
+  )
+  const verdict = await kiroJudge({ command: fake, cwd: dir, timeoutMs: 30_000 }).reason('p')
+  assert.equal(verdict.kind, 'violation')
+  assert.equal(verdict.reason, 'last')
+})
+
+test("under a hook deadline, the Kiro run keeps the fallback reserve free, and gives way when there's no time", async () => {
+  const fake = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
+  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 30_000) }, async () => {
+    await kiroJudge({ run: fake.run, cwd: cwd() }).reason('p')
+  })
+  assert.ok(fake.calls[0]!.timeoutMs <= 10_000 && fake.calls[0]!.timeoutMs > 9_000, String(fake.calls[0]!.timeoutMs))
+
+  const late = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
+  const verdict = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 15_000) }, () =>
+    kiroJudge({ run: late.run, cwd: cwd() }).reason('p'),
+  )
+  assert.equal(late.calls.length, 0)
+  assert.match(verdict.reason, /^Kiro judge unavailable: no time left before the hook's deadline/)
+  assert.equal(isJudgeUnavailable(verdict.reason), true)
+
+  const alone = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
+  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 15_000) }, () =>
+    kiroJudge({ run: alone.run, cwd: cwd(), fallbackReserveMs: 0 }).reason('p'),
+  )
+  assert.ok(alone.calls[0]!.timeoutMs <= 15_000 && alone.calls[0]!.timeoutMs > 14_000)
+
+  const stalled = fakeRun({ exitCode: null, stdout: '', stderr: '', timedOut: true })
+  const timedOut = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 30_000) }, () =>
+    kiroJudge({ run: stalled.run, cwd: cwd() }).reason('p'),
+  )
+  assert.match(timedOut.reason, /no answer within \d+ ms, the time left before the hook's deadline less 20000 ms kept for the next judge/)
+})
+
+test('a chain under a hook deadline falls back to the next judge within the same hook run', async () => {
+  const stalled = fakeRun({ exitCode: null, stdout: '', stderr: '', timedOut: true })
+  const next: Agent = { reason: async () => ({ kind: 'pass', reason: 'claude answered' }) }
+  const verdict = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 40_000) }, () =>
+    judgeChain([kiroJudge({ run: stalled.run, cwd: cwd() }), next], { stateFile: false }).reason('p'),
+  )
+  assert.equal(verdict.reason, 'claude answered')
+  assert.ok(stalled.calls[0]!.timeoutMs <= 20_000)
+})
+
+test('kiroJudge and claudeJudge note in the status file which judge was asked', async () => {
+  const dir = cwd()
+  const status = join(dir, 'status.json')
+  await withEnv({ PROBITY_JUDGE_STATUS: status }, () =>
+    kiroJudge({ run: fakeRun(ok('{"kind":"pass","reason":"ok"}')).run, cwd: dir }).reason('p'),
+  )
+  assert.equal(JSON.parse(readFileSync(status, 'utf8')).judge, 'kiro')
+  const { query } = sdkQuery('{"kind":"pass","reason":"ok"}')
+  await withEnv({ PROBITY_JUDGE_STATUS: status }, () =>
+    claudeJudge({ model: 'claude-opus-5-5', query, executable: 'bundled' }).reason('p'),
+  )
+  const noted = JSON.parse(readFileSync(status, 'utf8'))
+  assert.equal(noted.judge, 'claude:claude-opus-5-5')
+  assert.ok(Math.abs(noted.at - Date.now()) < 10_000)
+})
+
+test('a running kiro-cli is killed when the process asking it is terminated', async () => {
+  const dir = cwd()
+  const pidFile = join(dir, 'kiro.pid')
+  const fake = fakeKiro(
+    dir,
+    `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60_000)`,
+  )
+  const { spawn } = await import('node:child_process')
+  const host = spawn(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '-e',
+      `import(${JSON.stringify(new URL('./kiro-judge.ts', import.meta.url).href)}).then((m) => m.kiroJudge({ command: ${JSON.stringify(fake)}, cwd: ${JSON.stringify(dir)} }).reason('p'))`,
+    ],
+    { stdio: 'ignore' },
+  )
+  const deadline = Date.now() + 10_000
+  while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
+  const pid = Number(readFileSync(pidFile, 'utf8'))
+  const exited = new Promise<number | null>((r) => host.on('exit', (code) => r(code)))
+  host.kill('SIGTERM')
+  assert.equal(await exited, 143)
+  const alive = () => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  const gone = Date.now() + 5_000
+  while (alive() && Date.now() < gone) await new Promise((r) => setTimeout(r, 50))
+  assert.equal(alive(), false)
 })

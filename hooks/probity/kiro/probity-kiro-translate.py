@@ -32,8 +32,13 @@ piped payload on stdin, silently producing empty output = allow):
           stops at $PROBITY_KIRO_TIMEOUT_S (default 55) and blocks instead.
 
   run SECONDS CMD...
-          Run CMD with stdin passed through, killing its process group and
-          exiting 124 if it runs longer than SECONDS.
+          Run CMD with stdin passed through, for at most SECONDS from
+          $PROBITY_KIRO_HOOK_STARTED (epoch seconds; default now). CMD gets
+          the deadline as $PROBITY_HOOK_DEADLINE_MS, so kiroJudge leaves
+          time for a fallback judge, and $PROBITY_JUDGE_STATUS, a file the
+          judges note themselves in. Past the deadline, CMD's process group
+          gets SIGTERM, then SIGKILL a second later, and the reason, naming
+          the judge it was waiting on, is written to stdout with exit 124.
 
   install Read a claude-code payload JSON on stdin; exit 0 when it is a
           shell command that only installs packages (`npm ci`, `npm
@@ -48,6 +53,8 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 
 # kiro-cli 2.x: `fs_write`/`write` with a `command` (create, strReplace,
 # insert) and `content`. kiro-cli 3.x (V3 engine, #176): `fs_write` {path,
@@ -263,21 +270,72 @@ def cmd_deadline():
     return 0
 
 
+def timeout_message(seconds, status, started, now):
+    """The shim's block reason when Probity ran past its deadline (#200)."""
+    seconds = int(seconds) if float(seconds).is_integer() else seconds
+    parts = [f"Probity took longer than {seconds}s to judge this call. kiro-cli 3.x lets a call "
+             "through when its hook runs past 60 s, so the shim blocks it instead."]
+    if isinstance(status, dict) and isinstance(status.get("judge"), str) and isinstance(status.get("at"), (int, float)):
+        asked = max(0, round(status["at"] / 1000 - started))
+        waited = max(0, round(now - status["at"] / 1000))
+        parts.append(f"It was waiting on the {status['judge']} judge, asked {asked} s into the call "
+                     f"({waited} s before the block).")
+    else:
+        parts.append("No kiroJudge or claudeJudge had been asked yet: the time went to Probity's "
+                     "startup and rules, or to a judge that doesn't report itself.")
+    parts.append("Retry it; if this keeps happening, use a faster judge or raise "
+                 "PROBITY_KIRO_TIMEOUT_S (below 60).")
+    return " ".join(parts)
+
+
+def read_status(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def cmd_run(argv):
     seconds, command = float(argv[0]), argv[1:]
-    data = sys.stdin.buffer.read()
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, start_new_session=True)
     try:
-        out, _ = process.communicate(data, timeout=seconds)
-    except subprocess.TimeoutExpired:
+        started = float(os.environ.get("PROBITY_KIRO_HOOK_STARTED") or time.time())
+    except ValueError:
+        started = time.time()
+    data = sys.stdin.buffer.read()
+    fd, status_path = tempfile.mkstemp(prefix="probity-judge-status.")
+    os.close(fd)
+    env = dict(os.environ,
+               PROBITY_HOOK_DEADLINE_MS=str(int((started + seconds) * 1000)),
+               PROBITY_JUDGE_STATUS=status_path)
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   start_new_session=True, env=env)
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            out, _ = process.communicate(data, timeout=max(0.0, started + seconds - time.time()))
+        except subprocess.TimeoutExpired:
+            # SIGTERM first, so Probity can stop the judges it started in
+            # process groups of their own; SIGKILL whatever is left.
+            for sig, wait in ((signal.SIGTERM, 1.0), (signal.SIGKILL, None)):
+                try:
+                    os.killpg(process.pid, sig)
+                except OSError:
+                    break
+                try:
+                    process.wait(timeout=wait)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            process.wait()
+            sys.stdout.write(timeout_message(seconds, read_status(status_path), started, time.time()) + "\n")
+            return 124
+        sys.stdout.buffer.write(out)
+        return process.returncode
+    finally:
+        try:
+            os.unlink(status_path)
         except OSError:
             pass
-        process.wait()
-        return 124
-    sys.stdout.buffer.write(out)
-    return process.returncode
 
 
 def cmd_install():
