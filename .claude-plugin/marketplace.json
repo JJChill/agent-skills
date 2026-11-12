@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "agent-skills",
-      "version": "0.6.20",
+      "version": "0.6.21",
       "source": {
         "source": "github",
         "repo": "JJChill/agent-skills"
