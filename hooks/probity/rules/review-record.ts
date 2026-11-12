@@ -117,19 +117,45 @@ function unwrap(value: string): string {
  * relative to `dir`. Undefined when neither is given.
  */
 export function mergeMessage(args: string[], dir: string): string | undefined {
+  const { messages, file } = mergeMessageArgs(args)
+  if (messages.length > 0) return messages.join('\n\n')
+  if (file?.path === '-') return undefined // git merge has no stdin form; the gate names this
+  return file === undefined ? undefined : readMessageFile(file.path, dir, [])
+}
+
+type MessageFile = { flag: string; path: string }
+
+function mergeMessageArgs(args: string[]): { messages: string[]; file?: MessageFile } {
   const messages: string[] = []
-  let file: string | undefined
+  let file: MessageFile | undefined
   for (let k = 1; k < args.length; k++) {
     const arg = args[k]!
     if (arg === '-m' || arg === '--message') messages.push(unwrap(args[++k] ?? ''))
     else if (arg.startsWith('--message=')) messages.push(unwrap(arg.slice('--message='.length)))
     else if (/^-m./.test(arg)) messages.push(unwrap(arg.slice(2)))
-    else if (arg === '-F' || arg === '--file') file = args[++k]
-    else if (arg.startsWith('--file=')) file = arg.slice('--file='.length)
+    else if ((arg === '-F' || arg === '--file') && args[k + 1] !== undefined) file = { flag: arg, path: args[++k]! }
+    else if (arg.startsWith('--file=')) file = { flag: '--file', path: arg.slice('--file='.length) }
   }
-  if (messages.length > 0) return messages.join('\n\n')
-  if (file === '-') return undefined // git merge has no stdin form; the gate names this
-  return file === undefined ? undefined : readMessageFile(file, dir, [])
+  return { messages, file }
+}
+
+/**
+ * Why a named message file gave no message (#191). The gate runs before
+ * the command, so a file the same command writes is not there yet, and a
+ * `$VAR` or `~` path is never expanded.
+ */
+function unreadableFile({ flag, path }: MessageFile, dir: string): string {
+  if (path.includes('$') || path.startsWith('~')) {
+    return (
+      `${flag} \`${path}\` names its file through a shell variable or ~, which the gate cannot expand before ` +
+      'the command runs; pass a literal path to a file written in an earlier command, or pass the message inline'
+    )
+  }
+  const resolved = isAbsolute(path) ? path : resolve(dir, path)
+  return (
+    `could not read ${flag} \`${path}\`${resolved === path ? '' : ` (resolved to \`${resolved}\`)`}; ` +
+    'the gate reads it before the command runs, so write the file in an earlier command, not the same one'
+  )
 }
 
 /** A message file, or the heredoc on stdin for `-`. Undefined if unreadable. */
@@ -338,17 +364,22 @@ function skipPrefixes(simple: SimpleCommand): string[] {
   return words.slice(k)
 }
 
-function ghBody(args: string[], dir: string, stdin: string[]): string | undefined {
+/** The `gh pr merge` body: inline, or read from the named file (`file` set
+ *  when one was named, so an unreadable one can be reported). */
+function ghBody(args: string[], dir: string, stdin: string[]): { body?: string; file?: MessageFile } {
   for (let k = 1; k < args.length; k++) {
     const arg = args[k]!
-    if (arg === '-b' || arg === '--body') return unwrap(args[k + 1] ?? '')
-    if (arg.startsWith('--body=')) return unwrap(arg.slice('--body='.length))
+    if (arg === '-b' || arg === '--body') return { body: unwrap(args[k + 1] ?? '') }
+    if (arg.startsWith('--body=')) return { body: unwrap(arg.slice('--body='.length)) }
     if (arg === '-F' || arg === '--body-file' || arg.startsWith('--body-file=')) {
-      const file = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[k + 1]
-      return file ? readMessageFile(file, dir, stdin) : undefined
+      const eq = arg.indexOf('=')
+      const path = eq > 0 ? arg.slice(eq + 1) : args[k + 1]
+      if (!path) return {}
+      const file = { flag: eq > 0 ? arg.slice(0, eq) : arg, path }
+      return { body: readMessageFile(path, dir, stdin), file }
     }
   }
-  return undefined
+  return {}
 }
 
 function ghPr(args: string[]): string | undefined {
@@ -564,11 +595,13 @@ export function requireReviewRecord(
     }
     const message = mergeMessage(args, dir)
     if (message === undefined) {
-      const stdinFile = args.some((arg, k) => (arg === '-F' || arg === '--file') && args[k + 1] === '-') || args.includes('--file=-')
+      const { file } = mergeMessageArgs(args)
       return violation(target, [
-        stdinFile
+        file?.path === '-'
           ? 'git merge cannot read -F - (it fails with "could not read file \'-\'"); write the message to a file for -F <file>, or pass it with -m'
-          : 'no -m or -F message given',
+          : file
+            ? unreadableFile(file, dir)
+            : 'no -m or -F message given',
       ])
     }
     const found = problems(parseReviewRecord(message), () => routeMerge(dir, incoming, head))
@@ -586,8 +619,10 @@ export function requireReviewRecord(
     if (base !== undefined && !protectedBranches.includes(base)) return undefined
     if (!touchesEnforced(() => git.prFiles(pr, dir))) return undefined
     const target = base ?? 'a protected branch'
-    const body = ghBody(args, dir, stdin)
-    if (body === undefined) return violation(target, ['no --body or --body-file given'])
+    const { body, file } = ghBody(args, dir, stdin)
+    if (body === undefined) {
+      return violation(target, [file ? unreadableFile(file, dir) : 'no --body or --body-file given'])
+    }
     const found = problems(parseReviewRecord(body), () => routePr(pr, dir))
     return found.length > 0 ? violation(target, found) : undefined
   }

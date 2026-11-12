@@ -106,6 +106,42 @@ export function substitutionsIn(text: string): string[] {
   return found
 }
 
+const ANSI_C_ESCAPES: Record<string, string> = {
+  n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v',
+  '\\': '\\', "'": "'", '"': '"', '?': '?',
+}
+
+/** Decodes the body of a bash `$'…'` string starting at `start` (just past
+ *  the opening quote). Returns the text and the index after the closing quote. */
+function ansiC(command: string, start: number): [string, number] {
+  let text = ''
+  let i = start
+  while (i < command.length && command[i] !== "'") {
+    if (command[i] !== '\\' || i + 1 >= command.length) {
+      text += command[i++]
+      continue
+    }
+    const next = command[i + 1]!
+    const hex = next === 'x' ? /^[0-9a-fA-F]{1,2}/ : next === 'u' ? /^[0-9a-fA-F]{1,4}/ : next === 'U' ? /^[0-9a-fA-F]{1,8}/ : undefined
+    const digits = hex?.exec(command.slice(i + 2))?.[0]
+    const octal = /^[0-7]{1,3}/.exec(command.slice(i + 1))?.[0]
+    if (digits) {
+      text += String.fromCodePoint(parseInt(digits, 16))
+      i += 2 + digits.length
+    } else if (octal) {
+      text += String.fromCharCode(parseInt(octal, 8) & 0xff)
+      i += 1 + octal.length
+    } else if (next in ANSI_C_ESCAPES) {
+      text += ANSI_C_ESCAPES[next]
+      i += 2
+    } else {
+      text += '\\' + next // unknown escapes stay as written, as in bash
+      i += 2
+    }
+  }
+  return [text, i + 1]
+}
+
 /** Splits a shell command into words and operators, reading heredoc
  *  bodies into the word token of their delimiter. Quoting is removed;
  *  `$(…)` and backticks stay inside their word as written, and the ones
@@ -216,6 +252,15 @@ function tokenize(command: string): Token[] {
       i++
       inWord = true
       quoted = true
+      continue
+    }
+    if (c === '$' && command[i + 1] === "'") {
+      // ANSI-C quoting (#191): `$'a\nb'` is one word with a real newline.
+      const [text, end] = ansiC(command, i + 2)
+      word += text
+      inWord = true
+      quoted = true
+      i = end
       continue
     }
     if (c === '$' && command[i + 1] === '(') {

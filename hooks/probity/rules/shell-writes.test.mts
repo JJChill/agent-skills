@@ -16,6 +16,7 @@ import { kotlinRuleEntries } from '../presets/kotlin.ts'
 import { swiftRuleEntries } from '../presets/swift.ts'
 import {
   forbidShellWritesToScopedFiles,
+  parseShell,
   shellWritePaths,
   shellWriteTargets,
   withShellWriteScreen,
@@ -220,4 +221,9 @@ test('every preset puts the screen first, with an opt-out', async () => {
   const swiftSed = { kind: 'command' as const, command: "sed -i '' 's/a/b/' AcceptanceTests/Specs/A.swift" }
   assert.equal((await (swift[0] as Function)(swiftSed)).kind, 'violation')
   assert.equal(swiftRuleEntries(ROOT, { shellWriteScreen: false }).length, swift.length - 1)
+})
+
+test("decodes ANSI-C $'…' quoting into the word (#191)", () => {
+  const [simple] = parseShell("echo $'a\\nb\\t\\'c\\\\ \\x41\\101\\u00e9' \"$'kept'\"")
+  assert.deepEqual(simple!.words, ['echo', "a\nb\t'c\\ AAé", "$'kept'"])
 })

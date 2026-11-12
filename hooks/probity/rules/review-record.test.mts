@@ -640,3 +640,31 @@ test('should deny the exact homelab command against a real repository (#195)', a
   assert.equal(ff.kind, 'violation')
   assert.match(ff.reason ?? '', /fast-forward/)
 })
+
+// --- message sources the gate cannot read (#191) --------------------------
+
+test('should decode a $\'…\' gh --body so its \\n escapes break paragraphs', async () => {
+  const command = "gh pr merge 3 --merge --body $'Merge\\n\\nReviewed-by-agent: code-reviewer (ran, 0 findings)\\nCo-Authored-By: x <x@y>'"
+  assert.equal((await judge(command)).kind, 'pass')
+})
+
+test('should decode a $\'…\' git merge -m message', async () => {
+  const command = "git merge --no-ff b -m $'Merge b\\n\\nReviewed-by-agent: code-reviewer (ran, 0 findings)'"
+  assert.equal((await judge(command)).kind, 'pass')
+})
+
+const unreadableFiles: [string, string, RegExp][] = [
+  ['gh --body-file naming a missing file', 'gh pr merge 3 --merge --body-file /nonexistent/merge-body.txt', /could not read --body-file `\/nonexistent\/merge-body.txt`.*before the command runs/],
+  ['gh --body-file=<missing>', 'gh pr merge 3 --merge --body-file=/nonexistent/b.txt', /could not read --body-file `\/nonexistent\/b.txt`/],
+  ['gh -F with a shell variable path', 'B=/tmp/b.txt && printf x > "$B" && gh pr merge 3 --merge -F "$B"', /-F `\$B` .*shell variable or ~/],
+  ['git merge -F naming a missing file', 'git merge --no-ff b -F /nonexistent/msg.txt', /could not read -F `\/nonexistent\/msg.txt`.*before the command runs/],
+  ['git merge --file=~/msg', 'git merge --no-ff b --file=~/msg.txt', /--file `~\/msg.txt` .*shell variable or ~/],
+]
+for (const [name, command, reason] of unreadableFiles) {
+  test(`should name the unreadable message file, not claim none was given: ${name}`, async () => {
+    const result = await judge(command)
+    assert.equal(result.kind, 'violation')
+    assert.match(result.reason ?? '', reason)
+    assert.doesNotMatch(result.reason ?? '', /no --body|no -m or -F/)
+  })
+}
