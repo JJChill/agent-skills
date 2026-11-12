@@ -91,6 +91,7 @@ export default probityConfig({
 - **Finding the merge.** It finds the merge after a `cd` and with `git -C`. It judges the merge against the branch that a `git switch` or `git checkout` earlier in the same command moves to (`git switch main && git merge …`), not the branch the session was on. It reads a `-m "$(cat <<'EOF' … EOF)"` heredoc.
 - **Fast-forwards.** A merge that would fast-forward is denied, because no commit would hold the record; use `--no-ff`.
 - **`gh pr merge`.** It reads `--body`/`--body-file` and checks the PR's base branch.
+- **Message sources.** It decodes `$'…'` quoting (`-m $'Merge\n\nReviewed-by-agent: …'`). It reads a `-F`/`--body-file` file before the command runs, so write the file in an earlier command and name it by a literal path: a file written by the same command, or named through `$VAR` or `~`, is denied with that reason.
 - **`glab mr merge`** (and its `glab mr accept` alias, with or without `--auto-merge` and `-y`). It reads `-m`/`--message`, the merge commit message, and checks the MR's target branch from `glab mr view -F json`. A GitLab project set to fast-forward merges makes no merge commit to hold the record, so the gate denies those. Set **Settings → Merge requests → Merge method** to *Merge commit* or *Merge commit with semi-linear history*.
 - **Fail safe.** If it can't list the merged files, it enforces anyway.
 - **Not gated:** `--squash`, `--no-commit`, `--abort`/`--continue`, and a merge hidden in `bash -c` or a script.

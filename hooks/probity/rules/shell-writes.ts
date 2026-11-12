@@ -106,6 +106,70 @@ export function substitutionsIn(text: string): string[] {
   return found
 }
 
+const ANSI_C_ESCAPES: Record<string, number> = {
+  n: 0x0a, t: 0x09, r: 0x0d, a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, v: 0x0b,
+  '\\': 0x5c, "'": 0x27, '"': 0x22, '?': 0x3f,
+}
+const utf8 = (text: string) => [...Buffer.from(text, 'utf8')]
+
+/**
+ * Decodes the body of a bash `$'…'` string starting at `start` (just past
+ * the opening quote). Returns the text and the index after the closing
+ * quote. As in bash, `\xHH` and `\NNN` are raw bytes (decoded as UTF-8 at
+ * the end), and the word ends at the first NUL. An escape left undecoded
+ * (an unknown one like `\\q`, or `\\U` above U+10FFFF, which bash emits as
+ * raw bytes) stays as written: safe for matching paths, never a throw.
+ */
+function ansiC(command: string, start: number): [string, number] {
+  const bytes: number[] = []
+  let nul = false
+  let i = start
+  const push = (...values: number[]) => {
+    for (const value of values) {
+      if (value === 0) nul = true
+      if (!nul) bytes.push(value)
+    }
+  }
+  while (i < command.length && command[i] !== "'") {
+    const c = command[i]!
+    if (c !== '\\' || i + 1 >= command.length) {
+      const char = String.fromCodePoint(command.codePointAt(i)!)
+      push(...utf8(char))
+      i += char.length
+      continue
+    }
+    const next = command[i + 1]!
+    const width = next === 'x' ? 2 : next === 'u' ? 4 : next === 'U' ? 8 : 0
+    const digits = width ? new RegExp(`^[0-9a-fA-F]{1,${width}}`).exec(command.slice(i + 2))?.[0] : undefined
+    const octal = /^[0-7]{1,3}/.exec(command.slice(i + 1))?.[0]
+    if (digits) {
+      const value = parseInt(digits, 16)
+      if (next === 'x') push(value)
+      else if (value <= 0x10ffff) push(...(value === 0 ? [0] : utf8(String.fromCodePoint(value))))
+      else push(...utf8(command.slice(i, i + 2 + digits.length)))
+      i += 2 + digits.length
+    } else if (octal) {
+      push(parseInt(octal, 8) & 0xff)
+      i += 1 + octal.length
+    } else if (next === 'c' && command[i + 2] === '\\' && i + 3 < command.length) {
+      // `\c\\` and `\c\'`: bash pairs the backslashes before decoding, so the
+      // escaped character is the control target and the quote still closes.
+      push(command.charCodeAt(i + 3) & 0x1f)
+      i += 4
+    } else if (next === 'c' && i + 2 < command.length && command[i + 2] !== "'") {
+      push(command.charCodeAt(i + 2) & 0x1f)
+      i += 3
+    } else if (next in ANSI_C_ESCAPES) {
+      push(ANSI_C_ESCAPES[next]!)
+      i += 2
+    } else {
+      push(...utf8('\\' + next)) // unknown escapes stay as written, as in bash
+      i += 2
+    }
+  }
+  return [Buffer.from(bytes).toString('utf8'), i + 1]
+}
+
 /** Splits a shell command into words and operators, reading heredoc
  *  bodies into the word token of their delimiter. Quoting is removed;
  *  `$(…)` and backticks stay inside their word as written, and the ones
@@ -216,6 +280,15 @@ function tokenize(command: string): Token[] {
       i++
       inWord = true
       quoted = true
+      continue
+    }
+    if (c === '$' && command[i + 1] === "'") {
+      // ANSI-C quoting (#191): `$'a\nb'` is one word with a real newline.
+      const [text, end] = ansiC(command, i + 2)
+      word += text
+      inWord = true
+      quoted = true
+      i = end
       continue
     }
     if (c === '$' && command[i + 1] === '(') {
