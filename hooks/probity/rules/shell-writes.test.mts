@@ -239,3 +239,8 @@ test("decodes $'…' edge cases as bash does: out-of-range \\U, NUL, \\cX, raw b
 test("blocks a $'…' write target cut at its NUL, as bash writes it", async () => {
   await assertBlocked("echo hi > $'src/a.ts\\0x'", 'writes src/a.ts,')
 })
+
+test("closes a $'…' string after \\c\\\\ and \\c\\' as bash does, so the redirect is still seen", async () => {
+  await assertBlocked("echo $'\\c\\\\' > src/a.ts", 'writes src/a.ts,')
+  assert.deepEqual(parseShell("echo $'\\c\\'x' y")[0]!.words, ['echo', '\x07x', 'y'])
+})

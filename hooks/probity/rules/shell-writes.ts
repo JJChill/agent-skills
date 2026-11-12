@@ -116,8 +116,9 @@ const utf8 = (text: string) => [...Buffer.from(text, 'utf8')]
  * Decodes the body of a bash `$'…'` string starting at `start` (just past
  * the opening quote). Returns the text and the index after the closing
  * quote. As in bash, `\xHH` and `\NNN` are raw bytes (decoded as UTF-8 at
- * the end), the word ends at the first NUL, and an escape bash would not
- * decode (`\U110000`, `\q`) stays as written.
+ * the end), and the word ends at the first NUL. An escape left undecoded
+ * (an unknown one like `\\q`, or `\\U` above U+10FFFF, which bash emits as
+ * raw bytes) stays as written: safe for matching paths, never a throw.
  */
 function ansiC(command: string, start: number): [string, number] {
   const bytes: number[] = []
@@ -150,6 +151,11 @@ function ansiC(command: string, start: number): [string, number] {
     } else if (octal) {
       push(parseInt(octal, 8) & 0xff)
       i += 1 + octal.length
+    } else if (next === 'c' && command[i + 2] === '\\' && i + 3 < command.length) {
+      // `\c\\` and `\c\'`: bash pairs the backslashes before decoding, so the
+      // escaped character is the control target and the quote still closes.
+      push(command.charCodeAt(i + 3) & 0x1f)
+      i += 4
     } else if (next === 'c' && i + 2 < command.length && command[i + 2] !== "'") {
       push(command.charCodeAt(i + 2) & 0x1f)
       i += 3
