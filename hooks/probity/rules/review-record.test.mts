@@ -656,9 +656,9 @@ test('should decode a $\'…\' git merge -m message', async () => {
 const unreadableFiles: [string, string, RegExp][] = [
   ['gh --body-file naming a missing file', 'gh pr merge 3 --merge --body-file /nonexistent/merge-body.txt', /could not read --body-file `\/nonexistent\/merge-body.txt`.*before the command runs/],
   ['gh --body-file=<missing>', 'gh pr merge 3 --merge --body-file=/nonexistent/b.txt', /could not read --body-file `\/nonexistent\/b.txt`/],
-  ['gh -F with a shell variable path', 'B=/tmp/b.txt && printf x > "$B" && gh pr merge 3 --merge -F "$B"', /-F `\$B` .*shell variable or ~/],
+  ['gh -F with a shell variable path', 'B=/tmp/b.txt && printf x > "$B" && gh pr merge 3 --merge -F "$B"', /-F `\$B` .*shell expansion/],
   ['git merge -F naming a missing file', 'git merge --no-ff b -F /nonexistent/msg.txt', /could not read -F `\/nonexistent\/msg.txt`.*before the command runs/],
-  ['git merge --file=~/msg', 'git merge --no-ff b --file=~/msg.txt', /--file `~\/msg.txt` .*shell variable or ~/],
+  ['git merge --file=~/msg', 'git merge --no-ff b --file=~/msg.txt', /--file `~\/msg.txt` .*shell expansion/],
 ]
 for (const [name, command, reason] of unreadableFiles) {
   test(`should name the unreadable message file, not claim none was given: ${name}`, async () => {
@@ -668,3 +668,15 @@ for (const [name, command, reason] of unreadableFiles) {
     assert.doesNotMatch(result.reason ?? '', /no --body|no -m or -F/)
   })
 }
+
+test('should say gh -F - reads only a heredoc on stdin when it is piped', async () => {
+  const result = await judge('printf x | gh pr merge 3 --merge -F -')
+  assert.equal(result.kind, 'violation')
+  assert.match(result.reason ?? '', /-F - .*heredoc/)
+  assert.doesNotMatch(result.reason ?? '', /resolved to/)
+})
+
+test('should call a $(…) message-file path a shell expansion', async () => {
+  const result = await judge('gh pr merge 3 --merge -F "$(mktemp)"')
+  assert.match(result.reason ?? '', /shell expansion/)
+})

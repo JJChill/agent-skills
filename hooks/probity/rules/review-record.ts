@@ -145,9 +145,12 @@ function mergeMessageArgs(args: string[]): { messages: string[]; file?: MessageF
  * `$VAR` or `~` path is never expanded.
  */
 function unreadableFile({ flag, path }: MessageFile, dir: string): string {
+  if (path === '-') {
+    return `${flag} - reads stdin, and the gate can read stdin only from a heredoc (\`${flag} - <<'EOF' … EOF\`), not a pipe`
+  }
   if (path.includes('$') || path.startsWith('~')) {
     return (
-      `${flag} \`${path}\` names its file through a shell variable or ~, which the gate cannot expand before ` +
+      `${flag} \`${path}\` names its file through a shell expansion ($VAR, $(…) or ~), which the gate cannot expand before ` +
       'the command runs; pass a literal path to a file written in an earlier command, or pass the message inline'
     )
   }

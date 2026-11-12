@@ -227,3 +227,15 @@ test("decodes ANSI-C $'…' quoting into the word (#191)", () => {
   const [simple] = parseShell("echo $'a\\nb\\t\\'c\\\\ \\x41\\101\\u00e9' \"$'kept'\"")
   assert.deepEqual(simple!.words, ['echo', "a\nb\t'c\\ AAé", "$'kept'"])
 })
+
+test("decodes $'…' edge cases as bash does: out-of-range \\U, NUL, \\cX, raw bytes", () => {
+  const words = (command: string) => parseShell(command)[0]!.words
+  assert.deepEqual(words("echo $'a\\U110000b' $'\\UFFFFFFFF'"), ['echo', 'a\\U110000b', '\\UFFFFFFFF'])
+  assert.deepEqual(words("echo $'src/a.ts\\0junk' $'b.ts\\x00x' $'c.ts\\c@d'"), ['echo', 'src/a.ts', 'b.ts', 'c.ts'])
+  assert.deepEqual(words("echo $'x\\cJy'"), ['echo', 'x\ny'])
+  assert.deepEqual(words("echo $'caf\\303\\251.ts' $'\\xc3\\xa9'"), ['echo', 'café.ts', 'é'])
+})
+
+test("blocks a $'…' write target cut at its NUL, as bash writes it", async () => {
+  await assertBlocked("echo hi > $'src/a.ts\\0x'", 'writes src/a.ts,')
+})

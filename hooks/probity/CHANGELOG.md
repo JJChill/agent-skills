@@ -8,8 +8,8 @@
   - `gh pr merge --body $'summary\n\nReviewed-by-agent: …'` was denied with "no Reviewed-by-agent trailer in the last paragraph", because the shell parser kept the `\n` escapes as literal text.
   - A `--body-file`/`-F` (or `git merge -F`) file that couldn't be read was reported as "no --body or --body-file given", though the flag was there. The gate reads the file before the command runs, so this happens whenever the same command writes the file, or names it as `"$B"` or `~/…`.
 - **Now:**
-  - The shell parser decodes bash ANSI-C quoting (`$'…'`: `\n`, `\t`, `\\`, `\'`, `\xHH`, `\NNN`, `\uHHHH` and the rest), so `-m $'…'` and `--body $'…'` are judged as bash would pass them. This applies to every rule built on the parser, so a `$'…'` write target is now read as bash expands it too.
-  - An unreadable message file is named in the denial, with its resolved path and a note that the gate reads it before the command runs. A `$VAR` or `~` path is reported as one the gate can't expand.
+  - The shell parser decodes bash ANSI-C quoting (`$'…'`: the letter escapes, `\\`, `\'`, `\"`, `\xHH` and `\NNN` as raw bytes, `\uHHHH`/`\UHHHHHHHH`, `\cX`, and the word ending at a NUL), so `-m $'…'` and `--body $'…'` are judged as bash would pass them. This applies to every rule built on the parser, so a `$'…'` write target is now read as bash expands it too.
+  - An unreadable message file is named in the denial, with its resolved path and a note that the gate reads it before the command runs. A `$VAR`, `$(…)` or `~` path is reported as one the gate can't expand, and a piped `gh -F -` as stdin the gate can read only from a heredoc.
 - **Migration:** none.
 
 ## 0.4.68

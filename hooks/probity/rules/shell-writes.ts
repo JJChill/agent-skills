@@ -106,40 +106,62 @@ export function substitutionsIn(text: string): string[] {
   return found
 }
 
-const ANSI_C_ESCAPES: Record<string, string> = {
-  n: '\n', t: '\t', r: '\r', a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', v: '\v',
-  '\\': '\\', "'": "'", '"': '"', '?': '?',
+const ANSI_C_ESCAPES: Record<string, number> = {
+  n: 0x0a, t: 0x09, r: 0x0d, a: 0x07, b: 0x08, e: 0x1b, E: 0x1b, f: 0x0c, v: 0x0b,
+  '\\': 0x5c, "'": 0x27, '"': 0x22, '?': 0x3f,
 }
+const utf8 = (text: string) => [...Buffer.from(text, 'utf8')]
 
-/** Decodes the body of a bash `$'…'` string starting at `start` (just past
- *  the opening quote). Returns the text and the index after the closing quote. */
+/**
+ * Decodes the body of a bash `$'…'` string starting at `start` (just past
+ * the opening quote). Returns the text and the index after the closing
+ * quote. As in bash, `\xHH` and `\NNN` are raw bytes (decoded as UTF-8 at
+ * the end), the word ends at the first NUL, and an escape bash would not
+ * decode (`\U110000`, `\q`) stays as written.
+ */
 function ansiC(command: string, start: number): [string, number] {
-  let text = ''
+  const bytes: number[] = []
+  let nul = false
   let i = start
+  const push = (...values: number[]) => {
+    for (const value of values) {
+      if (value === 0) nul = true
+      if (!nul) bytes.push(value)
+    }
+  }
   while (i < command.length && command[i] !== "'") {
-    if (command[i] !== '\\' || i + 1 >= command.length) {
-      text += command[i++]
+    const c = command[i]!
+    if (c !== '\\' || i + 1 >= command.length) {
+      const char = String.fromCodePoint(command.codePointAt(i)!)
+      push(...utf8(char))
+      i += char.length
       continue
     }
     const next = command[i + 1]!
-    const hex = next === 'x' ? /^[0-9a-fA-F]{1,2}/ : next === 'u' ? /^[0-9a-fA-F]{1,4}/ : next === 'U' ? /^[0-9a-fA-F]{1,8}/ : undefined
-    const digits = hex?.exec(command.slice(i + 2))?.[0]
+    const width = next === 'x' ? 2 : next === 'u' ? 4 : next === 'U' ? 8 : 0
+    const digits = width ? new RegExp(`^[0-9a-fA-F]{1,${width}}`).exec(command.slice(i + 2))?.[0] : undefined
     const octal = /^[0-7]{1,3}/.exec(command.slice(i + 1))?.[0]
     if (digits) {
-      text += String.fromCodePoint(parseInt(digits, 16))
+      const value = parseInt(digits, 16)
+      if (next === 'x') push(value)
+      else if (value <= 0x10ffff) push(...(value === 0 ? [0] : utf8(String.fromCodePoint(value))))
+      else push(...utf8(command.slice(i, i + 2 + digits.length)))
       i += 2 + digits.length
     } else if (octal) {
-      text += String.fromCharCode(parseInt(octal, 8) & 0xff)
+      push(parseInt(octal, 8) & 0xff)
       i += 1 + octal.length
+    } else if (next === 'c' && i + 2 < command.length && command[i + 2] !== "'") {
+      push(command.charCodeAt(i + 2) & 0x1f)
+      i += 3
     } else if (next in ANSI_C_ESCAPES) {
-      text += ANSI_C_ESCAPES[next]
+      push(ANSI_C_ESCAPES[next]!)
       i += 2
     } else {
-      text += '\\' + next // unknown escapes stay as written, as in bash
+      push(...utf8('\\' + next)) // unknown escapes stay as written, as in bash
       i += 2
     }
   }
-  return [text, i + 1]
+  return [Buffer.from(bytes).toString('utf8'), i + 1]
 }
 
 /** Splits a shell command into words and operators, reading heredoc
