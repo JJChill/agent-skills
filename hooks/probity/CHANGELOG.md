@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.69
 
 `requireReviewRecord` reads `$'…'` messages and names a message file it can't read ([timesheet-tracker#191](https://github.com/JJChill/timesheet-tracker/issues/191)).
 
