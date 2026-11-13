@@ -129,7 +129,8 @@ with tempfile.TemporaryDirectory() as d:
         "tool_name": "execute_bash",
         "tool_input": {"command": "git commit -m x", "cwd": d, "description": "commit", "run_in_background": False, "timeout": 60},
     }))
-    check("V3 execute_bash maps to Bash", out == {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": d})
+    check("V3 execute_bash maps to Bash, keeping the Kiro session for the shim's log",
+          out == {"tool_name": "Bash", "tool_input": {"command": "git commit -m x"}, "cwd": d, "session_id": "s"})
 
     for tool in ("read_file", "grep_search", "file_search"):
         check(f"V3 {tool} is not judged", run_event({"tool_name": tool, "tool_input": {"path": path}, "cwd": d}) == "")

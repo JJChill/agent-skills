@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+# Keep test calls out of the real shim log.
+os.environ.setdefault("PROBITY_KIRO_LOG", "off")
 
 _HERE = pathlib.Path(__file__).resolve().parent
 failures = []
@@ -123,7 +125,9 @@ with tempfile.TemporaryDirectory() as tmp:
     (bin_dir / "probity-claude").write_text(
         "#!/bin/sh\n"
         'printf \'%s\' "$PROBITY_HOOK_DEADLINE_MS" > "$RECORD_DIR/deadline"\n'
-        'printf \'{"judge":"kiro","at":%s000}\' "$(date +%s)" > "$PROBITY_JUDGE_STATUS"\n'
+        'printf \'{"event":"ask","judge":"claude:x","at":%s000}\\n\' "$(date +%s)" >> "$PROBITY_JUDGE_STATUS"\n'
+        'printf \'{"event":"answer","judge":"claude:x","at":%s000,"kind":"pass"}\\n\' "$(date +%s)" >> "$PROBITY_JUDGE_STATUS"\n'
+        'printf \'{"event":"ask","judge":"kiro","at":%s000}\\n\' "$(date +%s)" >> "$PROBITY_JUDGE_STATUS"\n'
         "sleep 5\n")
     os.environ["PROBITY_KIRO_TIMEOUT_S"] = "2"
     try:
@@ -136,6 +140,46 @@ with tempfile.TemporaryDirectory() as tmp:
     deadline_ms = int((record / "deadline").read_text() or 0) if (record / "deadline").exists() else 0
     check("...and Probity was given the deadline, counted from the hook's start",
           before * 1000 - 1000 <= deadline_ms <= before * 1000 + 3000, deadline_ms)
+
+    # #200 follow-up: Kiro keeps no hook output, so every judged call is
+    # logged, with each judge event timed from the hook's start.
+    log = base / "shim-log.jsonl"
+    os.environ["PROBITY_KIRO_LOG"] = str(log)
+    os.environ["PROBITY_KIRO_TIMEOUT_S"] = "2"
+    try:
+        res, payload = shim("fs_write", {"path": path, "text": "x\n"})
+        records = [json.loads(line) for line in log.read_text().splitlines()]
+        check("a timed-out call is logged with its tool, file, session, message and judge events",
+              len(records) == 1 and records[0]["outcome"] == "timeout" and records[0]["tool"] == "Write"
+              and records[0]["file"] == path and records[0]["session"] == "sess_v3-session"
+              and "waiting on the kiro judge" in records[0]["reason"]
+              and [e["event"] for e in records[0]["judges"]] == ["ask", "answer", "ask"]
+              and all(isinstance(e["atMs"], int) for e in records[0]["judges"]), records)
+        check("...and the block message points at the log", str(log) in res.stderr, res.stderr)
+
+        # Only answered judges: the rest of the time went to Probity's rules.
+        (bin_dir / "probity-claude").write_text(
+            "#!/bin/sh\n"
+            'printf \'{"event":"ask","judge":"kiro","at":%s000}\\n\' "$(date +%s)" >> "$PROBITY_JUDGE_STATUS"\n'
+            'printf \'{"event":"answer","judge":"kiro","at":%s000,"kind":"pass"}\\n\' "$(date +%s)" >> "$PROBITY_JUDGE_STATUS"\n'
+            "sleep 5\n")
+        res, payload = shim("fs_write", {"path": path, "text": "x\n"})
+        check("a block after every judge answered says the rest went to Probity's rules",
+              "last judge (kiro) answered" in res.stderr, res.stderr)
+
+        # A deny within the deadline is logged with its reason.
+        (bin_dir / "probity-claude").write_text(RECORDER)
+        res, payload = shim("fs_write", {"path": path, "text": "x\n"})
+        last = json.loads(log.read_text().splitlines()[-1])
+        check("a deny is logged with its reason", last["outcome"] == "deny" and last["reason"] == "judged"
+              and isinstance(last["endMs"], int), last)
+        os.environ["PROBITY_KIRO_LOG"] = "off"
+        lines = len(log.read_text().splitlines())
+        shim("fs_write", {"path": path, "text": "x\n"})
+        check("PROBITY_KIRO_LOG=off logs nothing", len(log.read_text().splitlines()) == lines)
+    finally:
+        del os.environ["PROBITY_KIRO_LOG"]
+        del os.environ["PROBITY_KIRO_TIMEOUT_S"]
 
 if failures:
     raise SystemExit(f"{len(failures)} check(s) failed")

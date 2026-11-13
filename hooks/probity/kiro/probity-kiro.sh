@@ -119,15 +119,13 @@ fi
 # 3.x event Probity gets a deadline below that and a late verdict blocks.
 # Probity sees the deadline too, so kiroJudge leaves time for a fallback
 # judge; the block reason names the judge the call was waiting on (#200).
+# Every judged call is logged with its judges' timings (PROBITY_KIRO_LOG),
+# since Kiro keeps no hook output.
 DEADLINE="$(printf '%s' "$EVENT" | python3 "$TRANSLATE" deadline)"
-if [ -n "$DEADLINE" ]; then
-  RESPONSE="$(printf '%s' "$PAYLOAD" | python3 "$TRANSLATE" run "$DEADLINE" "$PROBITY" --agent claude-code 2>/dev/null)"
-  if [ $? -eq 124 ]; then
-    printf '%s\n' "${RESPONSE:-Probity took longer than ${DEADLINE}s to judge this call, so the shim blocks it. Retry it.}" >&2
-    exit 2
-  fi
-else
-  RESPONSE="$(printf '%s' "$PAYLOAD" | "$PROBITY" --agent claude-code 2>/dev/null)"
+RESPONSE="$(printf '%s' "$PAYLOAD" | python3 "$TRANSLATE" run "${DEADLINE:-0}" "$PROBITY" --agent claude-code 2>/dev/null)"
+if [ $? -eq 124 ]; then
+  printf '%s\n' "${RESPONSE:-Probity took longer than ${DEADLINE}s to judge this call, so the shim blocks it. Retry it.}" >&2
+  exit 2
 fi
 REASON="$(printf '%s' "$RESPONSE" | python3 "$TRANSLATE" reason)"
 

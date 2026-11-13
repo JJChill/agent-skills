@@ -10,7 +10,7 @@ import test from 'node:test'
 import type { Agent, Rule, RuleContext } from '@nizos/probity'
 
 import { isJudgeUnavailable, withJudgeFailureDiagnostics } from './gates.ts'
-import { KIRO_JUDGE_AGENT, claudeJudge, installedClaude, judgeChain, kiroJudge, type KiroRun, type KiroRunResult } from './kiro-judge.ts'
+import { KIRO_JUDGE_AGENT, claudeJudge, installedClaude, judgeChain, kiroJudge, type KiroRun, type KiroRunResult, type NamedJudge } from './kiro-judge.ts'
 
 const ok = (stdout: string, extra: Partial<KiroRunResult> = {}): KiroRunResult => ({
   exitCode: 0,
@@ -465,10 +465,17 @@ test('output that is not yet a verdict is waited on, and output after a verdict 
 
 test("under a hook deadline, the Kiro run keeps the fallback reserve free, and gives way when there's no time", async () => {
   const fake = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
-  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 30_000) }, async () => {
+  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 40_000) }, async () => {
     await kiroJudge({ run: fake.run, cwd: cwd() }).reason('p')
   })
-  assert.ok(fake.calls[0]!.timeoutMs <= 10_000 && fake.calls[0]!.timeoutMs > 9_000, String(fake.calls[0]!.timeoutMs))
+  assert.ok(fake.calls[0]!.timeoutMs <= 20_000 && fake.calls[0]!.timeoutMs > 19_000, String(fake.calls[0]!.timeoutMs))
+
+  // Under 10 s left after the reserve isn't worth a kiro-cli start.
+  const short = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
+  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 29_000) }, () =>
+    kiroJudge({ run: short.run, cwd: cwd() }).reason('p'),
+  )
+  assert.equal(short.calls.length, 0)
 
   const late = fakeRun(ok('{"kind":"pass","reason":"ok"}'))
   const verdict = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 15_000) }, () =>
@@ -485,7 +492,7 @@ test("under a hook deadline, the Kiro run keeps the fallback reserve free, and g
   assert.ok(alone.calls[0]!.timeoutMs <= 15_000 && alone.calls[0]!.timeoutMs > 14_000)
 
   const stalled = fakeRun({ exitCode: null, stdout: '', stderr: '', timedOut: true })
-  const timedOut = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 30_000) }, () =>
+  const timedOut = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 40_000) }, () =>
     kiroJudge({ run: stalled.run, cwd: cwd() }).reason('p'),
   )
   assert.match(timedOut.reason, /no answer within \d+ ms, the time left before the hook's deadline less 20000 ms kept for the next judge/)
@@ -501,20 +508,74 @@ test('a chain under a hook deadline falls back to the next judge within the same
   assert.ok(stalled.calls[0]!.timeoutMs <= 20_000)
 })
 
-test('kiroJudge and claudeJudge note in the status file which judge was asked', async () => {
+const events = (file: string) =>
+  readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+
+test('kiroJudge and claudeJudge note each ask and answer in the status file', async () => {
   const dir = cwd()
-  const status = join(dir, 'status.json')
+  const status = join(dir, 'status.jsonl')
   await withEnv({ PROBITY_JUDGE_STATUS: status }, () =>
     kiroJudge({ run: fakeRun(ok('{"kind":"pass","reason":"ok"}')).run, cwd: dir }).reason('p'),
   )
-  assert.equal(JSON.parse(readFileSync(status, 'utf8')).judge, 'kiro')
-  const { query } = sdkQuery('{"kind":"pass","reason":"ok"}')
+  const { query } = sdkQuery('{"kind":"violation","reason":"no red"}')
   await withEnv({ PROBITY_JUDGE_STATUS: status }, () =>
     claudeJudge({ model: 'claude-opus-5-5', query, executable: 'bundled' }).reason('p'),
   )
-  const noted = JSON.parse(readFileSync(status, 'utf8'))
-  assert.equal(noted.judge, 'claude:claude-opus-5-5')
-  assert.ok(Math.abs(noted.at - Date.now()) < 10_000)
+  await withEnv({ PROBITY_JUDGE_STATUS: status }, () =>
+    kiroJudge({ run: fakeRun({ exitCode: 1, stdout: '', stderr: 'auth expired', timedOut: false }).run, cwd: dir }).reason('p'),
+  )
+  const seen = events(status)
+  assert.deepEqual(
+    seen.map((e) => [e.event, e.judge, e.kind ?? null]),
+    [
+      ['ask', 'kiro', null],
+      ['answer', 'kiro', 'pass'],
+      ['ask', 'claude:claude-opus-5-5', null],
+      ['answer', 'claude:claude-opus-5-5', 'violation'],
+      ['ask', 'kiro', null],
+      ['answer', 'kiro', 'violation'],
+    ],
+  )
+  // A real deny isn't "unavailable"; a failed kiro-cli is, with its reason.
+  assert.equal('unavailable' in seen[3]!, false)
+  assert.match(String(seen[5]!.unavailable), /^Kiro judge unavailable: kiro-cli exited with code 1.*auth expired/)
+  assert.ok(seen.every((e) => typeof e.at === 'number' && Math.abs((e.at as number) - Date.now()) < 10_000))
+})
+
+test("a Kiro judge cut short by the hook's deadline falls back without being skipped later", async () => {
+  const dir = cwd()
+  const state = join(dir, 'chain.json')
+  const status = join(dir, 'status.jsonl')
+  const next: NamedJudge = { name: 'next', reason: async () => ({ kind: 'pass', reason: 'next answered' }) }
+  const stalled = fakeRun({ exitCode: null, stdout: '', stderr: '', timedOut: true })
+  const chain = judgeChain([kiroJudge({ run: stalled.run, cwd: dir }), next], { stateFile: state })
+
+  // Too little time: Kiro isn't started, and isn't remembered as down.
+  const late = await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 25_000), PROBITY_JUDGE_STATUS: status }, () =>
+    chain.reason('p'),
+  )
+  assert.equal(late.reason, 'next answered')
+  assert.equal(stalled.calls.length, 0)
+  assert.equal(existsSync(state) && 'kiro' in JSON.parse(readFileSync(state, 'utf8')), false)
+  const giveWay = events(status).find((e) => e.event === 'answer' && e.judge === 'kiro')!
+  assert.equal(giveWay.deadlineLimited, true)
+
+  // Cut short mid-run by the deadline: the same.
+  await withEnv({ PROBITY_HOOK_DEADLINE_MS: String(Date.now() + 40_000) }, () => chain.reason('p'))
+  assert.equal(stalled.calls.length, 1)
+  assert.equal(existsSync(state) && 'kiro' in JSON.parse(readFileSync(state, 'utf8')), false)
+
+  // Timed out on its own limit, with no deadline: down, so skipped next time.
+  await withEnv({ PROBITY_JUDGE_STATUS: status }, () => chain.reason('p'))
+  assert.ok(JSON.parse(readFileSync(state, 'utf8')).kiro > Date.now())
+  await withEnv({ PROBITY_JUDGE_STATUS: status }, () => chain.reason('p'))
+  assert.equal(stalled.calls.length, 2)
+  const skip = events(status).find((e) => e.event === 'skip')!
+  assert.equal(skip.judge, 'kiro')
+  assert.ok((skip.until as number) > Date.now())
 })
 
 test('a running kiro-cli is killed when the process asking it is terminated', async () => {
