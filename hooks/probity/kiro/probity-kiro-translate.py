@@ -32,13 +32,19 @@ piped payload on stdin, silently producing empty output = allow):
           stops at $PROBITY_KIRO_TIMEOUT_S (default 55) and blocks instead.
 
   run SECONDS CMD...
-          Run CMD with stdin passed through, for at most SECONDS from
-          $PROBITY_KIRO_HOOK_STARTED (epoch seconds; default now). CMD gets
-          the deadline as $PROBITY_HOOK_DEADLINE_MS, so kiroJudge leaves
-          time for a fallback judge, and $PROBITY_JUDGE_STATUS, a file the
-          judges note themselves in. Past the deadline, CMD's process group
-          gets SIGTERM, then SIGKILL a second later, and the reason, naming
-          the judge it was waiting on, is written to stdout with exit 124.
+          Run CMD with stdin passed through, for at most SECONDS (0: no
+          limit) from $PROBITY_KIRO_HOOK_STARTED (epoch seconds; default
+          now). CMD gets the deadline as $PROBITY_HOOK_DEADLINE_MS, so
+          kiroJudge leaves time for a fallback judge, and
+          $PROBITY_JUDGE_STATUS, a JSONL file the judges append their asks,
+          answers and skips to. Past the deadline, CMD's process group gets
+          SIGTERM, then SIGKILL a second later, and the reason, naming the
+          judge it was waiting on, is written to stdout with exit 124.
+          Every run appends one line to $PROBITY_KIRO_LOG (default
+          <tmpdir>/probity-kiro-judge/shim-log.jsonl; "off" disables it):
+          the tool and file, the outcome, the reason for a block, and each
+          judge event in ms from the hook's start. Kiro keeps no hook
+          output, so this is the only record of why a call was blocked.
 
   install Read a claude-code payload JSON on stdin; exit 0 when it is a
           shell command that only installs packages (`npm ci`, `npm
@@ -203,6 +209,10 @@ def cmd_event():
     transcript = os.environ.get("TRANSCRIPT_TMP") or ""
     if transcript:
         payload["transcript_path"] = transcript
+    # The Kiro session, so the shim's log can name it.
+    session = event.get("session_id")
+    if isinstance(session, str) and session:
+        payload["session_id"] = session
 
     sys.stdout.write(json.dumps(payload))
     return 0
@@ -270,49 +280,134 @@ def cmd_deadline():
     return 0
 
 
-def timeout_message(seconds, status, started, now):
+LOG_LIMIT = 5 * 1024 * 1024
+LOG_REASON_LIMIT = 500
+
+
+def read_events(path):
+    """The judge events Probity appended to $PROBITY_JUDGE_STATUS (JSONL)."""
+    events = []
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(event, dict) and isinstance(event.get("judge"), str) \
+                        and isinstance(event.get("at"), (int, float)):
+                    events.append(event)
+    except OSError:
+        pass
+    return events
+
+
+def timeout_message(seconds, events, started, now, log_path=None):
     """The shim's block reason when Probity ran past its deadline (#200)."""
     seconds = int(seconds) if float(seconds).is_integer() else seconds
     parts = [f"Probity took longer than {seconds}s to judge this call. kiro-cli 3.x lets a call "
              "through when its hook runs past 60 s, so the shim blocks it instead."]
-    if isinstance(status, dict) and isinstance(status.get("judge"), str) and isinstance(status.get("at"), (int, float)):
-        asked = max(0, round(status["at"] / 1000 - started))
-        waited = max(0, round(now - status["at"] / 1000))
-        parts.append(f"It was waiting on the {status['judge']} judge, asked {asked} s into the call "
-                     f"({waited} s before the block).")
+    into = lambda event: max(0, round(event["at"] / 1000 - started))
+    pending = {}
+    for event in events:
+        if event.get("event") == "ask":
+            pending[event["judge"]] = event
+        elif event.get("event") == "answer":
+            pending.pop(event["judge"], None)
+    answers = [e for e in events if e.get("event") == "answer"]
+    if pending:
+        event = max(pending.values(), key=lambda e: e["at"])
+        parts.append(f"It was waiting on the {event['judge']} judge, asked {into(event)} s into the call "
+                     f"({max(0, round(now - event['at'] / 1000))} s before the block).")
+    elif answers:
+        event = answers[-1]
+        parts.append(f"Its last judge ({event['judge']}) answered {into(event)} s into the call; "
+                     "the rest went to Probity's rules.")
     else:
         parts.append("No kiroJudge or claudeJudge had been asked yet: the time went to Probity's "
                      "startup and rules, or to a judge that doesn't report itself.")
     parts.append("Retry it; if this keeps happening, use a faster judge or raise "
                  "PROBITY_KIRO_TIMEOUT_S (below 60).")
+    if log_path:
+        parts.append(f"Timings: {log_path}.")
     return " ".join(parts)
 
 
-def read_status(path):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
+def log_path():
+    """Where the shim logs each judged call; None when $PROBITY_KIRO_LOG is "off"."""
+    configured = os.environ.get("PROBITY_KIRO_LOG")
+    if configured == "off":
         return None
+    return configured or os.path.join(tempfile.gettempdir(), "probity-kiro-judge", "shim-log.jsonl")
+
+
+def write_log(path, record):
+    """Appends one line; a log that can't be written only loses the record."""
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            if os.path.getsize(path) > LOG_LIMIT:
+                os.replace(path, path + ".1")
+        except OSError:
+            pass
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, (json.dumps(record) + "\n").encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def deny_reason(out):
+    try:
+        obj = json.loads(out)
+    except ValueError:
+        return None
+    hook = obj.get("hookSpecificOutput") if isinstance(obj, dict) else None
+    if isinstance(hook, dict) and hook.get("permissionDecision") == "deny":
+        return str(hook.get("permissionDecisionReason", "blocked by Probity"))
+    return None
 
 
 def cmd_run(argv):
     seconds, command = float(argv[0]), argv[1:]
+    hook_started = os.environ.get("PROBITY_KIRO_HOOK_STARTED")
     try:
-        started = float(os.environ.get("PROBITY_KIRO_HOOK_STARTED") or time.time())
+        started = float(hook_started) if hook_started else time.time()
     except ValueError:
         started = time.time()
     data = sys.stdin.buffer.read()
+    try:
+        payload = json.loads(data)
+    except ValueError:
+        payload = {}
+    payload = payload if isinstance(payload, dict) else {}
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
     fd, status_path = tempfile.mkstemp(prefix="probity-judge-status.")
     os.close(fd)
-    env = dict(os.environ,
-               PROBITY_HOOK_DEADLINE_MS=str(int((started + seconds) * 1000)),
-               PROBITY_JUDGE_STATUS=status_path)
+    env = dict(os.environ, PROBITY_JUDGE_STATUS=status_path)
+    if seconds > 0:
+        env["PROBITY_HOOK_DEADLINE_MS"] = str(int((started + seconds) * 1000))
+    log = log_path()
+    record = {
+        "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
+        "session": payload.get("session_id"),
+        "tool": payload.get("tool_name"),
+        "file": tool_input.get("file_path"),
+        "cwd": payload.get("cwd"),
+        "deadlineS": seconds if seconds > 0 else None,
+    }
+    ms = lambda t: round((t - started) * 1000)
     try:
+        record["probityStartMs"] = ms(time.time())
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    start_new_session=True, env=env)
         try:
-            out, _ = process.communicate(data, timeout=max(0.0, started + seconds - time.time()))
+            limit = max(0.0, started + seconds - time.time()) if seconds > 0 else None
+            out, _ = process.communicate(data, timeout=limit)
         except subprocess.TimeoutExpired:
             # SIGTERM first, so Probity can stop the judges it started in
             # process groups of their own; SIGKILL whatever is left.
@@ -327,8 +422,22 @@ def cmd_run(argv):
                 except subprocess.TimeoutExpired:
                     continue
             process.wait()
-            sys.stdout.write(timeout_message(seconds, read_status(status_path), started, time.time()) + "\n")
+            now = time.time()
+            events = read_events(status_path)
+            message = timeout_message(seconds, events, started, now, log)
+            record.update(outcome="timeout", endMs=ms(now), reason=message[:LOG_REASON_LIMIT],
+                          judges=[dict(e, atMs=ms(e["at"] / 1000)) for e in events])
+            write_log(log, record)
+            sys.stdout.write(message + "\n")
             return 124
+        text = out.decode("utf-8", "replace")
+        reason = deny_reason(text)
+        outcome = "deny" if reason else ("allow" if process.returncode == 0 else "error")
+        record.update(outcome=outcome, exit=process.returncode, endMs=ms(time.time()),
+                      judges=[dict(e, atMs=ms(e["at"] / 1000)) for e in read_events(status_path)])
+        if reason:
+            record["reason"] = reason[:LOG_REASON_LIMIT]
+        write_log(log, record)
         sys.stdout.buffer.write(out)
         return process.returncode
     finally:

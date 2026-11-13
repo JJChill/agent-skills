@@ -21,6 +21,8 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+# Keep test calls out of the real shim log.
+os.environ.setdefault("PROBITY_KIRO_LOG", "off")
 
 _HERE = pathlib.Path(__file__).parent
 _PACKAGE = _HERE.parent.resolve()

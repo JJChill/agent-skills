@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+**The Kiro shim logs every judged call** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). Under 0.4.68, mysudo-core still saw 55 s blocks, but Kiro keeps no hook output, so the block messages were lost, and Claude judge runs leave no record either.
+
+- **The log.** One JSON line per judged call in `<tmpdir>/probity-kiro-judge/shim-log.jsonl` (`PROBITY_KIRO_LOG` moves it, `off` disables it, 5 MB rollover): Kiro session, tool, file, outcome, a block's reason, when Probity started and ended, and each judge's ask, answer or skip with its "unavailable" reason, timed from the hook's start. kiro-cli 2.x calls are logged too, with no deadline.
+- **Judge events.** `kiroJudge`, `claudeJudge` and `judgeChain` append their events to `PROBITY_JUDGE_STATUS` as JSONL (it held one JSON object before). The timeout message reads them, and now also says when every judge had answered and the rest went to Probity's rules.
+- **A deadline doesn't take Kiro out.** In 0.4.68, a Kiro judge cut short by the hook's deadline, or left only 2 s to run, counted as unavailable, so `judgeChain` skipped Kiro for 5 minutes and later writes all went to the slower Claude judge. Now it falls back without the skip, and kiro-cli isn't started with under 10 s left.
+- **The translated payload carries the Kiro `session_id`**, for the log.
+- **Migration:** `/probity-update` refreshes the vendored shim. No config change.
+
 ## 0.4.69
 
 `requireReviewRecord` reads `$'…'` messages and names a message file it can't read ([timesheet-tracker#191](https://github.com/JJChill/timesheet-tracker/issues/191)).

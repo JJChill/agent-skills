@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, constants, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, constants, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
@@ -72,19 +72,66 @@ export type KiroRunResult = {
 export const HOOK_DEADLINE_ENV = 'PROBITY_HOOK_DEADLINE_MS'
 
 /**
- * A file `kiroJudge` and `claudeJudge` note themselves in when asked, so
- * the Kiro shim can say which judge a timed-out call was waiting on.
+ * A JSONL file `kiroJudge`, `claudeJudge` and `judgeChain` append their
+ * events to: each judge asked and answered, and each judge skipped. The
+ * Kiro shim reads it to say which judge a timed-out call was waiting on,
+ * and copies it into its log, since Kiro keeps no hook output (#200).
  */
 export const JUDGE_STATUS_ENV = 'PROBITY_JUDGE_STATUS'
 
-function noteJudge(judge: string): void {
+/** One line of the {@link JUDGE_STATUS_ENV} file. */
+export type JudgeEvent =
+  | { event: 'ask'; judge: string; at: number }
+  | {
+      event: 'answer'
+      judge: string
+      at: number
+      kind: Verdict['kind']
+      durationMs: number
+      /** Why the judge was unavailable, clipped. */
+      unavailable?: string
+      /** Unavailable only because the hook's deadline left too little time. */
+      deadlineLimited?: boolean
+    }
+  | { event: 'skip'; judge: string; at: number; until: number }
+
+const EVENT_REASON_LIMIT = 500
+
+function noteJudge(event: JudgeEvent): void {
   const file = process.env[JUDGE_STATUS_ENV]
   if (!file) return
   try {
-    writeFileSync(file, JSON.stringify({ judge, at: Date.now() }))
+    appendFileSync(file, `${JSON.stringify(event)}\n`)
   } catch {
-    // Only the timeout message loses detail.
+    // Only the shim's message and log lose detail.
   }
+}
+
+/** Runs `judge`, noting when it was asked and what it answered. */
+async function noted(name: string, judge: () => Promise<Verdict>): Promise<Verdict> {
+  const at = Date.now()
+  noteJudge({ event: 'ask', judge: name, at })
+  const verdict = await judge()
+  const unavailable = verdict.kind === 'violation' && isJudgeUnavailable(verdict.reason)
+  noteJudge({
+    event: 'answer',
+    judge: name,
+    at: Date.now(),
+    kind: verdict.kind,
+    durationMs: Date.now() - at,
+    ...(unavailable && { unavailable: verdict.reason.slice(0, EVENT_REASON_LIMIT) }),
+    ...(isDeadlineLimited(verdict) && { deadlineLimited: true }),
+  })
+  return verdict
+}
+
+/**
+ * A judge that was unavailable only because the hook's deadline left it
+ * too little time. `judgeChain` falls back from it but doesn't skip it
+ * later: the judge itself may be fine (#200).
+ */
+function isDeadlineLimited(verdict: Verdict): boolean {
+  return verdict.meta?.deadlineLimited === true
 }
 
 /** Runs kiro-cli; injectable so tests never start a real process. */
@@ -133,8 +180,9 @@ export type KiroJudgeOptions = {
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_FALLBACK_RESERVE_MS = 20_000
-// Less time than this left before the deadline is not worth a kiro-cli start.
-const MIN_RUN_MS = 2_000
+// Less time than this left before the deadline is not worth a kiro-cli
+// start: a typical verdict takes 5–12 s.
+const MIN_RUN_MS = 10_000
 // How long kiro-cli may stay quiet after printing a complete verdict
 // before the run is stopped and the verdict taken.
 const ANSWER_SETTLE_MS = 1_000
@@ -180,9 +228,9 @@ export function kiroJudge(options: KiroJudgeOptions = {}): NamedJudge {
   ]
   return {
     name: 'kiro',
-    reason: async (prompt) => {
+    reason: (prompt) => noted('kiro', async () => {
       const started = Date.now()
-      const meta = () => ({ judge: 'kiro', model, effort, durationMs: Date.now() - started })
+      const meta = (extra: { deadlineLimited?: true } = {}) => ({ judge: 'kiro', model, effort, durationMs: Date.now() - started, ...extra })
       try {
         if (agent === KIRO_JUDGE_AGENT) writeJudgeAgent(cwd)
         else mkdirSync(cwd, { recursive: true })
@@ -196,10 +244,9 @@ export function kiroJudge(options: KiroJudgeOptions = {}): NamedJudge {
       if (capped && limit < MIN_RUN_MS) {
         return unavailable(
           `no time left before the hook's deadline (${Math.max(0, Math.round(deadline - Date.now()))} ms left, ${reserveMs} ms of it kept for the next judge)`,
-          meta(),
+          meta({ deadlineLimited: true }),
         )
       }
-      noteJudge('kiro')
       const result = await run(command, args, { cwd, input: prompt, timeoutMs: limit })
       if (result.error) {
         const cause =
@@ -212,7 +259,7 @@ export function kiroJudge(options: KiroJudgeOptions = {}): NamedJudge {
         const within = capped
           ? `${limit} ms, the time left before the hook's deadline less ${reserveMs} ms kept for the next judge`
           : `${limit} ms`
-        return unavailable(`no answer within ${within}${outputTail(result)}`, meta())
+        return unavailable(`no answer within ${within}${outputTail(result)}`, meta(capped ? { deadlineLimited: true } : {}))
       }
       if (result.exitCode !== 0 && !result.answered) {
         return unavailable(`${command} exited with code ${result.exitCode}${outputTail(result)}`, meta())
@@ -220,7 +267,7 @@ export function kiroJudge(options: KiroJudgeOptions = {}): NamedJudge {
       const text = stripAnsi(result.stdout).trim()
       if (!text) return unavailable(`${command} printed no answer${outputTail(result)}`, meta())
       return { ...parseVerdict(text), meta: meta() }
-    },
+    }),
   }
 }
 
@@ -496,8 +543,7 @@ export function claudeJudge(options: ClaudeJudgeOptions = {}): NamedJudge {
   let loading: Promise<Agent> | undefined
   return {
     name: options.model ? `claude:${options.model}` : 'claude',
-    reason: async (prompt) => {
-      noteJudge(options.model ? `claude:${options.model}` : 'claude')
+    reason: (prompt) => noted(options.model ? `claude:${options.model}` : 'claude', async () => {
       let agent: Agent
       try {
         loading ??= loadClaudeCodeAgent(options)
@@ -512,7 +558,7 @@ export function claudeJudge(options: ClaudeJudgeOptions = {}): NamedJudge {
         }
       }
       return agent.reason(prompt)
-    },
+    }),
   }
 }
 
@@ -623,6 +669,7 @@ export function judgeChain(judges: readonly NamedJudge[], options: JudgeChainOpt
         const until = Math.max(unavailableUntil.get(index) ?? 0, name ? (remembered[name] ?? 0) : 0)
         if (!last && until > Date.now()) {
           fallbackFrom.push({ judge: label, reason: 'skipped: unavailable earlier' })
+          noteJudge({ event: 'skip', judge: label, at: Date.now(), until })
           continue
         }
         const verdict = await judge.reason(prompt)
@@ -632,8 +679,12 @@ export function judgeChain(judges: readonly NamedJudge[], options: JudgeChainOpt
           return fallbackFrom.length ? { ...verdict, meta: { ...verdict.meta, fallbackFrom } } : verdict
         }
         fallbackFrom.push({ judge: label, reason: verdict.reason })
-        unavailableUntil.set(index, Date.now() + skipMs)
-        if (name) writeUnavailable(stateFile!, name, Date.now() + skipMs)
+        // A judge cut short by the hook's deadline isn't known to be down,
+        // so later verdicts still ask it.
+        if (!isDeadlineLimited(verdict)) {
+          unavailableUntil.set(index, Date.now() + skipMs)
+          if (name) writeUnavailable(stateFile!, name, Date.now() + skipMs)
+        }
         failures.push(verdict)
       }
       const [first, ...rest] = failures
