@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.70
 
 **The Kiro shim logs every judged call** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). Under 0.4.68, mysudo-core still saw 55 s blocks, but Kiro keeps no hook output, so the block messages were lost, and Claude judge runs leave no record either.
 
