@@ -36,6 +36,11 @@ set -u
 
 # kiro-cli 3.x times the hook from its start, so the deadline does too.
 export PROBITY_KIRO_HOOK_STARTED="$(date +%s)"
+# When each step before Probity finishes, for the shim's log: a stall before
+# Probity starts is then traced to a step (#200). bash 5 gives microseconds;
+# macOS's bash 3.2 falls back to whole seconds.
+STAGES=""
+stage() { STAGES="${STAGES:+$STAGES }$1=${EPOCHREALTIME:-$(date +%s)}"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -55,12 +60,14 @@ fi
 # call targets, including a shell write into another worktree by path, and
 # guards edits to the config; the bare probity bin is the fallback for an
 # install without it.
+stage worktree
 PROBITY="$BIN_DIR/probity-claude"
 [ -x "$PROBITY" ] || PROBITY="$BIN_DIR/probity"
 TRANSLATE="$SCRIPT_DIR/probity-kiro-translate.py"
 TRANSDUCER="$SCRIPT_DIR/kiro-transcript-to-claude.py"
 
 EVENT="$(cat)"
+stage input
 
 # Probity discovers probity.config.ts and node_modules from cwd.
 cd "$ROOT" 2>/dev/null || true
@@ -88,6 +95,7 @@ if [ -n "$KIRO_JSONL" ]; then
   fi
 fi
 export TRANSCRIPT_TMP
+stage transcript
 
 cleanup() { [ -n "$TRANSCRIPT_TMP" ] && rm -f "$TRANSCRIPT_TMP"; }
 trap cleanup EXIT
@@ -98,6 +106,7 @@ trap cleanup EXIT
 # a translator failure: blocked, since allowing would skip every rule.
 PAYLOAD="$(printf '%s' "$EVENT" | python3 "$TRANSLATE" event)"
 TRANSLATED=$?
+stage translate
 if [ "$TRANSLATED" -ne 0 ]; then
   printf '%s\n' "${PAYLOAD:-Probity: the Kiro shim could not translate this call (exit $TRANSLATED), so it is blocked.}" >&2
   exit 2
@@ -122,7 +131,8 @@ fi
 # Every judged call is logged with its judges' timings (PROBITY_KIRO_LOG),
 # since Kiro keeps no hook output.
 DEADLINE="$(printf '%s' "$EVENT" | python3 "$TRANSLATE" deadline)"
-RESPONSE="$(printf '%s' "$PAYLOAD" | python3 "$TRANSLATE" run "${DEADLINE:-0}" "$PROBITY" --agent claude-code 2>/dev/null)"
+stage deadline
+RESPONSE="$(printf '%s' "$PAYLOAD" | PROBITY_KIRO_STAGES="$STAGES" python3 "$TRANSLATE" run "${DEADLINE:-0}" "$PROBITY" --agent claude-code 2>/dev/null)"
 if [ $? -eq 124 ]; then
   printf '%s\n' "${RESPONSE:-Probity took longer than ${DEADLINE}s to judge this call, so the shim blocks it. Retry it.}" >&2
   exit 2
