@@ -43,8 +43,10 @@ piped payload on stdin, silently producing empty output = allow):
           Every run appends one line to $PROBITY_KIRO_LOG (default
           <tmpdir>/probity-kiro-judge/shim-log.jsonl; "off" disables it):
           the tool and file, the outcome, the reason for a block, and each
-          judge event in ms from the hook's start. Kiro keeps no hook
-          output, so this is the only record of why a call was blocked.
+          judge event in ms from the hook's start. $PROBITY_KIRO_STAGES
+          ("name=epoch-seconds ...", from the shim) adds when each step
+          before CMD finished. Kiro keeps no hook output, so this is the
+          only record of why a call was blocked.
 
   install Read a claude-code payload JSON on stdin; exit 0 when it is a
           shell command that only installs packages (`npm ci`, `npm
@@ -401,6 +403,15 @@ def cmd_run(argv):
         "deadlineS": seconds if seconds > 0 else None,
     }
     ms = lambda t: round((t - started) * 1000)
+    stages = {}
+    for item in os.environ.get("PROBITY_KIRO_STAGES", "").split():
+        name, _, at = item.partition("=")
+        try:
+            stages[name] = ms(float(at.replace(",", ".")))
+        except ValueError:
+            continue
+    if stages:
+        record["stages"] = stages
     try:
         record["probityStartMs"] = ms(time.time())
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**The Kiro shim log times the steps before Probity starts** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). A 55 s block under 0.4.70 showed Probity starting 31.8 s into the hook, with no judge asked, and a second session stalled the same way at the same moment. The log said only when Probity started, not which of the shim's own steps took the time.
+
+- **`stages`** in each log line: when the shim finished finding the Probity install, reading Kiro's event, converting the transcript, translating the call and reading the deadline, in milliseconds from the hook's start (whole seconds under macOS's bash 3.2).
+- **Migration:** `/probity-update` refreshes the vendored shim. No config change.
+
 ## 0.4.70
 
 **The Kiro shim logs every judged call** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). Under 0.4.68, mysudo-core still saw 55 s blocks, but Kiro keeps no hook output, so the block messages were lost, and Claude judge runs leave no record either.

@@ -167,12 +167,22 @@ with tempfile.TemporaryDirectory() as tmp:
         check("a block after every judge answered says the rest went to Probity's rules",
               "last judge (kiro) answered" in res.stderr, res.stderr)
 
-        # A deny within the deadline is logged with its reason.
+        # A deny within the deadline is logged with its reason. The default
+        # deadline, so a loaded machine can't turn it into a timeout.
         (bin_dir / "probity-claude").write_text(RECORDER)
+        os.environ["PROBITY_KIRO_TIMEOUT_S"] = "55"
         res, payload = shim("fs_write", {"path": path, "text": "x\n"})
         last = json.loads(log.read_text().splitlines()[-1])
         check("a deny is logged with its reason", last["outcome"] == "deny" and last["reason"] == "judged"
               and isinstance(last["endMs"], int), last)
+        # A stall before Probity starts (probityStartMs) is split into the
+        # shim's own steps, each timed from the hook's start.
+        stages = last.get("stages") or {}
+        check("...with when each shim step before Probity finished, in order",
+              list(stages) == ["worktree", "input", "transcript", "translate", "deadline"]
+              and all(isinstance(v, int) for v in stages.values())
+              and list(stages.values()) == sorted(stages.values())
+              and stages["deadline"] <= last["probityStartMs"], last)
         os.environ["PROBITY_KIRO_LOG"] = "off"
         lines = len(log.read_text().splitlines())
         shim("fs_write", {"path": path, "text": "x\n"})
