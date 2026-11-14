@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.71
 
 **The Kiro shim log times the steps before Probity starts** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). A 55 s block under 0.4.70 showed Probity starting 31.8 s into the hook, with no judge asked, and a second session stalled the same way at the same moment. The log said only when Probity started, not which of the shim's own steps took the time.
 
