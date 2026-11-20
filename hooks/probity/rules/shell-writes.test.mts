@@ -244,3 +244,19 @@ test("closes a $'…' string after \\c\\\\ and \\c\\' as bash does, so the redir
   await assertBlocked("echo $'\\c\\\\' > src/a.ts", 'writes src/a.ts,')
   assert.deepEqual(parseShell("echo $'\\c\\'x' y")[0]!.words, ['echo', '\x07x', 'y'])
 })
+
+// #219: Edit and Write can't write binary, and no content rule can judge
+// it, so a binary asset (an image, font, audio or video file) copied in
+// from the shell is let through.
+test('lets a binary asset into a scoped path from the shell (#219)', async () => {
+  await assertAllowed('cp ~/Downloads/step1.png src/commonMain/composeResources/drawable/setup_step_1.png')
+  await assertAllowed('sips -Z 264 in.png --out src/commonMain/composeResources/drawable/setup_step_2.png')
+  await assertAllowed('cp a.WEBP src/res/b.WEBP && mv x.jpg src/res/y.jpeg && cp f.ttf src/font/f.ttf')
+  await assertAllowed('cp icon.ico src/app.ico; cp clip.mp4 src/media/clip.mp4; cp doc.pdf src/docs/doc.pdf')
+})
+
+test('still blocks a text file written alongside a binary asset (#219)', async () => {
+  await assertBlocked('cp a.png src/res/a.png && echo x > src/Main.kt', 'src/Main.kt')
+  // SVG is text: the write tool can write it, and the rules can judge it.
+  await assertBlocked('cp logo.svg src/res/logo.svg', 'src/res/logo.svg')
+})
