@@ -247,16 +247,69 @@ test("closes a $'…' string after \\c\\\\ and \\c\\' as bash does, so the redir
 
 // #219: Edit and Write can't write binary, and no content rule can judge
 // it, so a binary asset (an image, font, audio or video file) copied in
-// from the shell is let through.
+// from the shell is let through. #223: only a regular file is, never a
+// directory with a binary-looking name.
+function assetTree() {
+  const root = mkdtempSync(join(tmpdir(), 'probity-assets-'))
+  const assets = mkdtempSync(join(tmpdir(), 'probity-downloads-'))
+  mkdirSync(join(root, 'src/res/existing.png'), { recursive: true })
+  for (const name of ['step1.png', 'a.WEBP', 'x.jpg', 'f.ttf', 'icon.ico', 'clip.mp4', 'doc.pdf', 'logo.svg', 'Foo.kt']) {
+    writeFileSync(join(assets, name), 'bytes')
+  }
+  mkdirSync(join(assets, 'evil.png'))
+  writeFileSync(join(assets, 'evil.png', 'Evil.kt'), 'class Evil')
+  const screen = forbidShellWritesToScopedFiles({ root, scopes: [['src/**']] })
+  const kind = async (command: string) => (await screen({ kind: 'command', command })).kind
+  return { root, assets, kind }
+}
+
 test('lets a binary asset into a scoped path from the shell (#219)', async () => {
-  await assertAllowed('cp ~/Downloads/step1.png src/commonMain/composeResources/drawable/setup_step_1.png')
-  await assertAllowed('sips -Z 264 in.png --out src/commonMain/composeResources/drawable/setup_step_2.png')
-  await assertAllowed('cp a.WEBP src/res/b.WEBP && mv x.jpg src/res/y.jpeg && cp f.ttf src/font/f.ttf')
-  await assertAllowed('cp icon.ico src/app.ico; cp clip.mp4 src/media/clip.mp4; cp doc.pdf src/docs/doc.pdf')
+  const { assets: d, kind } = assetTree()
+  for (const command of [
+    `cp ${d}/step1.png src/commonMain/composeResources/drawable/setup_step_1.png`,
+    `sips -Z 264 ${d}/step1.png --out src/commonMain/composeResources/drawable/setup_step_2.png`,
+    `cp ${d}/a.WEBP src/res/b.WEBP && mv ${d}/x.jpg src/res/y.jpeg && cp ${d}/f.ttf src/font/f.ttf`,
+    `cp ${d}/icon.ico src/app.ico; cp ${d}/clip.mp4 src/media/clip.mp4; cp ${d}/doc.pdf src/docs/doc.pdf`,
+    // Into an existing directory, the file keeps its own (binary) name.
+    `cp ${d}/step1.png src/res/existing.png/`,
+    // A redirect writes one file.
+    `curl -s https://example.com/i.png > src/res/i.png`,
+  ]) {
+    assert.equal(await kind(command), 'pass', command)
+  }
 })
 
 test('still blocks a text file written alongside a binary asset (#219)', async () => {
-  await assertBlocked('cp a.png src/res/a.png && echo x > src/Main.kt', 'src/Main.kt')
+  const { assets: d, kind } = assetTree()
+  assert.equal(await kind(`cp ${d}/step1.png src/res/a.png && echo x > src/Main.kt`), 'violation')
   // SVG is text: the write tool can write it, and the rules can judge it.
-  await assertBlocked('cp logo.svg src/res/logo.svg', 'src/res/logo.svg')
+  assert.equal(await kind(`cp ${d}/logo.svg src/res/logo.svg`), 'violation')
+})
+
+test('blocks a directory with a binary-looking name (#223)', async () => {
+  const { assets: d, kind } = assetTree()
+  for (const command of [
+    // A directory named *.png, copied or moved in whole.
+    `cp -R ${d}/evil.png src/test/kotlin/`,
+    `cp -R ${d}/evil.png src/test/kotlin/evil.png`,
+    `mv ${d}/evil.png src/test/kotlin/evil.png`,
+    `rsync -a ${d}/evil.png src/test/kotlin/`,
+    `ln -s ${d}/evil.png src/test/kotlin/evil.png`,
+    // A directory made in the same command, before the copy runs.
+    `mkdir -p src/d.png && cp ${d}/Foo.kt src/d.png`,
+    `install -d src/d.png && cp ${d}/Foo.kt src/d.png`,
+    // A source the hook can't see yet.
+    `cp ${d}/missing.png src/res/missing.png`,
+    // A path an interpreter script names.
+    `python3 -c "import shutil; shutil.copytree('${d}/evil.png', 'src/d.png')"`,
+    // A redirect into an existing directory with a binary name.
+    `echo x > src/res/existing.png`,
+  ]) {
+    assert.equal(await kind(command), 'violation', command)
+  }
+})
+
+test('a tee to several binary-named paths is still screened (#223)', async () => {
+  const { kind } = assetTree()
+  assert.equal(await kind('echo x | tee /tmp/elsewhere.log src/b.png'), 'violation')
 })
