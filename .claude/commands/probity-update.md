@@ -62,7 +62,7 @@ From 0.4.67, the package ships CI jobs in `node_modules/@jjchill/probity-rules/c
 
 From 0.4.68 (#200), the Kiro shim passes its 55 s deadline to Probity, and `kiroJudge` stops 20 s before it so a `judgeChain` can fall back within the same hook run. Step 5's shim refresh carries the shim side. From 0.4.70, the refreshed shim also logs each judged call to `<tmpdir>/probity-kiro-judge/shim-log.jsonl`; mention it in the report, since it is where a Kiro block's reason is kept. From 0.4.71, it adds `stages` to each line: when the shim's steps before Probity finished, so a stall before Probity starts names its step. If the config's `ai` is `kiroJudge(...)` on its own, with no judge after it, propose adding `fallbackReserveMs: 0`; leave chained configs alone.
 
-From the release after 0.4.71 (#219), the shell-write screen lets binary assets (images, fonts, audio, video, PDF) through. If the config's `excludeGlobs` lists binary-only globs (such as `**/composeResources/**/*.png`) added just to copy assets in, propose dropping them.
+From 0.4.72 (#219), the shell-write screen lets binary assets (images, fonts, audio, video, PDF) through. If the config's `excludeGlobs` lists binary-only globs (such as `**/composeResources/**/*.png`) added just to copy assets in, propose dropping them.
 
 From 0.4.67, the mutation-probe and characterization round-trips (`withMutationProbe`, `enforceProbeReversion`, `withCharacterizationTest`, `enforceCharacterizationResolution`, `withInverseScenarioGuidance`) are exported from `@jjchill/probity-rules` and `@jjchill/probity-rules/rules/round-trips`. `rules/kotlin` still re-exports them. In a non-Kotlin config that imports them from `rules/kotlin`, you may propose the new import; it is optional.
 
