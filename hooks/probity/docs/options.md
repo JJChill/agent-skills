@@ -219,7 +219,7 @@ Every preset puts `forbidShellWritesToScopedFiles` ([`rules/shell-writes.ts`](..
 It follows shell variables, `for` loop variables and `cd` within the command, and resolves relative paths from the session's cwd when the hook passes it (`probity-claude` and the Kiro shim do).
 
 **What still passes:**
-- binary assets: images, fonts, audio, video and PDF (`.png`, `.webp`, `.jpg`, `.ttf`, `.woff2`, `.mp4`, `.pdf` and the like), since the write tool can't write them and no content rule can judge them ([#219](https://github.com/JJChill/agent-skills/issues/219)). `cp` or `sips --out` into a resources folder works; SVG is text and still goes through the write tool;
+- binary assets: images, fonts, audio, video and PDF (`.png`, `.webp`, `.jpg`, `.ttf`, `.woff2`, `.mp4`, `.pdf` and the like), since the write tool can't write them and no content rule can judge them ([#219](https://github.com/JJChill/agent-skills/issues/219)). Only a single file passes: a redirect to a binary-named path, or a `cp`/`mv`/`install`/`ln`/`rsync` whose sources are all binary-named regular files that already exist. A directory with a binary-looking name (`evil.png/`), one the command creates first, or a path named inside a script is screened as usual ([#223](https://github.com/JJChill/agent-skills/issues/223)). `cp` or `sips --out` into a resources folder works; SVG is text and still goes through the write tool;
 - a script file named on the command line (`python3 tool.py`);
 - writes through `find -exec` or `xargs`;
 - paths computed at run time;

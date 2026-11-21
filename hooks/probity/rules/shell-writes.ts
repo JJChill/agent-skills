@@ -432,6 +432,21 @@ function isDirectory(path: string): boolean {
   }
 }
 
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Binary file types: images, fonts, audio, video and PDF. Edit and Write
+ * can't write them and no content rule can judge them, so the shell is
+ * the only way in (#219). SVG is text, so it isn't here.
+ */
+const BINARY_ASSET = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|heic|heif|avif|ttf|otf|woff2?|mp3|m4a|wav|aac|ogg|flac|mp4|m4v|mov|webm|pdf)$/i
+
 /**
  * The absolute paths a shell command run in `cwd` writes, as far as the
  * command text shows. For an interpreter script that calls a
@@ -451,9 +466,16 @@ const WORKTREE_ADD_VALUE_FLAGS = new Set(['-b', '-B', '--reason'])
  * checkout of the same repository, which doesn't exist yet when the hook
  * runs.
  */
-function scanShellWrites(command: string, cwd: string): { paths: string[]; worktrees: string[] } {
+function scanShellWrites(command: string, cwd: string): { paths: string[]; worktrees: string[]; assets: Set<string> } {
   const vars = new Map<string, string[]>()
   const found: string[] = []
+  // A binary-named path is a binary asset only when every write to it
+  // is known to put one file there (#223): a redirect, or a copy whose
+  // sources are all binary-named regular files. A directory named
+  // `evil.png`, one the command makes first, or a path a script names
+  // could hold source files.
+  const assetWrites = new Set<string>()
+  const otherWrites = new Set<string>()
   const worktrees: string[] = []
   const start = cwd
 
@@ -464,24 +486,32 @@ function scanShellWrites(command: string, cwd: string): { paths: string[]; workt
     if (!values) return []
     return values.flatMap((value) => expand(text.replace(ref[0], value)))
   }
-  const add = (candidate: string) => {
+  const resolvePath = (text: string) => resolve(cwd, text.replace(/^~(?=\/)/, process.env.HOME ?? '~'))
+  const record = (candidate: string, oneFile: boolean) => {
     for (const text of expand(candidate)) {
       if (!text || text.includes('$(') || text.includes('`')) continue
-      found.push(resolve(cwd, text.replace(/^~(?=\/)/, process.env.HOME ?? '~')))
+      const path = resolvePath(text)
+      found.push(path)
+      ;(oneFile ? assetWrites : otherWrites).add(path)
     }
   }
+  // One argument only, so `.forEach(add)` can't pass an index as a flag.
+  const add = (candidate: string) => record(candidate, false)
   const destination = (sources: string[], dest: string) => {
+    const expanded = sources.flatMap(expand)
+    const fileCopy = expanded.length > 0 &&
+      expanded.every((source) => BINARY_ASSET.test(source) && isFile(resolvePath(source)))
     for (const target of expand(dest)) {
       if (target.endsWith('/') || isDirectory(resolve(cwd, target))) {
-        for (const source of sources) add(join(target, basename(source)))
+        for (const source of sources) record(join(target, basename(source)), fileCopy)
       } else {
-        add(target)
+        record(target, fileCopy)
       }
     }
   }
 
   for (const simple of parse(tokenize(command))) {
-    for (const redirect of simple.redirects) add(redirect.target)
+    for (const redirect of simple.redirects) record(redirect.target, true)
 
     let words = [...simple.words]
     while (words.length && ASSIGNMENT.test(words[0]!)) {
@@ -558,7 +588,9 @@ function scanShellWrites(command: string, cwd: string): { paths: string[]; workt
       for (const values of vars.values()) values.forEach(add)
     }
   }
-  return { paths: [...new Set(found)], worktrees }
+  const assets = new Set([...assetWrites].filter((path) =>
+    BINARY_ASSET.test(path) && !otherWrites.has(path) && !isDirectory(path)))
+  return { paths: [...new Set(found)], worktrees, assets }
 }
 
 function within(base: string, absolute: string): string | undefined {
@@ -573,13 +605,21 @@ function within(base: string, absolute: string): string | undefined {
  * root, since it is a checkout of the same repository (issue #101).
  */
 export function shellWriteTargets(command: string, root: string, cwd: string = root): string[] {
-  const { paths, worktrees } = scanShellWrites(command, cwd)
+  return scanShellTargets(command, root, cwd).targets
+}
+
+/** {@link shellWriteTargets}, plus which of them are binary assets (#219, #223). */
+function scanShellTargets(command: string, root: string, cwd: string): { targets: string[]; assets: Set<string> } {
+  const { paths, worktrees, assets } = scanShellWrites(command, cwd)
   const inside: string[] = []
+  const assetTargets = new Set<string>()
   for (const absolute of paths) {
     const rel = within(root, absolute) ?? worktrees.map((tree) => within(tree, absolute)).find(Boolean)
-    if (rel) inside.push(rel)
+    if (!rel) continue
+    inside.push(rel)
+    if (assets.has(absolute)) assetTargets.add(rel)
   }
-  return [...new Set(inside)]
+  return { targets: [...new Set(inside)], assets: assetTargets }
 }
 
 /** The directory a command runs in: the hook's `PROBITY_SESSION_CWD` when absolute, else `root`. */
@@ -589,19 +629,13 @@ function sessionCwd(root: string): string {
 }
 
 /**
- * Binary file types: images, fonts, audio, video and PDF. Edit and Write
- * can't write them and no content rule can judge them, so the shell is
- * the only way in (#219). SVG is text, so it isn't here.
- */
-const BINARY_ASSET = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|heic|heif|avif|ttf|otf|woff2?|mp3|m4a|wav|aac|ogg|flac|mp4|m4v|mov|webm|pdf)$/i
-
-/**
  * Denies a shell command that writes a file inside any of `scopes` —
  * the `files` lists of the config's files-scoped blocks, each with its
  * own `!`-negations — so the edit goes through the write tool, where
  * the content rules judge it. Write actions pass: they are judged
  * already. So do binary assets (`BINARY_ASSET`), which only the shell
- * can write.
+ * can write: a redirect to a binary-named file, or a copy of binary-named
+ * regular files, but never a directory (#223).
  *
  * Applies to: command actions (Claude Code's Bash, Kiro's shell
  * through the Kiro shim). Relative paths resolve from the session's
@@ -618,8 +652,9 @@ export function forbidShellWritesToScopedFiles(options: {
   const matchers = options.scopes.map((globs) => buildMatcher(globs))
   return function forbidShellWritesToScopedFiles(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
-    const scoped = shellWriteTargets(action.command, root, sessionCwd(root)).filter((path) =>
-      !BINARY_ASSET.test(path) && matchers.some((matches) => matches(path) || matches(join(root, path))),
+    const { targets, assets } = scanShellTargets(action.command, root, sessionCwd(root))
+    const scoped = targets.filter((path) =>
+      !assets.has(path) && matchers.some((matches) => matches(path) || matches(join(root, path))),
     )
     if (!scoped.length) return { kind: 'pass' }
     return {

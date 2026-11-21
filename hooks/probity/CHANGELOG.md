@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**A directory named like a binary file no longer passes the shell-write screen** ([#223](https://github.com/JJChill/agent-skills/issues/223), a regression in 0.4.72 found by mysudo-core's security review). 0.4.72 exempted any write target whose name ended in a binary extension, so `cp -R evil.png src/test/kotlin/`, `mkdir -p d.png && cp Foo.kt d.png`, or a `mv`/`rsync` of a directory named `*.png` put source files into content-ruled paths unjudged.
+
+- **Now:** a binary-named target is exempt only when every write to it puts one file there: a redirect, or a `cp`/`mv`/`install`/`ln`/`rsync` whose sources are all binary-named regular files that exist when the hook runs. It must not be an existing directory. Paths named inside an interpreter script, and `tee`, `dd` and `truncate` targets, are screened as before 0.4.72.
+- **What changes for asset copies:** copy an existing file in a command of its own. A source the same command creates first (for example `sips … --out /tmp/x.png && cp /tmp/x.png src/…`) is refused; run the two steps separately, or let `sips --out` write the target directly.
+- **Migration:** none.
+
 ## 0.4.72
 
 **Binary assets can be added from the shell** ([#219](https://github.com/JJChill/agent-skills/issues/219)). In mysudo-core, adding PNG drawables to a Compose resources folder was impossible: the shell-write screen refused `cp` and `sips --out` into a content-ruled path, and Edit and Write can't write binary.
