@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.73
 
 **A directory named like a binary file no longer passes the shell-write screen** ([#223](https://github.com/JJChill/agent-skills/issues/223), a regression in 0.4.72 found by mysudo-core's security review). 0.4.72 exempted any write target whose name ended in a binary extension, so `cp -R evil.png src/test/kotlin/`, `mkdir -p d.png && cp Foo.kt d.png`, or a `mv`/`rsync` of a directory named `*.png` put source files into content-ruled paths unjudged.
 
