@@ -589,11 +589,19 @@ function sessionCwd(root: string): string {
 }
 
 /**
+ * Binary file types: images, fonts, audio, video and PDF. Edit and Write
+ * can't write them and no content rule can judge them, so the shell is
+ * the only way in (#219). SVG is text, so it isn't here.
+ */
+const BINARY_ASSET = /\.(png|jpe?g|gif|webp|bmp|ico|icns|tiff?|heic|heif|avif|ttf|otf|woff2?|mp3|m4a|wav|aac|ogg|flac|mp4|m4v|mov|webm|pdf)$/i
+
+/**
  * Denies a shell command that writes a file inside any of `scopes` —
  * the `files` lists of the config's files-scoped blocks, each with its
  * own `!`-negations — so the edit goes through the write tool, where
  * the content rules judge it. Write actions pass: they are judged
- * already.
+ * already. So do binary assets (`BINARY_ASSET`), which only the shell
+ * can write.
  *
  * Applies to: command actions (Claude Code's Bash, Kiro's shell
  * through the Kiro shim). Relative paths resolve from the session's
@@ -611,7 +619,7 @@ export function forbidShellWritesToScopedFiles(options: {
   return function forbidShellWritesToScopedFiles(action: Action): RuleResult {
     if (action.kind !== 'command') return { kind: 'pass' }
     const scoped = shellWriteTargets(action.command, root, sessionCwd(root)).filter((path) =>
-      matchers.some((matches) => matches(path) || matches(join(root, path))),
+      !BINARY_ASSET.test(path) && matchers.some((matches) => matches(path) || matches(join(root, path))),
     )
     if (!scoped.length) return { kind: 'pass' }
     return {

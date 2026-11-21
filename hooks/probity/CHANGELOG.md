@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**Binary assets can be added from the shell** ([#219](https://github.com/JJChill/agent-skills/issues/219)). In mysudo-core, adding PNG drawables to a Compose resources folder was impossible: the shell-write screen refused `cp` and `sips --out` into a content-ruled path, and Edit and Write can't write binary.
+
+- **Now:** the screen lets through writes to images, fonts, audio, video and PDF (`png`, `jpg`/`jpeg`, `gif`, `webp`, `bmp`, `ico`, `icns`, `tif`/`tiff`, `heic`/`heif`, `avif`, `ttf`, `otf`, `woff`/`woff2`, `mp3`, `m4a`, `wav`, `aac`, `ogg`, `flac`, `mp4`, `m4v`, `mov`, `webm`, `pdf`; any case). No content rule can judge those. SVG is text and still goes through the write tool. A command that also writes a text file in scope is still denied.
+- **Migration:** none. A config that added binary paths to `excludeGlobs` only to get assets in can drop them.
+
 ## 0.4.71
 
 **The Kiro shim log times the steps before Probity starts** ([#200](https://github.com/JJChill/agent-skills/issues/200) follow-up). A 55 s block under 0.4.70 showed Probity starting 31.8 s into the hook, with no judge asked, and a second session stalled the same way at the same moment. The log said only when Probity started, not which of the shim's own steps took the time.
