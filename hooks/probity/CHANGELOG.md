@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.72
 
 **Binary assets can be added from the shell** ([#219](https://github.com/JJChill/agent-skills/issues/219)). In mysudo-core, adding PNG drawables to a Compose resources folder was impossible: the shell-write screen refused `cp` and `sips --out` into a content-ruled path, and Edit and Write can't write binary.
 
